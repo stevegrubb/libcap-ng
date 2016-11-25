@@ -62,8 +62,8 @@ static int check_file(const char *fpath,
 
 		capng_clear(CAPNG_SELECT_BOTH);
 		if (capng_get_caps_fd(fd) < 0) {
-			fprintf(stderr, "Unable to get capabilities of %s\n",
-				fpath);
+			fprintf(stderr, "Unable to get capabilities of %s: %s\n",
+				fpath, strerror(errno));
 			if (single_file)
 				ret = 1;
 		}
@@ -196,8 +196,8 @@ int main(int argc, char *argv[])
 			return 1;
 		}
 		if (capng_apply_caps_fd(fd) < 0) {
-			fprintf(stderr, "Could not set capabilities on %s\n",
-				path);
+			fprintf(stderr, "Could not set capabilities on %s: %s\n",
+				path, strerror(errno));
 			rc = 1;
 		}
 		close(fd);
