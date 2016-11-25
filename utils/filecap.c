@@ -27,9 +27,7 @@
 #include <string.h>
 #include <errno.h>
 #include "cap-ng.h"
-#define __USE_GNU 1
 #include <fcntl.h>
-#define __USE_XOPEN_EXTENDED 1
 #include <ftw.h>
 
 #ifndef FTW_CONTINUE
