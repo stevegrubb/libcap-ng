@@ -29,7 +29,7 @@ define([AC_INIT_NOTICE],
 ])
 
 AC_REVISION($Revision: 1.3 $)dnl
-AC_INIT(libcap-ng,0.7.6)
+AC_INIT(libcap-ng,0.7.7)
 AC_PREREQ(2.12)dnl
 AM_CONFIG_HEADER(config.h)
 AC_CONFIG_MACRO_DIR([m4])
@@ -180,7 +180,7 @@ AM_CONDITIONAL(USE_PYTHON3, test ${use_python3} = "yes")
 
 AC_OUTPUT(Makefile src/Makefile src/libcap-ng.pc src/test/Makefile 
 	bindings/Makefile bindings/python/Makefile 
-	bindings/python3/Makefile 
+	bindings/python3/Makefile bindings/src/Makefile 
 	bindings/python/test/Makefile utils/Makefile 
 	m4/Makefile docs/Makefile)
 

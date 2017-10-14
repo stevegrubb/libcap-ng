@@ -1,5 +1,5 @@
 # Makefile.am -- 
-# Copyright 2009 Red Hat Inc., Durham, North Carolina.
+# Copyright 2009,2015 Red Hat Inc., Durham, North Carolina.
 # All Rights Reserved.
 #
 # This library is free software; you can redistribute it and/or
@@ -27,7 +27,7 @@ DISTCLEANFILES = $(pkgconfig_DATA)
 CLEANFILES = $(BUILT_SOURCES)
 CONFIG_CLEAN_FILES = *.loT *.rej *.orig
 AM_CFLAGS = -fPIC -DPIC -W -Wall -Wshadow -Wformat -Wundef -D_GNU_SOURCE
-INCLUDES = -I. -I${top_srcdir}
+AM_CPPFLAGS = -I. -I${top_srcdir}
 lib_LTLIBRARIES = libcap-ng.la
 include_HEADERS = cap-ng.h
 noinst_HEADERS = captab.h

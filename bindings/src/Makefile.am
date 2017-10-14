@@ -1,5 +1,5 @@
 # Makefile.am --
-# Copyright 2009,2015 Red Hat Inc., Durham, North Carolina.
+# Copyright 2015 Red Hat Inc., Durham, North Carolina.
 # All Rights Reserved.
 #
 # This library is free software; you can redistribute it and/or
@@ -18,18 +18,8 @@
 #
 # Authors:
 #   Steve Grubb <sgrubb@redhat.com>
-# 
+#
 
+EXTRA_DIST = capng_swig.i
+SWIG_SOURCES = capng_swig.i
 CONFIG_CLEAN_FILES = *.loT *.rej *.orig
-AUTOMAKE_OPTIONS = no-dependencies
-EXTRA_DIST = $(man_MANS)
-AM_CPPFLAGS = -I${top_srcdir} -I${top_srcdir}/src
-LIBS = -L${top_builddir}/src -lcap-ng
-AM_CFLAGS = -W -Wall -Wshadow -Wformat -Wundef -D_GNU_SOURCE
-bin_PROGRAMS = pscap netcap filecap captest
-man_MANS = pscap.8 netcap.8 filecap.8 captest.8
-
-pscap_SOURCES = pscap.c
-netcap_SOURCES = netcap.c proc-llist.c proc-llist.h
-filecap_SOURCES = filecap.c
-captest_SOURCES = captest.c

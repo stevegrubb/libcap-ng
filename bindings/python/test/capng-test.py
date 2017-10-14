@@ -10,8 +10,11 @@ if False:
 import capng
 
 last = capng.CAP_LAST_CAP
-with open('/proc/sys/kernel/cap_last_cap', 'r') as f:
-	last = int(f.readline())
+try:
+	with open('/proc/sys/kernel/cap_last_cap', 'r') as f:
+		last = int(f.readline())
+except IOError as e:
+	print "Error opening /proc/sys/kernel/cap_last_cap: {0}".format(e.strerror)
 
 print("Doing basic bit tests...")
 capng.capng_clear(capng.CAPNG_SELECT_BOTH)

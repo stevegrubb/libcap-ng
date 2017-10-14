@@ -1,3 +1,8 @@
+0.7.7
+- Make sure all types used in _lnode are defined in proc-llist.h
+- Fix python binding test for old kernels
+- Fix leaked FD in library init 
+
 0.7.6
 - Fix python3 support
 

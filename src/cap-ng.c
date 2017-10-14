@@ -197,6 +197,7 @@ static void init(void)
 				if (errno == 0)
 					last_cap = val;
 			}
+			close(fd);
 		}
 		if (last_cap == -1)
 			last_cap = CAP_LAST_CAP;

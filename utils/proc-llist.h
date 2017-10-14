@@ -25,6 +25,7 @@
 #define PROC_HEADER
 
 #include "config.h"
+#include <sys/types.h>	/* Ensure types in _lnode are defined on all systems */
 
 
 /* This is the node of the linked list. Any data elements that are per

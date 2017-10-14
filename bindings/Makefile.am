@@ -21,7 +21,7 @@
 #
 
 CONFIG_CLEAN_FILES = *.loT *.rej *.orig
-SUBDIRS = 
+SUBDIRS = src 
 
 if HAVE_PYTHON
 SUBDIRS += python
