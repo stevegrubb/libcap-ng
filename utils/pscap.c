@@ -1,6 +1,6 @@
 /*
  * pscap.c - A program that lists running processes with capabilities
- * Copyright (c) 2009 Red Hat Inc., Durham, North Carolina.
+ * Copyright (c) 2009,2012 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This software may be freely redistributed and/or modified under the
@@ -24,6 +24,7 @@
 #include "config.h"
 #include <stdio.h>
 #include <stdio_ext.h>
+#include <unistd.h>
 #include <stdlib.h>
 #include <errno.h>
 #include <string.h>
@@ -44,6 +45,7 @@ int main(int argc, char *argv[])
 	DIR *d;
 	struct dirent *ent;
 	int header = 0, show_all = 0, caps;
+	pid_t our_pid = getpid();
 
 	if (argc > 2) {
 		fputs("Too many arguments\n", stderr);
@@ -54,13 +56,6 @@ int main(int argc, char *argv[])
 			show_all = 1;
 		else
 			usage();
-	}
-
-	/* Drop capabilities so we aren't listed */
-	caps = capng_have_capabilities(CAPNG_SELECT_CAPS);
-	if (caps == CAPNG_FULL) {
-		capng_clear(CAPNG_SELECT_BOTH);
-		capng_apply(CAPNG_SELECT_BOTH);
 	}
 
 	d = opendir("/proc");
@@ -83,9 +78,13 @@ int main(int argc, char *argv[])
 		if (errno)
 			continue;
 
+		/* Skip our pid so we aren't listed */
+		if (pid == our_pid)
+			continue;
+
 		// Parse up the stat file for the proc
 		snprintf(buf, 32, "/proc/%d/stat", pid);
-		fd = open(buf, O_RDONLY, 0);
+		fd = open(buf, O_RDONLY|O_CLOEXEC, 0);
 		if (fd < 0)
 			continue;
 		len = read(fd, buf, sizeof buf - 1);
@@ -122,7 +121,7 @@ int main(int argc, char *argv[])
 			FILE *f;
 			int line;
 			snprintf(buf, 32, "/proc/%d/status", pid);
-			f = fopen(buf, "rt");
+			f = fopen(buf, "rte");
 			if (f == NULL)
 				euid = 0;
 			else {

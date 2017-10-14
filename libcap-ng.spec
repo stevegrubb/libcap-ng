@@ -2,7 +2,7 @@
 
 Summary: An alternate posix capabilities library
 Name: libcap-ng
-Version: 0.6.6
+Version: 0.7
 Release: 1
 License: LGPLv2+
 Group: System Environment/Libraries
@@ -39,12 +39,12 @@ The libcap-ng-python package contains the bindings so that libcap-ng
 and can be used by python applications.
 
 %package utils
-Summary: Utilities for analysing and setting file capabilities
+Summary: Utilities for analyzing and setting file capabilities
 License: GPLv2+
 Group: Development/Libraries
 
 %description utils
-The libcap-ng-utils package contains applications to analyse the
+The libcap-ng-utils package contains applications to analyze the
 posix capabilities of all the program running on a system. It also
 lets you set the file system based capabilities.
 
@@ -111,6 +111,6 @@ rm -rf $RPM_BUILD_ROOT
 %attr(0644,root,root) %{_mandir}/man8/*
 
 %changelog
-* Fri Jun 24 2011 Steve Grubb <sgrubb@redhat.com> 0.6.6-1
+* Tue Jul 24 2012 Steve Grubb <sgrubb@redhat.com> 0.7-1
 - New upstream release
 

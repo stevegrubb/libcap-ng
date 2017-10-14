@@ -19,7 +19,7 @@
 # Authors:
 #   Steve Grubb <sgrubb@redhat.com>
 #
-
+ACLOCAL_AMFLAGS = -I m4
 SUBDIRS = src utils m4 docs
 if HAVE_SWIG
 SUBDIRS += bindings

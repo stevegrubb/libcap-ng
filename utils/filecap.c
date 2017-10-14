@@ -49,7 +49,7 @@ static int check_file(const char *fpath,
 	if (S_ISREG(sb->st_mode) == 0)
 		return FTW_CONTINUE;
 
-	int fd = open(fpath, O_RDONLY);
+	int fd = open(fpath, O_RDONLY|O_CLOEXEC);
 	if (fd >= 0) {
 		capng_results_t rc;
 
@@ -100,8 +100,11 @@ int main(int argc, char *argv[])
 					usage();
 			} else if (strcmp(argv[i], "-d") == 0) {
 				for (i=0; i<=CAP_LAST_CAP; i++) {
-					printf("%s\n",
-						capng_capability_to_name(i));
+					const char *n =
+						capng_capability_to_name(i);
+					if (n == NULL)
+						n = "unknown";
+					printf("%s\n", n);
 				}
 				return 0;
 			} else if (argv[i][0] == '/') {
@@ -166,7 +169,7 @@ int main(int argc, char *argv[])
 		check_file(path, &sbuf, 0, NULL);
 	} else if (path && capabilities == 1) {
 		// Write capabilities to file
-		int fd = open(path, O_WRONLY|O_NOFOLLOW);
+		int fd = open(path, O_WRONLY|O_NOFOLLOW|O_CLOEXEC);
 		if (fd < 0) {
 			printf("Could not open %s for writing (%s)\n", path,
 				strerror(errno));

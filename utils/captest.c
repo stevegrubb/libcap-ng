@@ -21,6 +21,7 @@
  *   Steve Grubb <sgrubb@redhat.com>
  *
  */
+#include "config.h"
 #include <unistd.h>
 #include <stdio.h>
 #include <fcntl.h>
