@@ -29,7 +29,7 @@ define([AC_INIT_NOTICE],
 ])
 
 AC_REVISION($Revision: 1.3 $)dnl
-AC_INIT(libcap-ng,0.7.3)
+AC_INIT(libcap-ng,0.7.4)
 AC_PREREQ(2.12)dnl
 AM_CONFIG_HEADER(config.h)
 AC_CONFIG_MACRO_DIR([m4])

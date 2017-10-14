@@ -1,3 +1,11 @@
+0.7.4
+- In pscap, remove unused code
+- Add CAPNG_INIT_SUPP_GRP to capng_change_id
+- Drop CAP_COMPROMISE_KERNEL
+- Update the autotools components
+- Dynamically detect last capability (#895105)
+- Add PR_SET_NO_NEW_PRIVS to capng_lock if kernel supports it
+
 0.7.3
 - Make sure stderr is used consistently in utils
 - Fix logic causing file based capabilities to not be supported when it should

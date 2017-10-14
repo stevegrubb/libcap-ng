@@ -1,6 +1,6 @@
 /*
  * captest.c - A program that demonstrates and outputs capabilities
- * Copyright (c) 2009 Red Hat Inc., Durham, North Carolina.
+ * Copyright (c) 2009, 2013 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This software may be freely redistributed and/or modified under the
@@ -196,7 +196,7 @@ static void report(void)
 
 static void usage(void)
 {
-	printf("usage: captest [ --drop-all | --drop-caps | --id ] [ --lock ] [ --text ]\n");
+	printf("usage: captest [ --drop-all | --drop-caps | --id | --init-grp ] [ --lock ] [ --text ]\n");
 }
 
 int main(int argc, char *argv[])
@@ -216,6 +216,8 @@ int main(int argc, char *argv[])
 			which = 2;
 		else if (strcmp(argv[i], "--id") == 0)
 			which = 3;
+		else if (strcmp(argv[i], "--init-grp") == 0)
+			which = 4;
 		else {
 			usage();
 			return 0;
@@ -237,13 +239,18 @@ int main(int argc, char *argv[])
 			capng_apply(CAPNG_SELECT_CAPS);
 			report();
 			break;
-		case 3: {
+		case 3:
+		case 4: {
 			int rc;
 
 			capng_clear(CAPNG_SELECT_BOTH);
 			capng_update(CAPNG_ADD, CAPNG_EFFECTIVE|CAPNG_PERMITTED,
 					CAP_CHOWN);
-			rc = capng_change_id(99, 99,
+			if (which == 4)
+				rc = capng_change_id(99, 99,
+				CAPNG_INIT_SUPP_GRP | CAPNG_CLEAR_BOUNDING);
+			else
+				rc = capng_change_id(99, 99,
 				CAPNG_DROP_SUPP_GRP | CAPNG_CLEAR_BOUNDING);
 			if (rc < 0) {
 				printf("Error changing uid: %d\n", rc);

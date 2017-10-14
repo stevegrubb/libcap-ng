@@ -142,8 +142,6 @@ int main(int argc, char *argv[])
 				fclose(f);
 			}
 			
-			len = read(fd, buf, sizeof buf - 1);
-			close(fd);
 			if (header == 0) {
 				printf("%-5s %-5s %-10s  %-16s  %s\n",
 				    "ppid", "pid", "name", "command",

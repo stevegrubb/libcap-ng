@@ -1,5 +1,5 @@
 /* lib_test.c -- simple libcap-ng test suite
- * Copyright 2009,2012 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2009,2012-13 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -25,11 +25,33 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <sys/stat.h>
 
+int get_last_cap(void)
+{
+	int fd;
+
+	fd = open("/proc/sys/kernel/cap_last_cap", O_RDONLY);
+	if (fd == -1) {
+		return CAP_LAST_CAP;
+	} else {
+		char buf[8];
+		int num = read(fd, buf, sizeof(buf));
+		if (num > 0) {
+			errno = 0;
+			int val = strtoul(buf, NULL, 10);
+			if (errno == 0)
+				return val;
+		}
+	}
+	return CAP_LAST_CAP;
+}
 
 int main(void)
 {
-	int rc, i, len, last = CAP_LAST_CAP;
+	int rc, i, len, last = get_last_cap();
 	char *text;
 	void *saved;
 

@@ -1,5 +1,5 @@
 /* libcap-ng.c --
- * Copyright 2009-10 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2009-10, 2013 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -28,10 +28,12 @@
 #include <stdio_ext.h>
 #include <stdlib.h>
 #include <sys/prctl.h>
+#include <pwd.h>
 #include <grp.h>
 #include <sys/stat.h>
 #include <stdarg.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <byteswap.h>
 #ifdef HAVE_SYSCALL_H
 #include <sys/syscall.h>
@@ -40,6 +42,8 @@
 #include <linux/securebits.h>
 #endif
 
+# define hidden __attribute__ ((visibility ("hidden")))
+int last_cap hidden = -1;
 /*
  * Some milestones of when things became available:
  * 2.6.24 kernel	XATTR_NAME_CAPS
@@ -54,7 +58,7 @@ extern int capget(cap_user_header_t header, const cap_user_data_t data);
 // Local defines
 #define MASK(x) (1U << (x))
 #ifdef PR_CAPBSET_DROP
-#define UPPER_MASK ~(unsigned)((~0U)<<(CAP_LAST_CAP-31))
+#define UPPER_MASK ~(unsigned)((~0U)<<(last_cap-31))
 #else
 // For v1 systems UPPER_MASK will never be used
 #define UPPER_MASK (unsigned)(~0U)
@@ -62,7 +66,7 @@ extern int capget(cap_user_header_t header, const cap_user_data_t data);
 
 // Re-define cap_valid so its uniform between V1 and V3
 #undef cap_valid
-#define cap_valid(x) ((x) <= CAP_LAST_CAP)
+#define cap_valid(x) ((x) <= last_cap)
 
 // If we don't have the xattr library, then we can't
 // compile-in file system capabilities
@@ -173,6 +177,30 @@ static void init(void)
 #else
 	m.hdr.pid = (unsigned)getpid();
 #endif
+	// Detect last cap
+	if (last_cap == -1) {
+		int fd;
+
+		fd = open("/proc/sys/kernel/cap_last_cap", O_RDONLY);
+		if (fd == -1) {
+			if (errno != ENOENT) {
+				m.state = CAPNG_ERROR;
+				return;
+			}
+		} else {
+			char buf[8];
+			int num = read(fd, buf, sizeof(buf) - 1);
+			if (num > 0) {
+				buf[num] = 0;
+				errno = 0;
+				int val = strtoul(buf, NULL, 10);
+				if (errno == 0)
+					last_cap = val;
+			}
+		}
+		if (last_cap == -1)
+			last_cap = CAP_LAST_CAP;
+	}
 	m.state = CAPNG_ALLOCATED;
 }
 
@@ -484,7 +512,7 @@ int capng_apply(capng_select_t set)
 			int i;
 			capng_restore_state(&s);
 			rc = 0;
-			for (i=0; i <= CAP_LAST_CAP && rc == 0; i++)
+			for (i=0; i <= last_cap && rc == 0; i++)
 				if (capng_have_capability(CAPNG_BOUNDING_SET,
 								 i) == 0)
 					rc = prctl(PR_CAPBSET_DROP, i, 0, 0, 0);
@@ -623,6 +651,18 @@ int capng_change_id(int uid, int gid, capng_flags_t flag)
 			return -4;
 	}
 
+	// See if we need to init supplemental groups
+	if ((flag & CAPNG_INIT_SUPP_GRP) && uid != -1) {
+		struct passwd *pw = getpwuid(uid);
+		if (pw == NULL)
+			return -10;
+		if (gid != -1) {
+			if (initgroups(pw->pw_name, gid))
+				return -5;
+		} else if (initgroups(pw->pw_name, pw->pw_gid))
+			return -5;
+	}
+
 	// See if we need to unload supplemental groups
 	if ((flag & CAPNG_DROP_SUPP_GRP) && gid != -1) {
 		if (setgroups(0, NULL))
@@ -663,12 +703,17 @@ int capng_change_id(int uid, int gid, capng_flags_t flag)
 
 int capng_lock(void)
 {
+	// If either fail, return -1 since something is not right
 #ifdef PR_SET_SECUREBITS
 	int rc = prctl(PR_SET_SECUREBITS,
 			1 << SECURE_NOROOT |
 			1 << SECURE_NOROOT_LOCKED |
 			1 << SECURE_NO_SETUID_FIXUP |
 			1 << SECURE_NO_SETUID_FIXUP_LOCKED, 0, 0, 0);
+#ifdef PR_SET_NO_NEW_PRIVS
+	if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0))
+		return -1;
+#endif
 	if (rc)
 		return -1;
 #endif
@@ -901,7 +946,7 @@ char *capng_print_caps_text(capng_print_t where, capng_type_t which)
 	if (m.state < CAPNG_INIT)
 		return ptr;
 
-	for (i=0; i<=CAP_LAST_CAP; i++) {
+	for (i=0; i<=last_cap; i++) {
 		if (capng_have_capability(which, i)) {
 			const char *n = capng_capability_to_name(i);
 			if (n == NULL)
@@ -915,7 +960,7 @@ char *capng_print_caps_text(capng_print_t where, capng_type_t which)
 			} else if (where == CAPNG_PRINT_BUFFER) {
 				int len;
 				if (once == 0) {
-					ptr = malloc(CAP_LAST_CAP*18);
+					ptr = malloc(last_cap*18);
 					if (ptr == NULL)
 						return ptr;
 					len = sprintf(ptr+cnt, "%s", n);

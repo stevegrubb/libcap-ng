@@ -1,5 +1,5 @@
 /* libcap-ng.h --
- * Copyright 2009 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2009, 2013 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -31,10 +31,6 @@
 extern "C" {
 #endif
 
-#ifndef CAP_LAST_CAP
-#define CAP_LAST_CAP CAP_AUDIT_CONTROL
-#endif
-
 typedef enum {  CAPNG_DROP, CAPNG_ADD } capng_act_t;
 typedef enum {  CAPNG_EFFECTIVE=1, CAPNG_PERMITTED=2,
 		CAPNG_INHERITABLE=4, CAPNG_BOUNDING_SET=8 } capng_type_t;
@@ -44,7 +40,7 @@ typedef enum {	CAPNG_FAIL=-1, CAPNG_NONE, CAPNG_PARTIAL,
 		CAPNG_FULL } capng_results_t;
 typedef enum {  CAPNG_PRINT_STDOUT, CAPNG_PRINT_BUFFER } capng_print_t;
 typedef enum {  CAPNG_NO_FLAG=0, CAPNG_DROP_SUPP_GRP=1,
-			CAPNG_CLEAR_BOUNDING=2 } capng_flags_t;
+		CAPNG_CLEAR_BOUNDING=2, CAPNG_INIT_SUPP_GRP=4 } capng_flags_t;
 
 
 // These functions manipulate process capabilities

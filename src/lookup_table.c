@@ -1,5 +1,5 @@
 /* lookup_table.c -- 
- * Copyright 2009 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2009, 2013 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -24,13 +24,14 @@
 #include <stddef.h>
 #include <linux/capability.h>
 #include <strings.h>
+#include <stdio.h>
 
 
-#ifndef CAP_LAST_CAP
-#define CAP_LAST_CAP CAP_AUDIT_CONTROL
-#endif
+#define hidden __attribute__ ((visibility ("hidden")))
+extern int last_cap hidden;
+
 #undef cap_valid
-#define cap_valid(x) ((x) <= CAP_LAST_CAP)
+#define cap_valid(x) ((x) <= last_cap)
 
 
 struct transtab {
@@ -106,10 +107,17 @@ int capng_name_to_capability(const char *name)
 
 const char *capng_capability_to_name(unsigned int capability)
 {
+	char *ptr;
+
 	if (!cap_valid(capability))
 		return NULL;
 
-	return capng_lookup_number(captab, captab_msgstr.str,
+	ptr = capng_lookup_number(captab, captab_msgstr.str,
                                    CAP_NG_CAPABILITY_NAMES, capability);
+	if (ptr == NULL) // This leaks memory, but should almost never be used
+		if (asprintf(&ptr, "cap_%d", capability) < 0)
+			ptr = NULL;
+
+	return ptr;
 }
 

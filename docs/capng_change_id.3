@@ -1,4 +1,4 @@
-.TH "CAPNG_CHANGE_ID" "3" "June 2009" "Red Hat" "Libcap-ng API"
+.TH "CAPNG_CHANGE_ID" "3" "Feb 2013" "Red Hat" "Libcap-ng API"
 .SH NAME
 capng_change_id \- change the credentials retaining capabilities
 .SH "SYNOPSIS"
@@ -18,7 +18,12 @@ This function also takes a flag parameter that helps to tailor the exact actions
 Simply change uid and retain specified capabilities and that's all.
 .TP
 .B CAPNG_DROP_SUPP_GRP
-After changing id, remove and supplement groups that may come with the account.
+After changing id, remove any supplement groups that may still be in effect from the old uid.
+.TP
+.B CAPNG_INIT_SUPP_GRP
+After changing id, initialize any supplement groups that may come with the new account. If given with
+.B CAPNG_DROP_SUPP_GRP
+it will have no effect.
 .TP
 .B CAPNG_CLEAR_BOUNDING
 After changing the uid and gid, clear the bounding set regardless to the internal representation already setup.
@@ -26,7 +31,7 @@ After changing the uid and gid, clear the bounding set regardless to the interna
 .RE
 .SH "RETURN VALUE"
 
-This returns 0 on success and a negative number on failure. -1 means capng has not been initted properly, -2 means a failure requesting to keep capabilities across the uid change, -3 means that applying the intermediate capabilities failed, -4 means changing gid failed, -5 means dropping supplemental groups failed, -6 means changing the uid failed, -7 means dropping the ability to retain caps across a uid change failed, -8 means clearing the bounding set failed, -9 means dropping CAP_SETPCAP failed.
+This returns 0 on success and a negative number on failure. -1 means capng has not been initted properly, -2 means a failure requesting to keep capabilities across the uid change, -3 means that applying the intermediate capabilities failed, -4 means changing gid failed, -5 means dropping supplemental groups failed, -6 means changing the uid failed, -7 means dropping the ability to retain caps across a uid change failed, -8 means clearing the bounding set failed, -9 means dropping CAP_SETPCAP failed, -10 means initializing supplemental groups failed.
 
 Note: the only safe action to do upon failure of this function is to probably exit. This is because you are likely in a situation with partial permissions and not what you intended.
 
