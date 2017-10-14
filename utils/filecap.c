@@ -32,6 +32,11 @@
 #define __USE_XOPEN_EXTENDED 1
 #include <ftw.h>
 
+#ifndef FTW_CONTINUE
+#define FTW_CONTINUE 0
+#endif
+
+
 static int show_all = 0, header = 0, capabilities = 0, cremove = 0;
 
 static void usage(void)
@@ -84,7 +89,8 @@ static int check_file(const char *fpath,
 //
 int main(int argc, char *argv[])
 {
-#if CAP_LAST_CAP < 31 || !defined (VFS_CAP_U32) || !defined (HAVE_ATTR_XATTR_H)
+#if CAP_LAST_CAP < 31 || !defined (VFS_CAP_U32) || \
+	!defined (HAVE_ATTR_XATTR_H) || !defined(HAVE_SYS_XATTR_H)
 	printf("File based capabilities are not supported\n");
 #else
 	char *path_env, *path = NULL, *dir = NULL;

@@ -1,3 +1,8 @@
+0.7.1
+- Add CAP_COMPROMISE_KERNEL
+- Define FTW_CONTINUE in case its not defined in libc
+- Use glibc for xattr.h if available
+
 0.7
 - Make file opens use the cloexec flag (Cristian Rodríguez)
 - Add CAP_BLOCK_SUSPEND

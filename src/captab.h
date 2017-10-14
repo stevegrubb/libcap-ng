@@ -75,4 +75,7 @@ _S(CAP_EPOLLWAKEUP,		"epollwakeup"		)
 #ifdef CAP_BLOCK_SUSPEND
 _S(CAP_BLOCK_SUSPEND,		"block_suspend"		)
 #endif
+#ifdef CAP_COMPROMISE_KERNEL
+_S(CAP_COMPROMISE_KERNEL,	"compromise_kernel"	)
+#endif
 
