@@ -1,7 +1,7 @@
 dnl
 define([AC_INIT_NOTICE],
 [### Generated automatically using autoconf version] AC_ACVERSION [
-### Copyright 2009-2014 Steve Grubb <sgrubb@redhat.com>
+### Copyright 2009-2015 Steve Grubb <sgrubb@redhat.com>
 ###
 ### Permission is hereby granted, free of charge, to any person obtaining a
 ### copy of this software and associated documentation files (the "Software"),
@@ -29,7 +29,7 @@ define([AC_INIT_NOTICE],
 ])
 
 AC_REVISION($Revision: 1.3 $)dnl
-AC_INIT(libcap-ng,0.7.5)
+AC_INIT(libcap-ng,0.7.6)
 AC_PREREQ(2.12)dnl
 AM_CONFIG_HEADER(config.h)
 AC_CONFIG_MACRO_DIR([m4])
@@ -139,9 +139,49 @@ fi
 fi
 AM_CONDITIONAL(HAVE_PYTHON, test ${python_found} = "yes")
 
+AC_MSG_CHECKING(whether to create python3 bindings)
+AC_ARG_WITH(python3,
+AS_HELP_STRING([--with-python3],[enable building python3 bindings]),
+use_python3=$withval,
+use_python3=auto)
+if test x$use_python3 = xno ; then
+	AC_MSG_RESULT(no)
+else
+	if test ${python_found} = no ; then
+		AC_MSG_RESULT(no)
+		use_python3=no
+	else
+	AC_MSG_RESULT(yes)
+	use_python3=yes
+	AC_PATH_PROG([PYTHON3], [python3], [no])
+	if test "$PYTHON3" == "no" ; then
+		echo "The python3 program was not found in the search path. Please ensure"
+		echo "that it is installed and its directory is included in the search path or"
+		echo "pass --without-python3 to ./configure."
+		exit 1
+	fi
+	PYTHON3_CFLAGS=`python3-config --cflags 2> /dev/null`
+	PYTHON3_LIBS=`python3-config --libs 2> /dev/null`
+	PYTHON3_INCLUDES=`python3-config --includes 2> /dev/null`
+	AC_SUBST([PYTHON3_PREFIX], ['${prefix}'])
+	AC_SUBST([PYTHON3_EXEC_PREFIX], ['${exec_prefix}'])
+	PYTHON3_DIR=`$PYTHON3 -c "import distutils.sysconfig; \
+	print(distutils.sysconfig.get_python_lib(0,0,prefix='$PYTHON3_PREFIX'))"`
+	PYTHON3_EXECDIR=`$PYTHON3 -c "import distutils.sysconfig; \
+	print(distutils.sysconfig.get_python_lib(1,0,prefix='$PYTHON3_EXEC_PREFIX'))"`
+	AC_SUBST(PYTHON3_CFLAGS)
+	AC_SUBST(PYTHON3_LIBS)
+	AC_SUBST(PYTHON3_INCLUDES)
+	AC_SUBST(python3dir, $PYTHON3_DIR)
+	AC_SUBST(py3execdir, $PYTHON3_EXECDIR)
+	fi
+fi
+AM_CONDITIONAL(USE_PYTHON3, test ${use_python3} = "yes")
+
 AC_OUTPUT(Makefile src/Makefile src/libcap-ng.pc src/test/Makefile 
-	bindings/Makefile bindings/python/Makefile
-	bindings/python/test/Makefile utils/Makefile
+	bindings/Makefile bindings/python/Makefile 
+	bindings/python3/Makefile 
+	bindings/python/test/Makefile utils/Makefile 
 	m4/Makefile docs/Makefile)
 
 echo .
