@@ -161,6 +161,8 @@ int main(int argc, char *argv[])
 		path_env = getenv("PATH");
 		if (path_env != NULL) {
 			path = strdup(path_env);
+			if (!path)
+				return 1;
 			for (dir=strtok(path,":"); dir!=NULL;
 						dir=strtok(NULL,":")) {
 				nftw(dir, check_file, 1024, nftw_flags);

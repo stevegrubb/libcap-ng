@@ -101,9 +101,13 @@ static int collect_process_info(void)
 		caps = capng_have_capabilities(CAPNG_SELECT_CAPS);
 		if (caps <= CAPNG_NONE)
 			continue;
-		if (caps == CAPNG_FULL)
+		if (caps == CAPNG_FULL) {
 			text = strdup("full");
-		else
+			if (!text) {
+				fprintf(stderr, "Out of memory\n");
+				continue;
+			}
+		} else
 			text = capng_print_caps_text(CAPNG_PRINT_BUFFER,
 					CAPNG_PERMITTED);
 
@@ -139,6 +143,11 @@ static int collect_process_info(void)
 				bounds = strdup("");
 		} else
 			bounds = strdup("");
+		if (!bounds) {
+			fprintf(stderr, "Out of memory\n");
+			free(text);
+			continue;
+		}
 
 		// Now lets get the inodes each process has open
 		snprintf(buf, 32, "/proc/%d/fd", pid);
@@ -199,8 +208,14 @@ static int collect_process_info(void)
 			node.inode = inode;
 			node.capabilities = strdup(text);
 			node.bounds = strdup(bounds);
-			// We make one entry for each socket inode
-			list_append(&l, &node);
+			if (node.cmd && node.capabilities && node.bounds)
+				// We make one entry for each socket inode
+				list_append(&l, &node);
+			else {
+				free(node.cmd);
+				free(node.capabilities);
+				free(node.bounds);
+			}
 		}
 		closedir(f);
 		free(text);
@@ -270,7 +285,7 @@ static void read_tcp(const char *proc, const char *type)
 		}
 		more[0] = 0;
 		sscanf(buf, "%d: %64[0-9A-Fa-f]:%X %64[0-9A-Fa-f]:%X %X "
-			"%lX:%lX %X:%lX %lX %d %d %lu %512s\n",
+			"%lX:%lX %X:%lX %lX %d %d %lu %511s\n",
 			&d, local_addr, &local_port, rem_addr, &rem_port,
 			&state, &txq, &rxq, &timer_run, &time_len, &retr,
 			&uid, &timeout, &inode, more);
@@ -304,7 +319,7 @@ static void read_udp(const char *proc, const char *type)
 		}
 		more[0] = 0;
 		sscanf(buf, "%d: %64[0-9A-Fa-f]:%X %64[0-9A-Fa-f]:%X %X "
-			"%lX:%lX %X:%lX %lX %d %d %lu %512s\n",
+			"%lX:%lX %X:%lX %lX %d %d %lu %511s\n",
 			&d, local_addr, &local_port, rem_addr, &rem_port,
 			&state, &txq, &rxq, &timer_run, &time_len, &retr,
 			&uid, &timeout, &inode, more);
@@ -338,7 +353,7 @@ static void read_raw(const char *proc, const char *type)
 		}
 		more[0] = 0;
 		sscanf(buf, "%d: %64[0-9A-Fa-f]:%X %64[0-9A-Fa-f]:%X %X "
-			"%lX:%lX %X:%lX %lX %d %d %lu %512s\n",
+			"%lX:%lX %X:%lX %lX %d %d %lu %511s\n",
 			&d, local_addr, &local_port, rem_addr, &rem_port,
 			&state, &txq, &rxq, &timer_run, &time_len, &retr,
 			&uid, &timeout, &inode, more);
@@ -372,7 +387,7 @@ static void get_interface(unsigned int iface, char *ifc)
 	while (fgets(buf, sizeof(buf), f)) {
 		if (line == iface) {
 			char *c;
-			sscanf(buf, "%16s: %256s\n", ifc, more);
+			sscanf(buf, "%16s: %255s\n", ifc, more);
 			c = strchr(ifc, ':');
 			if (c)
 				*c = 0;
@@ -407,7 +422,7 @@ static void read_packet(void)
 			continue;
 		}
 		more[0] = 0;
-		sscanf(buf, "%lX %u %u %X %u %u %u %u %lu %256s\n",
+		sscanf(buf, "%lX %u %u %X %u %u %u %u %lu %255s\n",
 			&sk, &ref_cnt, &type, &proto, &iface,
 			&r, &rmem, &uid, &inode, more);
 		get_interface(iface, ifc);

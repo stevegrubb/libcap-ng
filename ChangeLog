@@ -1,3 +1,11 @@
+0.7.8
+- Improve Python3 support
+- Fix the thread separation test
+- Correct typo in cap_pacct text
+- Update man page for captest
+- Fix sscanf string lengths in netcap
+- Correct linking of python3 module
+
 0.7.7
 - Make sure all types used in _lnode are defined in proc-llist.h
 - Fix python binding test for old kernels

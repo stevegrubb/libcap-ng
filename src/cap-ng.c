@@ -31,7 +31,6 @@
 #include <pwd.h>
 #include <grp.h>
 #include <sys/stat.h>
-#include <stdarg.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <byteswap.h>

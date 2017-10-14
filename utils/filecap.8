@@ -16,22 +16,22 @@ This dumps all capabilities for reference.
 
 .SH "EXAMPLES"
 .nf
-.B To check file capabilities in $PATH:
+To check file capabilities in $PATH:
 .B filecap
 
-.B To check file capabilities of whole system:
+To check file capabilities of whole system:
 .B filecap -a
 
-.B To check file capabilities recursively in a directory:
+To check file capabilities recursively in a directory:
 .B filecap /usr
 
-.B To check file capabilities of a specific program:
+To check file capabilities of a specific program:
 .B filecap /bin/passwd
 
-.B To list all possible capabilities:
+To list all possible capabilities:
 .B filecap -d
 
-.B To set a file capability on a specific program:
+To set a file capability on a specific program:
 .B filecap /bin/ping net_raw net_admin 
 .fi
 .SH "SEE ALSO"

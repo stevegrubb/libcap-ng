@@ -9,5 +9,8 @@ will do the wrong thing when the capng_init function probes the kernel
 and decides we are doing v1 rather than v3 protocol. If that is your case,
 just don't do the "make check" as part of the build process.
 
+While the library has Python bindings available, printing capabilities
+does not work. You can still manipulate capabilities, though.
+
 Report any bugs in this package to  sgrubb@redhat.com  or better yet,
 file them here: https://bugzilla.redhat.com/

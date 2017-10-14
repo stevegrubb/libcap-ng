@@ -45,6 +45,12 @@ void *thread2_main(void *arg)
 
 int main(void)
 {
+	// This test must be run as root which naturally has all capabilities
+	// set. So, we need to clear the capabilities so that we can see if
+	// the test works.
+	capng_clear(CAPNG_SELECT_CAPS);
+	capng_apply(CAPNG_SELECT_CAPS);
+
 	printf("Testing thread separation of capabilities\n");
 	pthread_create(&thread1, NULL, thread1_main, NULL);
 	pthread_create(&thread2, NULL, thread2_main, NULL);
