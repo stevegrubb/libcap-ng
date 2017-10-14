@@ -1,3 +1,9 @@
+0.6.6
+- In netcap, make sure readlink is handled properly
+- Add CAP_SYSLOG
+- In netcap and pscap, ensure euid is initialized
+- Add CAP_WAKE_ALARM
+
 0.6.5
 - Fix self test build problem on clean system (Sterling X. Winter)
 - Only open regular files in filecap

@@ -32,7 +32,7 @@ void *thread2_main(void *arg)
 #endif
 	capng_get_caps_process();
 	if (capng_have_capabilities(CAPNG_SELECT_CAPS) != CAPNG_NONE) {
-		printf("Detected capabilities when they should not be any\n");
+		printf("Detected capabilities when there should not be any\n");
 		exit(1);
 	}
 	capng_clear(CAPNG_SELECT_BOTH);

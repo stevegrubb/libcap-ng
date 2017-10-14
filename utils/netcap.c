@@ -60,7 +60,7 @@ static int collect_process_info(void)
 		capng_results_t caps;
 		char buf[100];
 		char *tmp, cmd[16], state, *text, *bounds;
-		int fd, len, euid;
+		int fd, len, euid = -1;
 
 		// Skip non-process dir entries
 		if(*ent->d_name<'0' || *ent->d_name>'9')
@@ -162,13 +162,15 @@ static int collect_process_info(void)
 			char line[256], ln[256], *s, *e;
 			unsigned long inode;
 			lnode node;
+			int len;
 
 			if (ent->d_name[0] == '.')
 				continue;
 			snprintf(ln, 256, "%s/%s", buf, ent->d_name);
-			if (readlink(ln, line, 255) < 0)
+			if ((len = readlink(ln, line, sizeof(line)-1)) < 0)
 				continue;
-
+			line[len] = 0;
+			
 			// Only look at the socket entries
 			if (memcmp(line, "socket:", 7) == 0) {
 				// Type 1 sockets

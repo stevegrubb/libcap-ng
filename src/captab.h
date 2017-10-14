@@ -1,5 +1,5 @@
 /* captab.h --
- * Copyright 2009 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2009,2011 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -59,5 +59,11 @@ _S(CAP_MAC_OVERRIDE,		"mac_override"		)
 #endif
 #ifdef CAP_MAC_ADMIN
 _S(CAP_MAC_ADMIN,		"mac_admin"		)
+#endif
+#ifdef CAP_SYSLOG
+_S(CAP_SYSLOG,			"syslog"		)
+#endif
+#ifdef CAP_WAKE_ALARM
+_S(CAP_WAKE_ALARM,		"wake_alarm"		)
 #endif
 

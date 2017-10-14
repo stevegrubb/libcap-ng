@@ -69,7 +69,7 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 	while (( ent = readdir(d) )) {
-		int pid, ppid, uid = -1, euid;
+		int pid, ppid, uid = -1, euid = -1;
 		char buf[100];
 		char *tmp, cmd[16], state, *name = NULL;
 		int fd, len;
