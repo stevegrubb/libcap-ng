@@ -1,6 +1,6 @@
 /*
  * filecap.c - A program that lists running processes with capabilities
- * Copyright (c) 2009-10 Red Hat Inc., Durham, North Carolina.
+ * Copyright (c) 2009-10, 2012 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This software may be freely redistributed and/or modified under the
@@ -90,8 +90,8 @@ static int check_file(const char *fpath,
 int main(int argc, char *argv[])
 {
 #if CAP_LAST_CAP < 31 || !defined (VFS_CAP_U32) || \
-	!defined (HAVE_ATTR_XATTR_H) || !defined(HAVE_SYS_XATTR_H)
-	printf("File based capabilities are not supported\n");
+	(!defined (HAVE_ATTR_XATTR_H) && !defined(HAVE_SYS_XATTR_H))
+	fprintf(stderr, "File based capabilities are not supported\n");
 #else
 	char *path_env, *path = NULL, *dir = NULL;
 	struct stat sbuf;
@@ -115,7 +115,8 @@ int main(int argc, char *argv[])
 				return 0;
 			} else if (argv[i][0] == '/') {
 				if (lstat(argv[i], &sbuf) != 0) {
-					printf("Error checking path %s (%s)\n",
+					fprintf(stderr, 
+						"Error checking path %s (%s)\n",
 						argv[i], strerror(errno));
 					exit(1);
 				}
@@ -130,7 +131,8 @@ int main(int argc, char *argv[])
 								&& dir == NULL)
 					dir = argv[i];
 				else {
-					printf("Must be one regular file or "
+					fprintf(stderr, 
+						"Must be one regular file or "
 						"directory\n");
 					exit(1);
 				}
@@ -148,7 +150,8 @@ int main(int argc, char *argv[])
 					capabilities = 1;
 					cremove = 1;
 				} else {
-					printf("Unrecognized capability.\n");
+					fprintf(stderr,
+						"Unrecognized capability.\n");
 					usage();
 				}
 			}
@@ -177,7 +180,8 @@ int main(int argc, char *argv[])
 		// Write capabilities to file
 		int fd = open(path, O_WRONLY|O_NOFOLLOW|O_CLOEXEC);
 		if (fd < 0) {
-			printf("Could not open %s for writing (%s)\n", path,
+			fprintf(stderr,
+				"Could not open %s for writing (%s)\n", path,
 				strerror(errno));
 			return 1;
 		}

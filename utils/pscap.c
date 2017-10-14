@@ -60,7 +60,7 @@ int main(int argc, char *argv[])
 
 	d = opendir("/proc");
 	if (d == NULL) {
-		printf("Can't open /proc: %s\n", strerror(errno));
+		fprintf(stderr, "Can't open /proc: %s\n", strerror(errno));
 		return 1;
 	}
 	while (( ent = readdir(d) )) {

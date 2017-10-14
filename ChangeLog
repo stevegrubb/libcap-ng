@@ -1,3 +1,7 @@
+0.7.3
+- Make sure stderr is used consistently in utils
+- Fix logic causing file based capabilities to not be supported when it should
+
 0.7.1
 - Add CAP_COMPROMISE_KERNEL
 - Define FTW_CONTINUE in case its not defined in libc

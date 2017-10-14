@@ -1,6 +1,6 @@
 /*
  * netcap.c - A program that lists network apps with capabilities
- * Copyright (c) 2009-10 Red Hat Inc., Durham, North Carolina.
+ * Copyright (c) 2009-10, 2012 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This software may be freely redistributed and/or modified under the
@@ -146,7 +146,8 @@ static int collect_process_info(void)
 		if (f == NULL) {
 			if (errno == EACCES) {
 				if (perm_warn == 0) {
-					printf("You may need to be root to "
+					fprintf(stderr,
+						"You may need to be root to "
 						"get a full report\n");
 					perm_warn = 1;
 				}
