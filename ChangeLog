@@ -1,3 +1,8 @@
+0.7.5
+- Make python3 supported
+- In python bindings test, clamp CAP_LAST_CAP with /proc/.../cap_last_cap
+- Update table for 3.16 kernel
+
 0.7.4
 - In pscap, remove unused code
 - Add CAPNG_INIT_SUPP_GRP to capng_change_id

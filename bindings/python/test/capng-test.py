@@ -8,7 +8,10 @@ if False:
     sys.path.insert(0, load_path)
 
 import capng
+
 last = capng.CAP_LAST_CAP
+with open('/proc/sys/kernel/cap_last_cap', 'r') as f:
+	last = int(f.readline())
 
 print("Doing basic bit tests...")
 capng.capng_clear(capng.CAPNG_SELECT_BOTH)

@@ -1,7 +1,7 @@
 dnl
 define([AC_INIT_NOTICE],
 [### Generated automatically using autoconf version] AC_ACVERSION [
-### Copyright 2009-2012 Steve Grubb <sgrubb@redhat.com>
+### Copyright 2009-2014 Steve Grubb <sgrubb@redhat.com>
 ###
 ### Permission is hereby granted, free of charge, to any person obtaining a
 ### copy of this software and associated documentation files (the "Software"),
@@ -29,7 +29,7 @@ define([AC_INIT_NOTICE],
 ])
 
 AC_REVISION($Revision: 1.3 $)dnl
-AC_INIT(libcap-ng,0.7.4)
+AC_INIT(libcap-ng,0.7.5)
 AC_PREREQ(2.12)dnl
 AM_CONFIG_HEADER(config.h)
 AC_CONFIG_MACRO_DIR([m4])
@@ -123,8 +123,10 @@ if test x$use_python = xno ; then
 else
 AC_MSG_RESULT(testing)
 AM_PATH_PYTHON
-if test -f /usr/include/python${am_cv_python_version}/Python.h ; then
+PYINCLUDEDIR=`python${am_cv_python_version} -c "from distutils import sysconfig; print(sysconfig.get_config_var('INCLUDEPY'))"`
+if test -f ${PYINCLUDEDIR}/Python.h ; then
 	python_found="yes"
+	AC_SUBST(PYINCLUDEDIR)
 	AC_MSG_NOTICE(Python bindings will be built)
 else
 	python_found="no"

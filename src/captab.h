@@ -1,5 +1,5 @@
 /* captab.h --
- * Copyright 2009,2011-13 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2009,2011-14 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -74,5 +74,8 @@ _S(CAP_EPOLLWAKEUP,		"epollwakeup"		)
 #endif
 #ifdef CAP_BLOCK_SUSPEND
 _S(CAP_BLOCK_SUSPEND,		"block_suspend"		)
+#endif
+#ifdef CAP_AUDIT_READ
+_S(CAP_AUDIT_READ,		"audit_read"		)
 #endif
 

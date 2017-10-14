@@ -1,5 +1,5 @@
 # Makefile.am -- 
-# Copyright 2009 Red Hat Inc., Durham, North Carolina.
+# Copyright 2009,2014 Red Hat Inc., Durham, North Carolina.
 # All Rights Reserved.
 #
 # This library is free software; you can redistribute it and/or
@@ -24,7 +24,7 @@ EXTRA_DIST = capng_swig.i
 CONFIG_CLEAN_FILES = *.loT *.rej *.orig
 AM_CFLAGS = -fPIC -DPIC
 PYLIBVER ?= python$(PYTHON_VERSION)
-INCLUDES = -I. -I$(top_builddir) -I/usr/include/$(PYLIBVER)
+INCLUDES = -I. -I$(top_builddir) -I@PYINCLUDEDIR@
 LIBS = $(top_builddir)/src/libcap-ng.la
 pyexec_PYTHON = capng.py
 pyexec_LTLIBRARIES = _capng.la
