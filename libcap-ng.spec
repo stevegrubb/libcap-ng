@@ -112,13 +112,12 @@ rm -rf $RPM_BUILD_ROOT
 
 %files python
 %defattr(-,root,root,-)
-%attr(755,root,root) /%{_libdir}/python?.?/site-packages/_capng.so
-%{python_sitearch}/capng.py*
+%attr(755,root,root) %{python2_sitearch}/_capng.so
+%{python2_sitearch}/capng.py*
 
 %files python3
 %defattr(-,root,root,-)
-%attr(755,root,root) /%{_libdir}/python3.?/site-packages/*
-%{python3_sitearch}/capng.py*
+%attr(755,root,root) %{python3_sitearch}/*
 
 %files utils
 %defattr(-,root,root,-)

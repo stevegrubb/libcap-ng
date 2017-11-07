@@ -1,7 +1,7 @@
 dnl
 define([AC_INIT_NOTICE],
 [### Generated automatically using autoconf version] AC_ACVERSION [
-### Copyright 2009-2016 Steve Grubb <sgrubb@redhat.com>
+### Copyright 2009-2017 Steve Grubb <sgrubb@redhat.com>
 ###
 ### Permission is hereby granted, free of charge, to any person obtaining a
 ### copy of this software and associated documentation files (the "Software"),
@@ -127,11 +127,13 @@ PYINCLUDEDIR=`python${am_cv_python_version} -c "from distutils import sysconfig;
 if test -f ${PYINCLUDEDIR}/Python.h ; then
 	python_found="yes"
 	AC_SUBST(PYINCLUDEDIR)
+	pybind_dir="python"
+	AC_SUBST(pybind_dir)
 	AC_MSG_NOTICE(Python bindings will be built)
 else
 	python_found="no"
 	if test x$use_python = xyes ; then
-		AC_MSG_ERROR([Python explicitly required and python headers found])
+		AC_MSG_ERROR([Python explicitly requested and python headers were not found])
 	else
 		AC_MSG_WARN("Python headers not found - python bindings will not be made")
 	fi
@@ -139,6 +141,7 @@ fi
 fi
 AM_CONDITIONAL(HAVE_PYTHON, test ${python_found} = "yes")
 
+withval=""
 AC_MSG_CHECKING(whether to create python3 bindings)
 AC_ARG_WITH(python3,
 AS_HELP_STRING([--with-python3],[enable building python3 bindings]),
@@ -160,7 +163,7 @@ else
 	echo "Python3 bindings WILL be built"
 	use_python3=yes
 	AC_PATH_PROG([PYTHON3], [python3], [no])
-	if test "$PYTHON3" == "no" ; then
+	if test "x$PYTHON3" == "xno" ; then
 		echo "The python3 program was not found in the search path. Please ensure"
 		echo "that it is installed and its directory is included in the search path or"
 		echo "pass --without-python3 to ./configure."

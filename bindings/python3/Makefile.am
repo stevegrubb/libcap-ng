@@ -1,5 +1,5 @@
 # Makefile.am -- 
-# Copyright 2009,2014-16 Red Hat Inc., Durham, North Carolina.
+# Copyright 2009,2014-17 Red Hat Inc., Durham, North Carolina.
 # All Rights Reserved.
 #
 # This library is free software; you can redistribute it and/or
@@ -26,11 +26,13 @@ AM_CPPFLAGS = -I. -I$(top_builddir) $(PYTHON3_INCLUDES)
 LIBS = ${top_builddir}/src/libcap-ng.la
 SWIG_FLAGS = -python -py3 -modern
 SWIG_INCLUDES = ${AM_CPPFLAGS}
+# REMOVE SOMEDAY - without overriding this macro, it uses python2
+am__py_compile = PYTHON=$(PYTHON3) $(SHELL) $(py_compile)
 py3exec_PYTHON = capng.py
 py3exec_LTLIBRARIES = _capng.la
 py3exec_SOLIBRARIES = _capng.so
 _capng_la_CFLAGS = -shared
-_capng_la_LDFLAGS = -module -avoid-version -shared
+_capng_la_LDFLAGS = -module -avoid-version -Wl,-z,relro
 _capng_la_HEADERS: $(top_builddir)/config.h 
 _capng_la_DEPENDENCIES =${top_srcdir}/src/cap-ng.h ${top_builddir}/src/libcap-ng.la
 _capng_la_LIBADD = ${top_builddir}/src/libcap-ng.la
