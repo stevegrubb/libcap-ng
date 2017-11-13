@@ -32,7 +32,10 @@ To list all possible capabilities:
 .B filecap -d
 
 To set a file capability on a specific program:
-.B filecap /bin/ping net_raw net_admin 
+.B filecap /bin/ping net_raw net_admin
+
+To remove file capabilities on a specific program:
+.B filecap /bin/ping none 
 .fi
 .SH "SEE ALSO"
 .BR pscap (8),
