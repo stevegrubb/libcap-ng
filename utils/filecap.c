@@ -1,6 +1,6 @@
 /*
  * filecap.c - A program that lists running processes with capabilities
- * Copyright (c) 2009-10, 2012 Red Hat Inc., Durham, North Carolina.
+ * Copyright (c) 2009-10,2012, 2017 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This software may be freely redistributed and/or modified under the
@@ -38,6 +38,7 @@
 
 
 static int show_all = 0, header = 0, capabilities = 0, cremove = 0;
+static int single_file = 0;
 
 static void usage(void)
 {
@@ -46,20 +47,28 @@ static void usage(void)
 	exit(1);
 }
 
+// Returns 1 on error and 0 otherwise
 static int check_file(const char *fpath,
 		const struct stat *sb,
 		int typeflag_unused __attribute__ ((unused)),
 		struct FTW *s_unused __attribute__ ((unused)))
 {
+	int ret = FTW_CONTINUE;
+
 	if (S_ISREG(sb->st_mode) == 0)
-		return FTW_CONTINUE;
+		return ret;
 
 	int fd = open(fpath, O_RDONLY|O_CLOEXEC);
 	if (fd >= 0) {
 		capng_results_t rc;
 
 		capng_clear(CAPNG_SELECT_BOTH);
-		capng_get_caps_fd(fd);
+		if (capng_get_caps_fd(fd) < 0) {
+			fprintf(stderr, "Unable to get capabilities of %s\n",
+				fpath);
+			if (single_file)
+				ret = 1;
+		}
 		rc = capng_have_capabilities(CAPNG_SELECT_CAPS);
 		if (rc > CAPNG_NONE) {
 			if (header == 0) {
@@ -76,7 +85,7 @@ static int check_file(const char *fpath,
 		}
 		close(fd);
 	}
-	return FTW_CONTINUE;
+	return ret;
 }
 
 
@@ -96,7 +105,7 @@ int main(int argc, char *argv[])
 	char *path_env, *path = NULL, *dir = NULL;
 	struct stat sbuf;
 	int nftw_flags = FTW_PHYS;
-	int i;
+	int i, rc = 0;
 
 	if (argc >1) {
 		for (i=1; i<argc; i++) {	
@@ -177,7 +186,8 @@ int main(int argc, char *argv[])
 		nftw(dir, check_file, 1024, nftw_flags);
 	}else if (path && capabilities == 0) {
 		// Print out specific file
-		check_file(path, &sbuf, 0, NULL);
+		single_file = 1;
+		rc = check_file(path, &sbuf, 0, NULL);
 	} else if (path && capabilities == 1) {
 		// Write capabilities to file
 		int fd = open(path, O_WRONLY|O_NOFOLLOW|O_CLOEXEC);
@@ -187,10 +197,14 @@ int main(int argc, char *argv[])
 				strerror(errno));
 			return 1;
 		}
-		capng_apply_caps_fd(fd);
+		if (capng_apply_caps_fd(fd) < 0) {
+			fprintf(stderr, "Could not set capabilities on %s\n",
+				path);
+			rc = 1;
+		}
 		close(fd);
 	}
 #endif
-	return 0;
+	return rc;
 }
 
