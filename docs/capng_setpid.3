@@ -10,6 +10,16 @@ void capng_setpid(int pid);
 
 capng_pid sets the working pid for capabilities operations. This is useful if you want to get the capabilities of a different process.
 
+.SH NOTES
+
+If your process calls 
+.B fork
+, then the child process will still have the pid of the parent process stored in libcap-ng's internal data. It is disallowed to do any kind of setcap operations because you would be crossing process boundaries. To correct this, if your program links against pthreads, then libcap-ng will use the 
+.B pthread_atfork
+function (as a weak symbol) to reset the pid information to the new process automatically. You are not required to link against pthreads. You can call 
+.B capng_setpid
+and adjust the stored pid manually.
+
 .SH "RETURN VALUE"
 
 None.
