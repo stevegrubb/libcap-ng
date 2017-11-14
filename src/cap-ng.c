@@ -291,11 +291,11 @@ static int get_bounding_set(void)
 	char buf[64];
 	FILE *f;
 
-	snprintf(buf, sizeof(buf), "/proc/%u/status", m.hdr.pid ? m.hdr.pid :
+	snprintf(buf, sizeof(buf), "/proc/%d/status", m.hdr.pid ? m.hdr.pid :
 #ifdef HAVE_SYSCALL_H
-		(unsigned)syscall(__NR_gettid));
+		(int)syscall(__NR_gettid));
 #else
-		(unsigned)getpid();
+		(int)getpid();
 #endif
 	f = fopen(buf, "re");
 	if (f == NULL)
@@ -963,8 +963,7 @@ char *capng_print_caps_numeric(capng_print_t where, capng_select_t set)
 
 char *capng_print_caps_text(capng_print_t where, capng_type_t which)
 {
-	unsigned int i; 
-	int once = 0, cnt = 0;
+	int i, once = 0, cnt = 0;
 	char *ptr = NULL;
 
 	if (m.state < CAPNG_INIT)
