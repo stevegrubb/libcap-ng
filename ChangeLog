@@ -2,6 +2,7 @@
 - Fix byte compiling python3 bindings
 - Detect and output a couple errors in filecap
 - Use pthread_atfork to optionally reset the pid and related info on fork
+- Rework spec file to show new python2/3 separation
 
 0.7.8
 - Improve Python3 support
