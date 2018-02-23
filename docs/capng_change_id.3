@@ -1,4 +1,4 @@
-.TH "CAPNG_CHANGE_ID" "3" "Feb 2013" "Red Hat" "Libcap-ng API"
+.TH "CAPNG_CHANGE_ID" "3" "Feb 2018" "Red Hat" "Libcap-ng API"
 .SH NAME
 capng_change_id \- change the credentials retaining capabilities
 .SH "SYNOPSIS"
@@ -8,7 +8,9 @@ int capng_change_id(int uid, int gid, capng_flags_t flag);
 
 .SH "DESCRIPTION"
 
-This function will change uid and gid to the ones given while retaining the capabilities previously specified in capng_update. It is not necessary and perhaps better if capng_apply has not been called prior to this function so that all necessary privileges are still intact. The caller is required to have CAP_SETPCAP capability still active before calling this function.
+This function will change uid and gid to the ones given while retaining the capabilities previously specified in capng_update. It is also possible to specify -1 for either the uid or gid in which case the function will not change the uid or gid and leave it "as is". This is useful if you just want the flag options to be applied (assuming the option doesn't require more privileges that you currently have).
+
+It is not necessary and perhaps better if capng_apply has not been called prior to this function so that all necessary privileges are still intact. The caller may be required to have CAP_SETPCAP capability still active before calling this function or capabilities cannot be changed.
 
 This function also takes a flag parameter that helps to tailor the exact actions performed by the function to secure the environment. The option may be or'ed together. The legal values are:
 

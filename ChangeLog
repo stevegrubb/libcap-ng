@@ -1,4 +1,5 @@
 0.8
+- Update capng_change_id man page
 
 0.7.9
 - Fix byte compiling python3 bindings
