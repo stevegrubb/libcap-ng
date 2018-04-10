@@ -56,6 +56,7 @@ AC_CHECK_HEADERS(sys/xattr.h, [], [
 	AC_CHECK_HEADERS(attr/xattr.h, [], [AC_MSG_WARN(attr/xattr.h not found, disabling file system capabilities.)])
 	])
 AC_CHECK_HEADERS(linux/securebits.h, [], [])
+AC_CHECK_HEADERS(pthread.h, [], [AC_MSG_WARN(pthread.h not found, disabling pthread_atfork.)])
 
 AC_C_CONST
 AC_C_INLINE
