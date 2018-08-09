@@ -1,10 +1,10 @@
-.TH FILECAP: "8" "March 2009" "Red Hat" "System Administration Utilities"
+.TH FILECAP: "8" "Aug 2018" "Red Hat" "System Administration Utilities"
 .SH NAME
 filecap \- a program to see capabilities
 .SH SYNOPSIS
 .B filecap [ \-a | \-d | /dir | /dir/file [cap1 cap2 ...] ]
 .SH DESCRIPTION
-\fBfilecap\fP is a program that prints out a report of programs with file based capabilities. If a file is not in the report or there is no report at all, no capabilities were found. For expedience, the default is to check only the directories in the PATH environmental variable. If the \-a command line option is given, then all directories will be checked. If a directory is passed, it will recursively check that directory. If a path to a file is given, it will only check that file. If the path to the file includes capabilities, then they are written to the file.
+\fBfilecap\fP is a program that prints out a report of programs with file based capabilities. If a file is not in the report or there is no report at all, no capabilities were found. For expedience, the default is to check only the directories in the PATH environmental variable. If the \-a command line option is given, then all directories will be checked. If a directory is passed, it will recursively check that directory. If a path to a file is given, it will only check that file. If a file is given followed by capabilities, then the capabilities are written to the file.
 
 .SH OPTIONS
 .TP

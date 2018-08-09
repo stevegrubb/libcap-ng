@@ -777,10 +777,10 @@ capng_results_t capng_have_capabilities(capng_select_t set)
 				full = 1;
 			else
 				return CAPNG_PARTIAL;
-			if ((m.data.v3[1].effective & UPPER_MASK) == 0)
+			if ((m.data.v3[1].effective & UPPER_MASK) == 0 && !full)
 				empty = 1;
 			else if ((m.data.v3[1].effective & UPPER_MASK) ==
-							UPPER_MASK)
+						UPPER_MASK && !empty)
 				full = 1;
 			else
 				return CAPNG_PARTIAL;
@@ -802,6 +802,40 @@ capng_results_t capng_have_capabilities(capng_select_t set)
 			return CAPNG_PARTIAL;
 	}
 #endif 
+
+	if (empty == 1 && full == 0)
+		return CAPNG_NONE;
+	else if (empty == 0 && full == 1)
+		return CAPNG_FULL;
+	
+	return CAPNG_PARTIAL;
+}
+
+// -1 - error, 0 - no caps, 1 partial caps, 2 full caps
+capng_results_t capng_have_permitted_capabilities(void)
+{
+	int empty = 0, full = 0;
+
+	// First, try to init with current set
+	if (m.state < CAPNG_INIT)
+		capng_get_caps_process();
+
+	// If we still don't have anything, error out
+	if (m.state < CAPNG_INIT)
+		return CAPNG_FAIL;
+
+	if (m.data.v3[0].permitted == 0)
+		empty = 1;
+	else if (m.data.v3[0].permitted == 0xFFFFFFFFU)
+		full = 1;
+	else
+		return CAPNG_PARTIAL;
+	if ((m.data.v3[1].permitted & UPPER_MASK) == 0 && !full)
+		empty = 1;
+	else if ((m.data.v3[1].permitted & UPPER_MASK) == UPPER_MASK && !empty)
+		full = 1;
+	else
+		return CAPNG_PARTIAL;
 
 	if (empty == 1 && full == 0)
 		return CAPNG_NONE;

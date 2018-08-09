@@ -1,5 +1,7 @@
 0.8
 - Update capng_change_id man page
+- Add capng_have_permitted_capabilities function
+- Update filecap to output which set the capabilities are in
 
 0.7.9
 - Fix byte compiling python3 bindings

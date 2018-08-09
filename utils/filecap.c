@@ -60,6 +60,7 @@ static int check_file(const char *fpath,
 	int fd = open(fpath, O_RDONLY|O_CLOEXEC);
 	if (fd >= 0) {
 		capng_results_t rc;
+		int permitted = 0;
 
 		capng_clear(CAPNG_SELECT_BOTH);
 		if (capng_get_caps_fd(fd) < 0) {
@@ -69,12 +70,17 @@ static int check_file(const char *fpath,
 				ret = 1;
 		}
 		rc = capng_have_capabilities(CAPNG_SELECT_CAPS);
+		if (rc == CAPNG_NONE) {
+			permitted = 1;
+			rc = capng_have_permitted_capabilities();
+		}
 		if (rc > CAPNG_NONE) {
 			if (header == 0) {
 				header = 1;
-				printf("%-20s capabilities\n", "file");
+				printf("%-9s %-20s capabilities\n", "set", "file");
 			}
-			printf("%s     ", fpath);
+			printf("%s %s     ",
+				permitted ? "permitted" : "effective",  fpath);
 			if (rc == CAPNG_FULL)
 				printf("full");
 			else

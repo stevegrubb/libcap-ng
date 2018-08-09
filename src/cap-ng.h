@@ -63,6 +63,7 @@ int capng_apply_caps_fd(int fd);
 
 // These functions check capability bits
 capng_results_t capng_have_capabilities(capng_select_t set);
+capng_results_t capng_have_permitted_capabilities(void);
 int capng_have_capability(capng_type_t which, unsigned int capability);
 
 // These functions printout capabilities

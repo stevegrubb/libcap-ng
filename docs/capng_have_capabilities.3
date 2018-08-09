@@ -1,14 +1,20 @@
-.TH "CAPNG_HAVE_CAPABILITIES" "3" "June 2009" "Red Hat" "Libcap-ng API"
+.TH "CAPNG_HAVE_CAPABILITIES" "3" "Aug 2018" "Red Hat" "Libcap-ng API"
 .SH NAME
-capng_have_capabilities \- general check for capabilities
+.nf
+capng_have_capabilities, capng_have_permitted_capabilities \- check for capabilities
 .SH "SYNOPSIS"
 .B #include <cap-ng.h>
 .sp
 capng_results_t capng_have_capabilities(capng_select_t set);
+capng_results_t capng_have_permitted_capabilities(void);
 
 .SH "DESCRIPTION"
 
-capng_have_capabilities will check the selected internal capabilities sets to see what the status is. The capabilities sets must be previously setup with calls to capng_get_caps_process, capng_get_caps_fd, or in some other way setup. The options are CAPNG_SELECT_CAPS for the traditional capabilities, CAPNG_SELECT_BOUNDS for the bounding set, or CAPNG_SELECT_BOTH if clearing both is desired.
+capng_have_capabilities will check the selected internal capabilities sets to see what the status is. The capabilities sets must be previously setup with calls to capng_get_caps_process, capng_get_caps_fd, or in some other way setup. The options are CAPNG_SELECT_CAPS for the traditional capabilities, CAPNG_SELECT_BOUNDS for the bounding set, or CAPNG_SELECT_BOTH if clearing both is desired. When capabilities are checked, it will only look at the effective capabilities.
+
+If, however, the source of capabilities comes from a file, then you may need to additionally check the permitted capabilities. It's for this reason that
+.B capng_have_permitted_capabilities
+was created. It takes no arguments because it simply checks the permitted set.
 
 .SH "RETURN VALUE"
 
