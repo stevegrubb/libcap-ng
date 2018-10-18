@@ -34,7 +34,9 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <byteswap.h>
+#ifdef HAVE_PTHREAD_H
 #include <pthread.h>	// For pthread_atfork
+#endif
 #ifdef HAVE_SYSCALL_H
 #include <sys/syscall.h>
 #endif
