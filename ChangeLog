@@ -2,6 +2,7 @@
 - Update capng_change_id man page
 - Add capng_have_permitted_capabilities function
 - Update filecap to output which set the capabilities are in
+- Fix filecap to not output an error when a file has no capabilities
 
 0.7.9
 - Fix byte compiling python3 bindings

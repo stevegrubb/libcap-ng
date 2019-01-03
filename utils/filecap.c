@@ -63,7 +63,7 @@ static int check_file(const char *fpath,
 		int permitted = 0;
 
 		capng_clear(CAPNG_SELECT_BOTH);
-		if (capng_get_caps_fd(fd) < 0) {
+		if (capng_get_caps_fd(fd) < 0 && errno != ENODATA) {
 			fprintf(stderr, "Unable to get capabilities of %s: %s\n",
 				fpath, strerror(errno));
 			if (single_file)
