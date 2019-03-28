@@ -233,7 +233,7 @@ static void report_finding(int port, const char *type, const char *ifc)
 		
 	// And print out anything with capabilities
 	if (header == 0) {
-		printf("%-5s %-5s %-10s %-16s %-4s %-6s %s\n",
+		printf("%-5s %-5s %-10s %-16s %-8s %-6s %s\n",
 			"ppid", "pid", "acct", "command", "type", "port", 
 			"capabilities");
 			header = 1;
@@ -254,7 +254,7 @@ static void report_finding(int port, const char *type, const char *ifc)
 		printf("%-5d %-5d %-10s", n->ppid, n->pid, tacct);
 	} else
 		printf("%-5d %-5d %-10d", n->ppid, n->pid, last_uid);
-	printf(" %-16s %-4s", n->cmd, type);
+	printf(" %-16s %-8s", n->cmd, type);
 	if (ifc)
 		printf(" %-6s", ifc);
 	else
