@@ -450,6 +450,8 @@ int main(int argc, char __attribute__((unused)) *argv[])
 	// Next udp sockets...
 	read_udp("/proc/net/udp", "udp");
 	read_udp("/proc/net/udp6", "udp6");
+	read_udp("/proc/net/udplite", "udplite");
+	read_udp("/proc/net/udplite6", "udplite6");
 
 	// Next, raw sockets...
 	read_raw("/proc/net/raw", "raw");
@@ -457,6 +459,8 @@ int main(int argc, char __attribute__((unused)) *argv[])
 
 	// And last, read packet sockets
 	read_packet();
+
+	// Could also do icmp,netlink,unix
 
 	list_clear(&l);
 	return 0;
