@@ -32,13 +32,37 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <pwd.h>
+#include <stdbool.h>
+#include <sys/stat.h>
 #include "cap-ng.h"
 
+#define CMD_LEN 16
+#define USERNS_MARK_LEN 2
 
 static void usage(void)
 {
 	fprintf(stderr, "usage: pscap [-a]\n");
 	exit(1);
+}
+
+static bool in_child_userns(int pid)
+{
+	char ns_file_path[32];
+	struct stat statbuf;
+	ino_t own_ns_inode;
+	dev_t own_ns_dev;
+
+	if (stat("/proc/self/ns/user", &statbuf) < 0)
+		return false;
+
+	own_ns_inode = statbuf.st_ino;
+	own_ns_dev = statbuf.st_dev;
+
+	snprintf(ns_file_path, 32, "/proc/%d/ns/user", pid);
+	if (stat(ns_file_path, &statbuf) < 0)
+		return false;
+
+	return statbuf.st_ino != own_ns_inode || statbuf.st_dev != own_ns_dev;
 }
 
 int main(int argc, char *argv[])
@@ -67,7 +91,7 @@ int main(int argc, char *argv[])
 	while (( ent = readdir(d) )) {
 		int pid, ppid, uid = -1, euid = -1;
 		char buf[100];
-		char *tmp, cmd[16], state, *name = NULL;
+		char *tmp, cmd[CMD_LEN + USERNS_MARK_LEN], state, *name = NULL;
 		int fd, len;
 		struct passwd *p;
 
@@ -144,7 +168,7 @@ int main(int argc, char *argv[])
 			}
 			
 			if (header == 0) {
-				printf("%-5s %-5s %-10s  %-16s  %s\n",
+				printf("%-5s %-5s %-10s  %-18s  %s\n",
 				    "ppid", "pid", "name", "command",
 				    "capabilities");
 				header = 1;
@@ -161,11 +185,15 @@ int main(int argc, char *argv[])
 					name = p->pw_name;
 				// If not taking this branch, use last val
 			}
+
+			if (in_child_userns(pid))
+				strcat(cmd, " *");
+
 			if (name) {
-				printf("%-5d %-5d %-10s  %-16s  ", ppid, pid,
+				printf("%-5d %-5d %-10s  %-18s  ", ppid, pid,
 					name, cmd);
 			} else
-				printf("%-5d %-5d %-10d  %-16s  ", ppid, pid,
+				printf("%-5d %-5d %-10d  %-18s  ", ppid, pid,
 					uid, cmd);
 			if (caps == CAPNG_PARTIAL) {
 				capng_print_caps_text(CAPNG_PRINT_STDOUT,
