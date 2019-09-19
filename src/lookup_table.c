@@ -105,6 +105,7 @@ int capng_name_to_capability(const char *name)
                                  CAP_NG_CAPABILITY_NAMES, name);
 }
 
+static char *ptr2 = NULL;
 const char *capng_capability_to_name(unsigned int capability)
 {
 	char *ptr;
@@ -115,8 +116,11 @@ const char *capng_capability_to_name(unsigned int capability)
 	ptr = capng_lookup_number(captab, captab_msgstr.str,
                                    CAP_NG_CAPABILITY_NAMES, capability);
 	if (ptr == NULL) // This leaks memory, but should almost never be used
-		if (asprintf(&ptr, "cap_%d", capability) < 0)
+		free(ptr2);
+		if (asprintf(&ptr2, "cap_%u", capability) < 0)
 			ptr = NULL;
+		else
+			ptr = ptr2;
 
 	return ptr;
 }
