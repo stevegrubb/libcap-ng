@@ -4,7 +4,8 @@
 - Update filecap to output which set the capabilities are in
 - Fix filecap to not output an error when a file has no capabilities
 - Add udplite support to netcap
-- Fix usage of pthread_atfork (Joe Orton) 
+- Fix usage of pthread_atfork (Joe Orton)
+- Mark processes in child user namespaces with * (Danila Kiver)
 
 0.7.9
 - Fix byte compiling python3 bindings

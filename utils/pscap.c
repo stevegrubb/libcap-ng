@@ -45,6 +45,14 @@ static void usage(void)
 	exit(1);
 }
 
+/*
+ * Precise recursive checks for parent-child relation between namespaces 
+ * using ioctl() were avoided, because there didn't seem to be any case when
+ * we may dereference the namespace symlink in /proc/PID/ns for processes in
+ * user namespaces other than the current or child ones. Thus, the check just
+ * tries to dereference the link and checks that it does not point to the
+ * current NS.
+ */
 static bool in_child_userns(int pid)
 {
 	char ns_file_path[32];
