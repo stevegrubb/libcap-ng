@@ -155,15 +155,6 @@ static __thread struct cap_ng m =	{ 1,
 					CAPNG_NEW,
 					{0, 0} };
 
-
-/*
- * The pthread_atfork function is being made weak so that we can use it
- * if the program is linked with pthreads and not requiring it for
- * everything that uses libcap-ng.
- */
-extern int __attribute__((weak)) pthread_atfork(void (*prepare)(void),
-	void (*parent)(void), void (*child)(void));
-
 /*
  * Reset the state so that init gets called to erase everything
  */
@@ -175,8 +166,7 @@ static void deinit(void)
 static void init_lib(void) __attribute__ ((constructor));
 static void init_lib(void)
 {
-	if (pthread_atfork)
-		pthread_atfork(NULL, NULL, deinit);
+	pthread_atfork(NULL, NULL, deinit);
 }
 
 static void init(void)
