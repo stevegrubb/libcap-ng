@@ -14,6 +14,10 @@ capng_save_state is a function that returns a pointer to the internal state of t
 
 This returns NULL on failure and a non-NULL pointer otherwise.
 
+.SH NOTES
+
+The structure returned by capng_save_state is malloc'd;  it should be free'd if not used.
+
 .SH "SEE ALSO"
 
 .BR capng_restore_state (3),
