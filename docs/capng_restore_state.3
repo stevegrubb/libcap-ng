@@ -14,6 +14,13 @@ capng_restore_state is a function that takes the state information previously sa
 
 None.
 
+.SH NOTES
+
+capng_restore_state free's the previously malloc'd state, thus the state can't be restored multiple times.
+
+The working pid is part of the restored state, if restoring the state to a different thread, capng_setpid
+can be used to update it.
+
 .SH "SEE ALSO"
 
 .BR capng_save_state (3),
