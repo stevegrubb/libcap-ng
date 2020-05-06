@@ -166,7 +166,9 @@ static void deinit(void)
 static void init_lib(void) __attribute__ ((constructor));
 static void init_lib(void)
 {
+#ifdef HAVE_PTHREAD_H
 	pthread_atfork(NULL, NULL, deinit);
+#endif
 }
 
 static void init(void)
