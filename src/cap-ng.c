@@ -33,6 +33,7 @@
 #include <sys/stat.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <endian.h>
 #include <byteswap.h>
 #ifdef HAVE_PTHREAD_H
 #include <pthread.h>	// For pthread_atfork
