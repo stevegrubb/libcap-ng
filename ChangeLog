@@ -1,4 +1,5 @@
 0.8
+- Really clear bounding set if asked in capng_change_id
 
 0.7.10
 - Update capng_change_id man page

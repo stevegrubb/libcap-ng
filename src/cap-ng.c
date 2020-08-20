@@ -657,7 +657,7 @@ int capng_change_id(int uid, int gid, capng_flags_t flag)
 
 	// Clear bounding set if needed while we have CAP_SETPCAP
 	if (flag & CAPNG_CLEAR_BOUNDING) {
-		capng_clear(CAPNG_BOUNDING_SET);
+		capng_clear(CAPNG_SELECT_BOUNDS);
 		rc = capng_apply(CAPNG_SELECT_BOUNDS);
 		if (rc)
 			return -8;
