@@ -1013,7 +1013,7 @@ char *capng_print_caps_text(capng_print_t where, capng_type_t which)
 			} else if (where == CAPNG_PRINT_BUFFER) {
 				int len;
 				if (once == 0) {
-					ptr = malloc(last_cap*18);
+					ptr = malloc(last_cap*20);
 					if (ptr == NULL)
 						return ptr;
 					len = sprintf(ptr+cnt, "%s", n);
