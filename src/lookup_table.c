@@ -109,7 +109,7 @@ int capng_name_to_capability(const char *name)
 static char *ptr2 = NULL;
 const char *capng_capability_to_name(unsigned int capability)
 {
-	char *ptr;
+	const char *ptr;
 
 	if (!cap_valid(capability))
 		return NULL;

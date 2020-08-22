@@ -826,6 +826,7 @@ capng_results_t capng_have_permitted_capabilities(void)
 		full = 1;
 	else
 		return CAPNG_PARTIAL;
+
 	if ((m.data.v3[1].permitted & UPPER_MASK) == 0 && !full)
 		empty = 1;
 	else if ((m.data.v3[1].permitted & UPPER_MASK) == UPPER_MASK && !empty)
@@ -837,7 +838,7 @@ capng_results_t capng_have_permitted_capabilities(void)
 		return CAPNG_NONE;
 	else if (empty == 0 && full == 1)
 		return CAPNG_FULL;
-	
+
 	return CAPNG_PARTIAL;
 }
 
