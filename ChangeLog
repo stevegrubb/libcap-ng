@@ -1,6 +1,7 @@
 0.8
 - Really clear bounding set if asked in capng_change_id
 - Add CAP_PERFMON, CAP_BPF, & CAP_CHECKPOINT_RESTORE
+- Avoid malloc/free in capng_apply (Natanael Copa)
 
 0.7.10
 - Update capng_change_id man page
