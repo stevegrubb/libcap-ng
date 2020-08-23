@@ -1,6 +1,6 @@
 /*
  * filecap.c - A program that lists running processes with capabilities
- * Copyright (c) 2009-10,2012, 2017 Red Hat Inc., Durham, North Carolina.
+ * Copyright (c) 2009-10,2012,2017,2020 Red Hat Inc.
  * All Rights Reserved.
  *
  * This software may be freely redistributed and/or modified under the
@@ -15,7 +15,7 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program; see the file COPYING. If not, write to the
- * Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor 
+ * Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor
  * Boston, MA 02110-1335, USA.
  *
  * Authors:
@@ -64,7 +64,8 @@ static int check_file(const char *fpath,
 
 		capng_clear(CAPNG_SELECT_BOTH);
 		if (capng_get_caps_fd(fd) < 0 && errno != ENODATA) {
-			fprintf(stderr, "Unable to get capabilities of %s: %s\n",
+			fprintf(stderr,
+				"Unable to get capabilities of %s: %s\n",
 				fpath, strerror(errno));
 			if (single_file)
 				ret = 1;
@@ -77,7 +78,8 @@ static int check_file(const char *fpath,
 		if (rc > CAPNG_NONE) {
 			if (header == 0) {
 				header = 1;
-				printf("%-9s %-20s capabilities\n", "set", "file");
+				printf("%-9s %-20s capabilities\n",
+				       "set", "file");
 			}
 			printf("%s %s     ",
 				permitted ? "permitted" : "effective",  fpath);
@@ -95,7 +97,7 @@ static int check_file(const char *fpath,
 
 
 // Use cases:
-//  filecap 
+//  filecap
 //  filecap -a
 //  filecap /path/dir
 //  filecap /path/file
@@ -113,15 +115,16 @@ int main(int argc, char *argv[])
 	int i, rc = 0;
 
 	if (argc >1) {
-		for (i=1; i<argc; i++) {	
+		for (i=1; i<argc; i++) {
 			if (strcmp(argv[i], "-a") == 0) {
 				show_all = 1;
 				if (argc != 2)
 					usage();
 			} else if (strcmp(argv[i], "-d") == 0) {
-				for (i=0; i<=CAP_LAST_CAP; i++) {
+				int j;
+				for (j=0; j<=CAP_LAST_CAP; j++) {
 					const char *n =
-						capng_capability_to_name(i);
+						capng_capability_to_name(j);
 					if (n == NULL)
 						n = "unknown";
 					printf("%s\n", n);
@@ -129,7 +132,7 @@ int main(int argc, char *argv[])
 				return 0;
 			} else if (argv[i][0] == '/') {
 				if (lstat(argv[i], &sbuf) != 0) {
-					fprintf(stderr, 
+					fprintf(stderr,
 						"Error checking path %s (%s)\n",
 						argv[i], strerror(errno));
 					exit(1);
@@ -141,11 +144,11 @@ int main(int argc, char *argv[])
 								 dir == NULL) {
 					path = argv[i];
 					capng_clear(CAPNG_SELECT_BOTH);
-				} else if (S_ISDIR(sbuf.st_mode) && path == NULL 
+				} else if (S_ISDIR(sbuf.st_mode) && path == NULL
 								&& dir == NULL)
 					dir = argv[i];
 				else {
-					fprintf(stderr, 
+					fprintf(stderr,
 						"Must be one regular file or "
 						"directory\n");
 					exit(1);
@@ -203,7 +206,8 @@ int main(int argc, char *argv[])
 			return 1;
 		}
 		if (capng_apply_caps_fd(fd) < 0) {
-			fprintf(stderr, "Could not set capabilities on %s: %s\n",
+			fprintf(stderr,
+				"Could not set capabilities on %s: %s\n",
 				path, strerror(errno));
 			rc = 1;
 		}
