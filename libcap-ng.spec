@@ -1,8 +1,6 @@
-%{!?python_sitearch: %global python_sitearch %(%{__python} -c "from distutils.sysconfig import get_python_lib; print get_python_lib(1)")}
-
 Summary: An alternate posix capabilities library
 Name: libcap-ng
-Version: 0.8
+Version: 0.7.11
 Release: 1
 License: LGPLv2+
 Group: System Environment/Libraries
@@ -72,7 +70,6 @@ lets you set the file system based capabilities.
 make %{?_smp_mflags}
 
 %install
-rm -rf $RPM_BUILD_ROOT
 make DESTDIR="${RPM_BUILD_ROOT}" INSTALL='install -p' install
 
 # Move the symlink
@@ -94,13 +91,7 @@ rm -f $RPM_BUILD_ROOT/%{_libdir}/python?.?/site-packages/_capng.la
 %check
 make check
 
-%clean
-rm -rf $RPM_BUILD_ROOT
-
-%post -p /sbin/ldconfig
-
-%postun -p /sbin/ldconfig
-
+%ldconfig_scriptlets
 
 %files
 %defattr(-,root,root,-)
@@ -132,6 +123,6 @@ rm -rf $RPM_BUILD_ROOT
 %attr(0644,root,root) %{_mandir}/man8/*
 
 %changelog
-* Tue Oct 01 2019 Steve Grubb <sgrubb@redhat.com> 0.8-1
+* Sun Aug 23 2020 Steve Grubb <sgrubb@redhat.com> 0.7.11-1
 - New upstream release
 
