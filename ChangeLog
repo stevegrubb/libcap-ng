@@ -1,3 +1,5 @@
+0.8
+
 0.7.11
 - Really clear bounding set if asked in capng_change_id
 - Add CAP_PERFMON, CAP_BPF, & CAP_CHECKPOINT_RESTORE
