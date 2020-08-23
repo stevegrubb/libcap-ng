@@ -1,5 +1,5 @@
 /* libcap-ng.c --
- * Copyright 2009-10, 2013, 2017 Red Hat Inc., Durham, North Carolina.
+ * Copyright 2009-10, 2013, 2017, 2020 Red Hat Inc.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -57,6 +57,10 @@ int last_cap hidden = -1;
 /* External syscall prototypes */
 extern int capset(cap_user_header_t header, cap_user_data_t data);
 extern int capget(cap_user_header_t header, const cap_user_data_t data);
+
+// Local functions
+static void update_bounding_set(capng_act_t action, unsigned int capability,
+	unsigned int idx);
 
 // Local defines
 #define MASK(x) (1U << (x))
@@ -285,6 +289,7 @@ static int get_bounding_set(void)
 {
 	char buf[64];
 	FILE *f;
+	int rc, i;
 
 	snprintf(buf, sizeof(buf), "/proc/%d/status", m.hdr.pid ? m.hdr.pid :
 #ifdef HAVE_SYSCALL_H
@@ -293,18 +298,34 @@ static int get_bounding_set(void)
 		(int)getpid();
 #endif
 	f = fopen(buf, "re");
-	if (f == NULL)
-		return -1;
-	__fsetlocking(f, FSETLOCKING_BYCALLER);
-	while (fgets(buf, sizeof(buf), f)) {
-		if (strncmp(buf, "CapB", 4))
-			continue;
-		sscanf(buf, "CapBnd:  %08x%08x", &m.bounds[1], &m.bounds[0]);
+	if (f) {
+		__fsetlocking(f, FSETLOCKING_BYCALLER);
+		while (fgets(buf, sizeof(buf), f)) {
+			if (strncmp(buf, "CapB", 4))
+				continue;
+			sscanf(buf, "CapBnd:  %08x%08x",
+			       &m.bounds[1], &m.bounds[0]);
+			fclose(f);
+			return 0;
+		}
 		fclose(f);
-		return 0;
+		return -1;
 	}
-	fclose(f);
-	return -1;
+	// Might be in a container with no procfs - do it the hard way
+	memset(m.bounds, 0, sizeof(m.bounds));
+	i = 0;
+	do {
+		rc = prctl(PR_CAPBSET_READ, i);
+		if (rc < 0)
+			return -1;
+
+		// Just add set bits
+		if (rc)
+			update_bounding_set(CAPNG_ADD, i%32, i>>5);
+		i++;
+	} while (cap_valid(i));
+
+	return 0;
 }
 #endif
 
