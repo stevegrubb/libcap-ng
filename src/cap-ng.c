@@ -73,7 +73,7 @@ static void update_bounding_set(capng_act_t action, unsigned int capability,
 
 // Re-define cap_valid so its uniform between V1 and V3
 #undef cap_valid
-#define cap_valid(x) ((x) <= last_cap)
+#define cap_valid(x) ((x) <= (unsigned int)last_cap)
 
 // If we don't have the xattr library, then we can't
 // compile-in file system capabilities
@@ -289,7 +289,7 @@ static int get_bounding_set(void)
 {
 	char buf[64];
 	FILE *f;
-	int rc, i;
+	int rc;
 
 	snprintf(buf, sizeof(buf), "/proc/%d/status", m.hdr.pid ? m.hdr.pid :
 #ifdef HAVE_SYSCALL_H
@@ -313,7 +313,7 @@ static int get_bounding_set(void)
 	}
 	// Might be in a container with no procfs - do it the hard way
 	memset(m.bounds, 0, sizeof(m.bounds));
-	i = 0;
+	unsigned int i = 0;
 	do {
 		rc = prctl(PR_CAPBSET_READ, i);
 		if (rc < 0)
