@@ -26,6 +26,9 @@
 %}
 
 #if defined(SWIGPYTHON)
+
+%varargs(16, unsigned capability = 0) capng_updatev;
+
 %except(python) {
   $action
   if (result < 0) {
