@@ -140,6 +140,11 @@ static void update_ambient_set(capng_act_t action, unsigned int capability,
 #define VFS_CAP_U32 2
 #endif
 
+#if (VFS_CAP_U32 != 2)
+#error VFS_CAP_U32 does not match the library, you need a new version
+#endif
+
+
 // States: new, allocated, initted, updated, applied
 typedef enum { CAPNG_NEW, CAPNG_ERROR, CAPNG_ALLOCATED, CAPNG_INIT,
 	CAPNG_UPDATED, CAPNG_APPLIED } capng_states_t;
