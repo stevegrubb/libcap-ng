@@ -28,7 +28,10 @@ After changing id, initialize any supplement groups that may come with the new a
 it will have no effect.
 .TP
 .B CAPNG_CLEAR_BOUNDING
-After changing the uid and gid, clear the bounding set regardless to the internal representation already setup.
+Clear the bounding set regardless to the internal representation already setup prior to changing the uid/gid.
+.TP
+.B CAPNG_CLEAR_AMBIENT
+Clear ambient capabilities regardless of the internal representation already setup prior to changing the uid/gid.
 
 .RE
 .SH "RETURN VALUE"

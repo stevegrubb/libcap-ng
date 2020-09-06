@@ -39,6 +39,7 @@ typedef struct _lnode{
   unsigned long inode;	// inode of socket
   char *capabilities;	// Text of partial capabilities
   char *bounds;		// Text for bounding set
+  char *ambient;	// Text for ambient set
   struct _lnode* next;	// Next node pointer
 } lnode;
 

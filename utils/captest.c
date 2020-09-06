@@ -1,6 +1,6 @@
 /*
  * captest.c - A program that demonstrates and outputs capabilities
- * Copyright (c) 2009, 2013 Red Hat Inc., Durham, North Carolina.
+ * Copyright (c) 2009, 2013, 2020 Red Hat Inc.
  * All Rights Reserved.
  *
  * This software may be freely redistributed and/or modified under the
@@ -15,7 +15,7 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program; see the file COPYING. If not, write to the
- * Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor 
+ * Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor
  * Boston, MA 02110-1335, USA.
  *
  * Authors:
@@ -50,7 +50,7 @@
 #define SECURE_NO_SETUID_FIXUP_LOCKED   3  /* make bit-2 immutable */
 #endif
 
-static int text = 0, no_child = 0, lock = 0;
+static int text = 0, no_child = 0, lock = 0, ambient = 0;
 
 static void report(void)
 {
@@ -123,6 +123,12 @@ static void report(void)
 			capng_print_caps_text(CAPNG_PRINT_STDOUT,
 					CAPNG_BOUNDING_SET);
 			printf("\n");
+			if (no_child)
+				printf("Child ");
+			printf("Ambient: ");
+			capng_print_caps_text(CAPNG_PRINT_STDOUT,
+					CAPNG_AMBIENT);
+			printf("\n");
 		}
 	} else {
 		if (capng_have_capabilities(CAPNG_SELECT_CAPS) == CAPNG_NONE) {
@@ -130,11 +136,11 @@ static void report(void)
 				printf("Child capabilities: none\n");
 			else
 				printf("Current capabilities: none\n");
-		} else { 
+		} else {
 			if (no_child)
 				printf("Child capabilities:\n");
 			capng_print_caps_numeric(CAPNG_PRINT_STDOUT,
-					CAPNG_SELECT_BOTH);
+					CAPNG_SELECT_ALL);
 		}
 	}
 
@@ -197,7 +203,7 @@ static void report(void)
 
 static void usage(void)
 {
-	printf("usage: captest [ --drop-all | --drop-caps | --id | --init-grp ] [ --lock ] [ --text ]\n");
+	printf("usage: captest [ --ambient | --drop-all | --drop-caps | --id | --init-grp ] [ --lock ] [ --text ]\n");
 }
 
 int main(int argc, char *argv[])
@@ -219,6 +225,8 @@ int main(int argc, char *argv[])
 			which = 3;
 		else if (strcmp(argv[i], "--init-grp") == 0)
 			which = 4;
+		else if (strcmp(argv[i], "--ambient") == 0)
+			ambient = 1;
 		else {
 			usage();
 			return 0;
@@ -227,17 +235,23 @@ int main(int argc, char *argv[])
 	switch (which)
 	{
 		case 1:
-			capng_clear(CAPNG_SELECT_BOTH);
+			capng_clear(CAPNG_SELECT_ALL);
 			if (lock)
 				capng_lock();
-			capng_apply(CAPNG_SELECT_BOTH);
+			capng_apply(CAPNG_SELECT_ALL);
 			report();
 			break;
 		case 2:
 			capng_clear(CAPNG_SELECT_CAPS);
+			if (ambient)
+				capng_update(CAPNG_ADD, CAPNG_AMBIENT,
+					     CAP_CHOWN);
 			if (lock)
 				capng_lock();
-			capng_apply(CAPNG_SELECT_CAPS);
+			if (ambient)
+			    capng_apply(CAPNG_SELECT_CAPS|CAPNG_SELECT_AMBIENT);
+			else
+				capng_apply(CAPNG_SELECT_CAPS);
 			report();
 			break;
 		case 3:
@@ -247,6 +261,10 @@ int main(int argc, char *argv[])
 			capng_clear(CAPNG_SELECT_BOTH);
 			capng_update(CAPNG_ADD, CAPNG_EFFECTIVE|CAPNG_PERMITTED,
 					CAP_CHOWN);
+			if (ambient)
+				capng_update(CAPNG_ADD,
+					     CAPNG_INHERITABLE|CAPNG_AMBIENT,
+					     CAP_CHOWN);
 			if (which == 4)
 				rc = capng_change_id(99, 99,
 				CAPNG_INIT_SUPP_GRP | CAPNG_CLEAR_BOUNDING);

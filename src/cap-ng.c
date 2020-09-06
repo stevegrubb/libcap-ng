@@ -52,6 +52,7 @@ int last_cap hidden = -1;
  * 2.6.24 kernel	XATTR_NAME_CAPS
  * 2.6.25 kernel	PR_CAPBSET_DROP, CAPABILITY_VERSION_2
  * 2.6.26 kernel	PR_SET_SECUREBITS, SECURE_*_LOCKED, VERSION_3
+ * 4.3    kernel	PR_CAP_AMBIENT
  */
 
 /* External syscall prototypes */
@@ -60,6 +61,8 @@ extern int capget(cap_user_header_t header, const cap_user_data_t data);
 
 // Local functions
 static void update_bounding_set(capng_act_t action, unsigned int capability,
+	unsigned int idx);
+static void update_ambient_set(capng_act_t action, unsigned int capability,
 	unsigned int idx);
 
 // Local defines
@@ -127,10 +130,14 @@ static void update_bounding_set(capng_act_t action, unsigned int capability,
 #endif
 /* Setuid apps run by uid 0 don't get caps back */
 #ifndef SECURE_NO_SETUID_FIXUP
-#define SECURE_NO_SETUID_FIXUP          2  
+#define SECURE_NO_SETUID_FIXUP          2
 #endif
 #ifndef SECURE_NO_SETUID_FIXUP_LOCKED
 #define SECURE_NO_SETUID_FIXUP_LOCKED   3  /* make bit-2 immutable */
+#endif
+
+#ifndef VFS_CAP_U32
+#define VFS_CAP_U32 2
 #endif
 
 // States: new, allocated, initted, updated, applied
@@ -140,7 +147,7 @@ typedef enum { CAPNG_NEW, CAPNG_ERROR, CAPNG_ALLOCATED, CAPNG_INIT,
 // Create an easy data struct out of the kernel definitions
 typedef union {
 	struct __user_cap_data_struct v1;
-	struct __user_cap_data_struct v3[2];
+	struct __user_cap_data_struct v3[VFS_CAP_U32];
 } cap_data_t;
 
 // This struct keeps all state info
@@ -150,7 +157,8 @@ struct cap_ng
 	struct __user_cap_header_struct hdr;
 	cap_data_t data;
 	capng_states_t state;
-	__u32 bounds[2];
+	__u32 bounds[VFS_CAP_U32];
+	__u32 ambient[VFS_CAP_U32];
 };
 
 // Global variables with per thread uniqueness
@@ -158,6 +166,7 @@ static __thread struct cap_ng m =	{ 1,
 					{0, 0},
 					{ {0, 0, 0} },
 					CAPNG_NEW,
+					{0, 0},
 					{0, 0} };
 
 /*
@@ -240,6 +249,10 @@ void capng_clear(capng_select_t set)
 	if (set & CAPNG_SELECT_BOUNDS)
 		memset(m.bounds, 0, sizeof(m.bounds));
 #endif
+#ifdef PR_CAP_AMBIENT
+	if (set & CAPNG_SELECT_AMBIENT)
+		memset(m.ambient, 0, sizeof(m.ambient));
+#endif
 	m.state = CAPNG_INIT;
 }
 
@@ -269,6 +282,13 @@ void capng_fill(capng_select_t set)
 		unsigned i;
 		for (i=0; i<sizeof(m.bounds)/sizeof(__u32); i++)
 			m.bounds[i] = 0xFFFFFFFFU;
+	}
+#endif
+#ifdef PR_CAP_AMBIENT
+	if (set & CAPNG_SELECT_AMBIENT) {
+		unsigned i;
+		for (i=0; i<sizeof(m.ambient)/sizeof(__u32); i++)
+			m.ambient[i] = 0xFFFFFFFFU;
 	}
 #endif
 	m.state = CAPNG_INIT;
@@ -329,6 +349,51 @@ static int get_bounding_set(void)
 }
 #endif
 
+#ifdef PR_CAP_AMBIENT
+static int get_ambient_set(void)
+{
+	char buf[64];
+	FILE *f;
+	int rc;
+
+	snprintf(buf, sizeof(buf), "/proc/%d/status", m.hdr.pid ? m.hdr.pid :
+#ifdef HAVE_SYSCALL_H
+		(int)syscall(__NR_gettid));
+#else
+		(int)getpid();
+#endif
+	f = fopen(buf, "re");
+	if (f) {
+		__fsetlocking(f, FSETLOCKING_BYCALLER);
+		while (fgets(buf, sizeof(buf), f)) {
+			if (strncmp(buf, "CapA", 4))
+				continue;
+			sscanf(buf, "CapAmb:  %08x%08x",
+			       &m.ambient[1], &m.ambient[0]);
+			fclose(f);
+			return 0;
+		}
+		fclose(f);
+		return -1;
+	}
+	// Might be in a container with no procfs - do it the hard way
+	memset(m.ambient, 0, sizeof(m.ambient));
+	unsigned int i = 0;
+	do {
+		rc = prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_IS_SET, i, 0, 0);
+		if (rc < 0)
+			return -1;
+
+		// Just add set bits
+		if (rc)
+			update_ambient_set(CAPNG_ADD, i%32, i>>5);
+		i++;
+	} while (cap_valid(i));
+
+	return 0;
+}
+#endif
+
 int capng_get_caps_process(void)
 {
 	int rc;
@@ -346,6 +411,11 @@ int capng_get_caps_process(void)
 		if (rc < 0)
 			m.state = CAPNG_ERROR;
 #endif
+#ifdef PR_CAP_AMBIENT
+		rc = get_ambient_set();
+		if (rc < 0)
+			m.state = CAPNG_ERROR;
+#endif
 	}
 
 	return rc;
@@ -355,7 +425,7 @@ int capng_get_caps_process(void)
 static int load_data(const struct vfs_cap_data *filedata, int size)
 {
 	unsigned int magic;
-	
+
 	if (m.cap_ver == 1)
 		return -1;	// Should never get here but just in case
 
@@ -465,6 +535,17 @@ static void update_bounding_set(capng_act_t action, unsigned int capability,
 #endif
 }
 
+static void update_ambient_set(capng_act_t action, unsigned int capability,
+	unsigned int idx)
+{
+#ifdef PR_CAP_AMBIENT
+	if (action == CAPNG_ADD)
+		m.ambient[idx] |= MASK(capability);
+	else
+		m.ambient[idx] &= ~(MASK(capability));
+#endif
+}
+
 int capng_update(capng_act_t action, capng_type_t type, unsigned int capability)
 {
 	// Before updating, we expect that the data is initialized to something
@@ -499,6 +580,8 @@ int capng_update(capng_act_t action, capng_type_t type, unsigned int capability)
 			update_inheritable(action, capability, idx);
 		if (CAPNG_BOUNDING_SET & type)
 			update_bounding_set(action, capability, idx);
+		if (CAPNG_AMBIENT & type)
+			update_ambient_set(action, capability, idx);
 	}
 
 	m.state = CAPNG_UPDATED;
@@ -544,7 +627,7 @@ int capng_apply(capng_select_t set)
 	if (m.state < CAPNG_INIT)
 		return -1;
 
-	if (set & CAPNG_SELECT_BOUNDS) { 
+	if (set & CAPNG_SELECT_BOUNDS) {
 #ifdef PR_CAPBSET_DROP
 		struct cap_ng state;
 		memcpy(&state, &m, sizeof(state)); /* save state */
@@ -561,6 +644,30 @@ int capng_apply(capng_select_t set)
 				m.state = CAPNG_APPLIED;
 		} else
 			memcpy(&m, &state, sizeof(m)); /* restore state */
+#else
+		rc = 0;
+#endif
+	}
+	if (set & CAPNG_SELECT_AMBIENT) {
+#ifdef PR_CAP_AMBIENT
+		int i;
+		rc = 0;
+		if (capng_have_capabilities(CAPNG_SELECT_AMBIENT) ==
+								CAPNG_NONE) {
+			rc = prctl(PR_CAP_AMBIENT,
+					   PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0);
+		} else {
+			// Clear them all
+			rc = prctl(PR_CAP_AMBIENT,
+				   PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0);
+			for (i=0; i <= last_cap && rc == 0; i++) {
+				if (capng_have_capability(CAPNG_AMBIENT, i))
+					rc = prctl(PR_CAP_AMBIENT,
+						PR_CAP_AMBIENT_RAISE, i, 0, 0);
+			}
+		}
+		if (rc == 0)
+			m.state = CAPNG_APPLIED;
 #else
 		rc = 0;
 #endif
@@ -635,7 +742,7 @@ int capng_apply_caps_fd(int fd)
 #endif
 }
 
-// Change uids keeping/removing only certain capabilities 
+// Change uids keeping/removing only certain capabilities
 // flag to drop supp groups
 int capng_change_id(int uid, int gid, capng_flags_t flag)
 {
@@ -648,7 +755,7 @@ int capng_change_id(int uid, int gid, capng_flags_t flag)
 	// Check the current capabilities
 #ifdef PR_CAPBSET_DROP
 	// If newer kernel, we need setpcap to change the bounding set
-	if (capng_have_capability(CAPNG_EFFECTIVE, CAP_SETPCAP) == 0 && 
+	if (capng_have_capability(CAPNG_EFFECTIVE, CAP_SETPCAP) == 0 &&
 					flag & CAPNG_CLEAR_BOUNDING)
 		capng_update(CAPNG_ADD,
 				CAPNG_EFFECTIVE|CAPNG_PERMITTED, CAP_SETPCAP);
@@ -676,6 +783,10 @@ int capng_change_id(int uid, int gid, capng_flags_t flag)
 	rc = capng_apply(CAPNG_SELECT_CAPS);
 	if (rc < 0)
 		return -3;
+
+	// If we are clearing ambient, only clear since its applied at the end
+	if (flag & CAPNG_CLEAR_AMBIENT)
+		capng_clear(CAPNG_SELECT_AMBIENT);
 
 	// Clear bounding set if needed while we have CAP_SETPCAP
 	if (flag & CAPNG_CLEAR_BOUNDING) {
@@ -733,7 +844,7 @@ int capng_change_id(int uid, int gid, capng_flags_t flag)
 	// Now drop setpcap & apply
 	capng_update(CAPNG_DROP, CAPNG_EFFECTIVE|CAPNG_PERMITTED,
 				CAP_SETPCAP);
-	rc = capng_apply(CAPNG_SELECT_CAPS);
+	rc = capng_apply(CAPNG_SELECT_CAPS|CAPNG_SELECT_AMBIENT);
 	if (rc < 0)
 		return -9;
 
@@ -818,13 +929,28 @@ capng_results_t capng_have_capabilities(capng_select_t set)
 		else
 			return CAPNG_PARTIAL;
 	}
-#endif 
-
+#endif
+#ifdef PR_CAP_AMBIENT
+	if (set & CAPNG_SELECT_AMBIENT) {
+		if (m.ambient[0] == 0)
+			empty = 1;
+		else if (m.ambient[0] == 0xFFFFFFFFU)
+			full = 1;
+		else
+			return CAPNG_PARTIAL;
+		if ((m.ambient[1] & UPPER_MASK) == 0)
+			empty = 1;
+		else if ((m.ambient[1] & UPPER_MASK) == UPPER_MASK)
+			full = 1;
+		else
+			return CAPNG_PARTIAL;
+	}
+#endif
 	if (empty == 1 && full == 0)
 		return CAPNG_NONE;
 	else if (empty == 0 && full == 1)
 		return CAPNG_FULL;
-	
+
 	return CAPNG_PARTIAL;
 }
 
@@ -887,6 +1013,15 @@ static int bounds_bit_check(unsigned int capability, unsigned int idx)
 #endif
 }
 
+static int ambient_bit_check(unsigned int capability, unsigned int idx)
+{
+#ifdef PR_CAP_AMBIENT
+	return MASK(capability) & m.ambient[idx] ? 1 : 0;
+#else
+	return 0;
+#endif
+}
+
 static int v1_check(unsigned int capability, __u32 data)
 {
 	return MASK(capability) & data ? 1 : 0;
@@ -930,6 +1065,8 @@ int capng_have_capability(capng_type_t which, unsigned int capability)
 			return check_inheritable(capability, idx);
 		else if (which == CAPNG_BOUNDING_SET)
 			return bounds_bit_check(capability, idx);
+		else if (which == CAPNG_AMBIENT)
+			return ambient_bit_check(capability, idx);
 	}
 	return 0;
 }
@@ -960,7 +1097,6 @@ char *capng_print_caps_numeric(capng_print_t where, capng_select_t set)
 					m.data.v3[0].permitted,
 					m.data.v3[1].inheritable & UPPER_MASK,
 					m.data.v3[0].inheritable);
-			
 			}
 		}
 #ifdef PR_CAPBSET_DROP
@@ -968,9 +1104,14 @@ char *capng_print_caps_numeric(capng_print_t where, capng_select_t set)
 			printf("Bounding Set: %08X, %08X\n",
 				m.bounds[1] & UPPER_MASK, m.bounds[0]);
 #endif
+#ifdef PR_CAP_AMBIENT
+		if (set & CAPNG_SELECT_AMBIENT)
+			printf("Ambient :     %08X, %08X\n",
+				m.ambient[1] & UPPER_MASK, m.ambient[0]);
+#endif
 	} else if (where == CAPNG_PRINT_BUFFER) {
 		if (set & CAPNG_SELECT_CAPS) {
-			// Make it big enough for bounding set, too
+			// Make it big enough for bounding & ambient set, too
 			ptr = malloc(160);
 			if (m.cap_ver == 1) {
 				snprintf(ptr, 160,
@@ -996,8 +1137,9 @@ char *capng_print_caps_numeric(capng_print_t where, capng_select_t set)
 		if (set & CAPNG_SELECT_BOUNDS) {
 #ifdef PR_CAPBSET_DROP
 			char *s;
-			if (ptr == NULL ){
-				ptr = malloc(40);
+			// If ptr is NULL, we only room for bounding and ambient
+			if (ptr == NULL ) {
+				ptr = malloc(80);
 				if (ptr == NULL)
 					return ptr;
 				*ptr = 0;
@@ -1006,6 +1148,23 @@ char *capng_print_caps_numeric(capng_print_t where, capng_select_t set)
 				s = ptr + strlen(ptr);
 			snprintf(s, 40, "Bounding Set: %08X, %08X\n",
 					m.bounds[1] & UPPER_MASK, m.bounds[0]);
+#endif
+		}
+		if (set & CAPNG_SELECT_AMBIENT) {
+#ifdef PR_CAP_AMBIENT
+			char *s;
+			// If ptr is NULL, we only room for ambient
+			if (ptr == NULL ) {
+				ptr = malloc(40);
+				if (ptr == NULL)
+					return ptr;
+				*ptr = 0;
+				s = ptr;
+			} else
+				s = ptr + strlen(ptr);
+			snprintf(s, 40, "Ambient Set: %08X, %08X\n",
+					m.ambient[1] & UPPER_MASK,
+					m.ambient[0]);
 #endif
 		}
 	}

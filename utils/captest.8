@@ -1,8 +1,8 @@
-.TH CAPTEST: "8" "June 2009" "Red Hat" "System Administration Utilities"
+.TH CAPTEST: "8" "Sept 2020" "Red Hat" "System Administration Utilities"
 .SH NAME
 captest \- a program to demonstrate capabilities
 .SH SYNOPSIS
-.B captest [ \-\-drop-all | \-\-drop-caps | \-\-id ] [ \-\-init-grp ] [ \-\-lock ] [ \-\-text ]
+.B captest [ \-\-ambient \-\-drop-all | \-\-drop-caps | \-\-id ] [ \-\-init-grp ] [ \-\-lock ] [ \-\-text ]
 .SH DESCRIPTION
 \fBcaptest\fP is a program that demonstrates and prints out the current process capabilities. Each option prints the same report. It will output current capabilities. then it will try to access /etc/shadow directly to show if that can be done. Then it creates a child process that attempts to read /etc/shadow and outputs the results of that. Then it outputs the capabilities that a child process would have.
 
@@ -10,8 +10,11 @@ You can also apply file system capabilities to this program to study how they wo
 
 .SH OPTIONS
 .TP
+.B \-\-ambient
+This attempts to add CAP_CHOWN ambient capability.
+.TP
 .B \-\-drop-all
-This drops all capabilities and clears the bounding set.
+This drops all capabilities including ambient and clears the bounding set.
 .TP
 .B \-\-drop-caps
 This drops just traditional capabilities.

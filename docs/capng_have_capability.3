@@ -8,7 +8,7 @@ int capng_have_capability(capng_type_t which, unsigned int capability);
 
 .SH "DESCRIPTION"
 
-capng_have_capability will check the specified internal capabilities set to see if the specified capability is set. The capabilities sets must be previously setup with calls to capng_get_caps_process, capng_get_caps_fd, or in some other way setup. The values for which should be one of: CAPNG_EFFECTIVE, CAPNG_PERMITTED, CAPNG_INHERITABLE, or CAPNG_BOUNDING_SET.
+capng_have_capability will check the specified internal capabilities set to see if the specified capability is set. The capabilities sets must be previously setup with calls to capng_get_caps_process, capng_get_caps_fd, or in some other way setup. The values for which should be one of: CAPNG_EFFECTIVE, CAPNG_PERMITTED, CAPNG_INHERITABLE, CAPNG_BOUNDING_SET, or CAPNG_AMBIENT.
 
 .SH "RETURN VALUE"
 

@@ -1,6 +1,6 @@
 /*
  * netcap.c - A program that lists network apps with capabilities
- * Copyright (c) 2009-10, 2012 Red Hat Inc., Durham, North Carolina.
+ * Copyright (c) 2009-10,2012,2020 Red Hat Inc.
  * All Rights Reserved.
  *
  * This software may be freely redistributed and/or modified under the
@@ -15,7 +15,7 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program; see the file COPYING. If not, write to the
- * Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor 
+ * Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor
  * Boston, MA 02110-1335, USA.
  *
  * Authors:
@@ -60,7 +60,7 @@ static int collect_process_info(void)
 		int pid, ppid;
 		capng_results_t caps;
 		char buf[100];
-		char *tmp, cmd[16], state, *text, *bounds;
+		char *tmp, cmd[16], state, *text, *bounds, *ambient;
 		int fd, len, euid = -1;
 
 		// Skip non-process dir entries
@@ -95,7 +95,7 @@ static int collect_process_info(void)
 			continue;
 
 		// now get the capabilities
-		capng_clear(CAPNG_SELECT_BOTH);
+		capng_clear(CAPNG_SELECT_ALL);
 		capng_setpid(pid);
 		if (capng_get_caps_process())
 			continue;
@@ -135,6 +135,20 @@ static int collect_process_info(void)
 			fclose(sf);
 		}
 
+		if (caps == CAPNG_PARTIAL) {
+			caps = capng_have_capabilities(CAPNG_SELECT_AMBIENT);
+			if (caps == CAPNG_FULL)
+				ambient = strdup("@");
+			else
+				ambient = strdup("");
+		} else
+			ambient = strdup("");
+		if (!ambient) {
+			fprintf(stderr, "Out of memory\n");
+			free(text);
+			continue;
+		}
+
 		// Now record the bounding set information
 		if (caps == CAPNG_PARTIAL) {
 			caps = capng_have_capabilities(CAPNG_SELECT_BOUNDS);
@@ -166,6 +180,7 @@ static int collect_process_info(void)
 					strerror(errno));
 			free(text);
 			free(bounds);
+			free(ambient);
 			continue;
 		}
 		// For each file in the fd dir...
@@ -181,7 +196,7 @@ static int collect_process_info(void)
 			if ((llen = readlink(ln, line, sizeof(line)-1)) < 0)
 				continue;
 			line[llen] = 0;
-			
+
 			// Only look at the socket entries
 			if (memcmp(line, "socket:", 7) == 0) {
 				// Type 1 sockets
@@ -209,18 +224,22 @@ static int collect_process_info(void)
 			node.inode = inode;
 			node.capabilities = strdup(text);
 			node.bounds = strdup(bounds);
-			if (node.cmd && node.capabilities && node.bounds)
+			node.ambient = strdup(ambient);
+			if (node.cmd && node.capabilities && node.bounds &&
+			    node.ambient)
 				// We make one entry for each socket inode
 				list_append(&l, &node);
 			else {
 				free(node.cmd);
 				free(node.capabilities);
 				free(node.bounds);
+				free(node.ambient);
 			}
 		}
 		closedir(f);
 		free(text);
 		free(bounds);
+		free(ambient);
 	}
 	closedir(d);
 	return 0;
@@ -230,11 +249,11 @@ static void report_finding(int port, const char *type, const char *ifc)
 {
 	struct passwd *p;
 	lnode *n = list_get_cur(&l);
-		
+
 	// And print out anything with capabilities
 	if (header == 0) {
 		printf("%-5s %-5s %-10s %-16s %-8s %-6s %s\n",
-			"ppid", "pid", "acct", "command", "type", "port", 
+			"ppid", "pid", "acct", "command", "type", "port",
 			"capabilities");
 			header = 1;
 	}
@@ -259,7 +278,7 @@ static void report_finding(int port, const char *type, const char *ifc)
 		printf(" %-6s", ifc);
 	else
 		printf(" %-6d", port);
-	printf(" %s %s\n", n->capabilities, n->bounds);
+	printf(" %s %s%s\n", n->capabilities, n->ambient, n->bounds);
 }
 
 static void read_tcp(const char *proc, const char *type)

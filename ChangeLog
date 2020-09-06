@@ -1,5 +1,6 @@
 0.8
 - Add vararg support to python bindings for capng_updatev
+- Add support for ambient capabilities
 
 0.7.11
 - Really clear bounding set if asked in capng_change_id

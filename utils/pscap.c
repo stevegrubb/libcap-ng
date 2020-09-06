@@ -1,6 +1,6 @@
 /*
  * pscap.c - A program that lists running processes with capabilities
- * Copyright (c) 2009,2012 Red Hat Inc., Durham, North Carolina.
+ * Copyright (c) 2009,2012,2020 Red Hat Inc.
  * All Rights Reserved.
  *
  * This software may be freely redistributed and/or modified under the
@@ -15,7 +15,7 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program; see the file COPYING. If not, write to the
- * Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor 
+ * Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor
  * Boston, MA 02110-1335, USA.
  *
  * Authors:
@@ -142,11 +142,11 @@ int main(int argc, char *argv[])
 			continue;
 
 		// now get the capabilities
-		capng_clear(CAPNG_SELECT_BOTH);
+		capng_clear(CAPNG_SELECT_ALL);
 		capng_setpid(pid);
 		if (capng_get_caps_process())
 			continue;
-		
+
 		// And print out anything with capabilities
 		caps = capng_have_capabilities(CAPNG_SELECT_CAPS);
 		if (caps > CAPNG_NONE) {
@@ -174,7 +174,7 @@ int main(int argc, char *argv[])
 				}
 				fclose(f);
 			}
-			
+
 			if (header == 0) {
 				printf("%-5s %-5s %-10s  %-18s  %s\n",
 				    "ppid", "pid", "name", "command",
@@ -206,15 +206,27 @@ int main(int argc, char *argv[])
 			if (caps == CAPNG_PARTIAL) {
 				capng_print_caps_text(CAPNG_PRINT_STDOUT,
 							CAPNG_PERMITTED);
+				if (capng_have_capabilities(
+					    CAPNG_SELECT_AMBIENT) > CAPNG_NONE)
+					printf(" @");
 				if (capng_have_capabilities(CAPNG_SELECT_BOUNDS)
-							 == CAPNG_FULL)
+							 > CAPNG_NONE)
 					printf(" +");
 				printf("\n");
-			} else
-				printf("full\n");
+			} else {
+				printf("full");
+				if (capng_have_capabilities(
+					    CAPNG_SELECT_AMBIENT) > CAPNG_NONE)
+					printf(" @");
+				if (capng_have_capabilities(CAPNG_SELECT_BOUNDS)
+							 > CAPNG_NONE)
+					printf(" +");
+				printf("\n");
+			}
 		}
 	}
-	closedir(d);	
+	closedir(d);
 	return 0;
 }
+
 
