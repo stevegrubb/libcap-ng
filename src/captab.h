@@ -63,9 +63,6 @@ _S(CAP_MAC_ADMIN,		"mac_admin"		)
 #ifdef CAP_SYSLOG
 _S(CAP_SYSLOG,			"syslog"		)
 #endif
-#ifdef CAP_WAKE_ALARM
-_S(CAP_WAKE_ALARM,		"wake_alarm"		)
-#endif
 #if defined(CAP_EPOLLWAKEUP) && defined(CAP_BLOCK_SUSPEND)
 #error "Both CAP_EPOLLWAKEUP and CAP_BLOCK_SUSPEND are defined"
 #endif
