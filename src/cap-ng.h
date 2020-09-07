@@ -45,6 +45,7 @@ typedef enum {  CAPNG_NO_FLAG=0, CAPNG_DROP_SUPP_GRP=1,
 		CAPNG_CLEAR_BOUNDING=2, CAPNG_INIT_SUPP_GRP=4,
 		CAPNG_CLEAR_AMBIENT=8 } capng_flags_t;
 
+#define CAPNG_UNSET_ROOTID -1
 
 // These functions manipulate process capabilities
 void capng_clear(capng_select_t set);
@@ -61,6 +62,8 @@ int capng_lock(void);
 int capng_change_id(int uid, int gid, capng_flags_t flag);
 
 // These functions are used for file based capabilities
+int capng_get_rootid(void);
+int capng_set_rootid(int rootid);
 int capng_get_caps_fd(int fd);
 int capng_apply_caps_fd(int fd);
 

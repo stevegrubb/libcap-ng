@@ -1,10 +1,10 @@
-.TH "CAPNG_SET_CAPS_FD" "3" "June 2009" "Red Hat" "Libcap-ng API"
+.TH "CAPNG_APPLY_CAPS_FD" "3" "Sept 2020" "Red Hat" "Libcap-ng API"
 .SH NAME
-capng_set_caps_fd \- 
+capng_apply_caps_fd \- 
 .SH "SYNOPSIS"
 .B #include <cap-ng.h>
 .sp
-int capng_set_caps_fd(int fd);
+int capng_apply_caps_fd(int fd);
 
 .SH "DESCRIPTION"
 
@@ -13,7 +13,7 @@ This function will write the file based capabilities to the extended attributes 
 
 .SH "RETURN VALUE"
 
-This returns 0 on success and -1 on failure.
+This returns 0 on success, -1 if something besides a regular file is passed, and -2 if a non-root namespace id is being used for rootid.
 
 .SH "SEE ALSO"
 

@@ -53,6 +53,7 @@ int last_cap hidden = -1;
  * 2.6.25 kernel	PR_CAPBSET_DROP, CAPABILITY_VERSION_2
  * 2.6.26 kernel	PR_SET_SECUREBITS, SECURE_*_LOCKED, VERSION_3
  * 4.3    kernel	PR_CAP_AMBIENT
+ * 4.14   kernel	VFS_CAP_REVISION_3
  */
 
 /* External syscall prototypes */
@@ -66,6 +67,7 @@ static void update_ambient_set(capng_act_t action, unsigned int capability,
 	unsigned int idx);
 
 // Local defines
+#define CAPNG_UNSET_ROOTID -1
 #define MASK(x) (1U << (x))
 #ifdef PR_CAPBSET_DROP
 #define UPPER_MASK ~(unsigned)((~0U)<<(last_cap-31))
@@ -159,18 +161,20 @@ typedef union {
 struct cap_ng
 {
 	int cap_ver;
+	int vfs_cap_ver;
 	struct __user_cap_header_struct hdr;
 	cap_data_t data;
 	capng_states_t state;
+	__le32 rootid;
 	__u32 bounds[VFS_CAP_U32];
 	__u32 ambient[VFS_CAP_U32];
 };
 
 // Global variables with per thread uniqueness
-static __thread struct cap_ng m =	{ 1,
+static __thread struct cap_ng m =	{ 1, 1,
 					{0, 0},
 					{ {0, 0, 0} },
-					CAPNG_NEW,
+					CAPNG_NEW, CAPNG_UNSET_ROOTID,
 					{0, 0},
 					{0, 0} };
 
@@ -207,6 +211,12 @@ static void init(void)
 		return;
 	}
 
+#if VFS_CAP_REVISION == VFS_CAP_REVISION_1
+	m.vfs_cap_ver = 1;
+#else
+	m.vfs_cap_ver = 2; // Intentionally set to 2 for both 2 & 3
+#endif
+
 	memset(&m.data, 0, sizeof(cap_data_t));
 #ifdef HAVE_SYSCALL_H
 	m.hdr.pid = (unsigned)syscall(__NR_gettid);
@@ -238,6 +248,7 @@ static void init(void)
 		if (last_cap == -1)
 			last_cap = CAP_LAST_CAP;
 	}
+	m.rootid = CAPNG_UNSET_ROOTID;
 	m.state = CAPNG_ALLOCATED;
 }
 
@@ -307,6 +318,35 @@ void capng_setpid(int pid)
 		return;
 
 	m.hdr.pid = pid;
+}
+
+int capng_get_rootid(void)
+{
+#ifdef VFS_CAP_REVISION_3
+	return m.rootid;
+#else
+	return CAPNG_UNSET_ROOTID;
+#endif
+}
+
+int capng_set_rootid(int rootid)
+{
+#ifdef VFS_CAP_REVISION_3
+	if (m.state == CAPNG_NEW)
+		init();
+	if (m.state == CAPNG_ERROR)
+		return -1;
+
+	if (rootid < 0)
+		return -1;
+
+	m.rootid = rootid;
+	m.vfs_cap_ver = 3;
+
+	return 0;
+#else
+	return -1;
+#endif
 }
 
 #ifdef PR_CAPBSET_DROP
@@ -427,7 +467,11 @@ int capng_get_caps_process(void)
 }
 
 #ifdef VFS_CAP_U32
+#ifdef VFS_CAP_REVISION_3
+static int load_data(const struct vfs_ns_cap_data *filedata, int size)
+#else
 static int load_data(const struct vfs_cap_data *filedata, int size)
+#endif
 {
 	unsigned int magic;
 
@@ -438,15 +482,22 @@ static int load_data(const struct vfs_cap_data *filedata, int size)
 	switch (magic & VFS_CAP_REVISION_MASK)
 	{
 		case VFS_CAP_REVISION_1:
-			m.cap_ver = 1;
+			m.vfs_cap_ver = 1;
 			if (size != XATTR_CAPS_SZ_1)
 				return -1;
 			break;
 		case VFS_CAP_REVISION_2:
-			m.cap_ver = 2;
+			m.vfs_cap_ver = 2;
 			if (size != XATTR_CAPS_SZ_2)
 				return -1;
 			break;
+#ifdef VFS_CAP_REVISION_3
+		case VFS_CAP_REVISION_3:
+			m.vfs_cap_ver = 3;
+			if (size != XATTR_CAPS_SZ_3)
+				return -1;
+			break;
+#endif
 		default:
 			return -1;
 	}
@@ -465,6 +516,12 @@ static int load_data(const struct vfs_cap_data *filedata, int size)
 		m.data.v3[0].effective = 0;
 		m.data.v3[1].effective = 0;
 	}
+#ifdef VFS_CAP_REVISION_3
+	if (size == XATTR_CAPS_SZ_3) {
+	    struct vfs_ns_cap_data *d = (struct vfs_ns_cap_data *)filedata;
+	    m.rootid = FIXUP(d->rootid);
+	}
+#endif
 	return 0;
 }
 #endif
@@ -475,8 +532,11 @@ int capng_get_caps_fd(int fd)
 	return -1;
 #else
 	int rc;
+#ifdef VFS_CAP_REVISION_3
+	struct vfs_ns_cap_data filedata;
+#else
 	struct vfs_cap_data filedata;
-
+#endif
 	if (m.state == CAPNG_NEW)
 		init();
 	if (m.state == CAPNG_ERROR)
@@ -687,15 +747,19 @@ int capng_apply(capng_select_t set)
 }
 
 #ifdef VFS_CAP_U32
+#ifdef VFS_CAP_REVISION_3
+static int save_data(struct vfs_ns_cap_data *filedata, int *size)
+#else
 static int save_data(struct vfs_cap_data *filedata, int *size)
+#endif
 {
 	// Now stuff the data structures
-	if (m.cap_ver == 1) {
+	if (m.vfs_cap_ver == 1) {
 		filedata->data[0].permitted = FIXUP(m.data.v1.permitted);
 		filedata->data[0].inheritable = FIXUP(m.data.v1.inheritable);
 		filedata->magic_etc = FIXUP(VFS_CAP_REVISION_1);
 		*size = XATTR_CAPS_SZ_1;
-	} else {
+	} else if (m.vfs_cap_ver == 2 || m.vfs_cap_ver == 3) {
 		int eff;
 
 		if (m.data.v3[0].effective || m.data.v3[1].effective)
@@ -709,6 +773,15 @@ static int save_data(struct vfs_cap_data *filedata, int *size)
 		filedata->magic_etc = FIXUP(VFS_CAP_REVISION_2 | eff);
 		*size = XATTR_CAPS_SZ_2;
 	}
+#ifdef VFS_CAP_REVISION_3
+	if (m.vfs_cap_ver == 3) {
+		// Kernel doesn't support namespaces with non-0 rootid
+		if (m.rootid!= 0)
+			return -1;
+		filedata->rootid = FIXUP(m.rootid);
+		*size = XATTR_CAPS_SZ_3;
+	}
+#endif
 
 	return 0;
 }
@@ -720,7 +793,11 @@ int capng_apply_caps_fd(int fd)
 	return -1;
 #else
 	int rc, size;
+#ifdef VFS_CAP_REVISION_3
+	struct vfs_ns_cap_data filedata;
+#else
 	struct vfs_cap_data filedata;
+#endif
 	struct stat buf;
 
 	// Before updating, we expect that the data is initialized to something
@@ -736,7 +813,11 @@ int capng_apply_caps_fd(int fd)
 	if (capng_have_capabilities(CAPNG_SELECT_CAPS) == CAPNG_NONE)
 		rc = fremovexattr(fd, XATTR_NAME_CAPS);
 	else {
-		save_data(&filedata, &size);
+		if (save_data(&filedata, &size)) {
+			m.state = CAPNG_ERROR;
+			errno = EINVAL;
+			return -2;
+		}
 		rc = fsetxattr(fd, XATTR_NAME_CAPS, &filedata, size, 0);
 	}
 
