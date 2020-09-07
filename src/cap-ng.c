@@ -380,7 +380,7 @@ static int get_bounding_set(void)
 	memset(m.bounds, 0, sizeof(m.bounds));
 	unsigned int i = 0;
 	do {
-		rc = prctl(PR_CAPBSET_READ, i);
+		rc = prctl(PR_CAPBSET_READ, i, 0, 0, 0);
 		if (rc < 0)
 			return -1;
 
