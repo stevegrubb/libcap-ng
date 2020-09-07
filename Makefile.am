@@ -24,7 +24,7 @@ SUBDIRS = src utils m4 docs
 if HAVE_SWIG
 SUBDIRS += bindings
 endif
-EXTRA_DIST = ChangeLog AUTHORS NEWS README.md INSTALL COPYING COPYING.LIB \
+EXTRA_DIST = ChangeLog AUTHORS NEWS README INSTALL COPYING COPYING.LIB \
 	libcap-ng.spec autogen.sh 
 
 CONFIG_CLEAN_FILES = debug*.list config/*
