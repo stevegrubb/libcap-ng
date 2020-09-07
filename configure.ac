@@ -110,6 +110,7 @@ AC_CHECK_HEADER(sys/syscall.h,
 	[Define to 1 if you have <sys/syscall.h>.])], [],)
 
 dnl; This is to record in the build logs what options are being taken
+AC_CHECK_DECLS([PR_CAP_AMBIENT], [], [], [[#include <sys/prctl.h>]])
 AC_CHECK_DECLS([VFS_CAP_REVISION_2], [], [], [[#include <linux/capability.h>]])
 AC_CHECK_DECLS([VFS_CAP_REVISION_3], [], [], [[#include <linux/capability.h>]])
 AC_CHECK_DECLS([CAP_EPOLLWAKEUP], [], [], [[#include <linux/capability.h>]])
