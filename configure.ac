@@ -109,6 +109,17 @@ AC_CHECK_HEADER(sys/syscall.h,
 	[AC_DEFINE([HAVE_SYSCALL_H], [1],
 	[Define to 1 if you have <sys/syscall.h>.])], [],)
 
+dnl; This is to record in the build logs what options are being taken
+AC_CHECK_DECLS([VFS_CAP_REVISION_2], [], [], [[#include <linux/capability.h>]])
+AC_CHECK_DECLS([VFS_CAP_REVISION_3], [], [], [[#include <linux/capability.h>]])
+AC_CHECK_DECLS([CAP_EPOLLWAKEUP], [], [], [[#include <linux/capability.h>]])
+AC_CHECK_DECLS([CAP_WAKE_ALARM], [], [], [[#include <linux/capability.h>]])
+AC_CHECK_DECLS([CAP_BLOCK_SUSPEND], [], [], [[#include <linux/capability.h>]])
+AC_CHECK_DECLS([CAP_AUDIT_READ], [], [], [[#include <linux/capability.h>]])
+AC_CHECK_DECLS([CAP_PERFMON], [], [], [[#include <linux/capability.h>]])
+AC_CHECK_DECLS([CAP_BPF], [], [], [[#include <linux/capability.h>]])
+AC_CHECK_DECLS([CAP_CHECKPOINT_RESTORE], [], [], [[#include <linux/capability.h>]])
+
 AC_CHECK_PROG(swig_found, swig, yes, no)
 if test x"${swig_found}" = x"no" ; then
 	AC_MSG_WARN("Swig not found - python bindings will not be made")

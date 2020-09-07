@@ -72,6 +72,9 @@ _S(CAP_WAKE_ALARM,		"wake_alarm"		)
 #ifdef CAP_EPOLLWAKEUP
 _S(CAP_EPOLLWAKEUP,		"epollwakeup"		)
 #endif
+#ifdef CAP_WAKE_ALARM
+_S(CAP_WAKE_ALARM,              "wake_alarm"            )
+#endif
 #ifdef CAP_BLOCK_SUSPEND
 _S(CAP_BLOCK_SUSPEND,		"block_suspend"		)
 #endif
