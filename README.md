@@ -12,8 +12,8 @@ will do the wrong thing when the capng_init function probes the kernel
 and decides we are doing v1 rather than v3 protocol. If that is your case,
 just don't do the "make check" as part of the build process.
 
-Report any bugs in this package to  sgrubb@redhat.com  or better yet,
-file them here: https://github.com/stevegrubb/libcap-ng/issue
+Report any bugs in this package to:
+https://github.com/stevegrubb/libcap-ng/issue
 
 Additional information can be found at:
 	http://people.redhat.com/sgrubb/libcap-ng
