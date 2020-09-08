@@ -628,7 +628,7 @@ int capng_update(capng_act_t action, capng_type_t type, unsigned int capability)
 		if (CAPNG_INHERITABLE & type)
 			v1_update(action, capability, &m.data.v1.inheritable);
 	} else {
-		int idx;
+		unsigned int idx;
 
 		if (capability > 31) {
 			idx = capability>>5;
@@ -697,7 +697,7 @@ int capng_apply(capng_select_t set)
 		memcpy(&state, &m, sizeof(state)); /* save state */
 		capng_get_caps_process();
 		if (capng_have_capability(CAPNG_EFFECTIVE, CAP_SETPCAP)) {
-			int i;
+			unsigned int i;
 			memcpy(&m, &state, sizeof(m)); /* restore state */
 			rc = 0;
 			for (i=0; i <= last_cap && rc == 0; i++)
@@ -714,8 +714,7 @@ int capng_apply(capng_select_t set)
 	}
 	if (set & CAPNG_SELECT_AMBIENT) {
 #ifdef PR_CAP_AMBIENT
-		int i;
-		rc = 0;
+		unsigned int i;
 		if (capng_have_capabilities(CAPNG_SELECT_AMBIENT) ==
 								CAPNG_NONE) {
 			rc = prctl(PR_CAP_AMBIENT,
@@ -791,7 +790,7 @@ int capng_apply_caps_fd(int fd)
 #ifndef VFS_CAP_U32
 	return -1;
 #else
-	int rc, size;
+	int rc, size = 0;
 #ifdef VFS_CAP_REVISION_3
 	struct vfs_ns_cap_data filedata;
 #else
