@@ -102,6 +102,6 @@ make check
 %attr(0644,root,root) %{_mandir}/man8/*
 
 %changelog
-* Sun Aug 23 2020 Steve Grubb <sgrubb@redhat.com> 0.8-1
+* Tue Sep 08 2020 Steve Grubb <sgrubb@redhat.com> 0.8-1
 - New upstream release
 
