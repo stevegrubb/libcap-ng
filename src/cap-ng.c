@@ -67,7 +67,6 @@ static void update_ambient_set(capng_act_t action, unsigned int capability,
 	unsigned int idx);
 
 // Local defines
-#define CAPNG_UNSET_ROOTID -1
 #define MASK(x) (1U << (x))
 #ifdef PR_CAPBSET_DROP
 #define UPPER_MASK ~(unsigned)((~0U)<<(last_cap-31))
