@@ -247,7 +247,7 @@ static int collect_process_info(void)
 	return 0;
 }
 
-static void report_finding(int port, const char *type, const char *ifc)
+static void report_finding(unsigned int port, const char *type, const char *ifc)
 {
 	struct passwd *p;
 	lnode *n = list_get_cur(&l);
@@ -279,7 +279,7 @@ static void report_finding(int port, const char *type, const char *ifc)
 	if (ifc)
 		printf(" %-6s", ifc);
 	else
-		printf(" %-6d", port);
+		printf(" %-6u", port);
 	printf(" %s %s%s\n", n->capabilities, n->ambient, n->bounds);
 }
 
@@ -289,7 +289,8 @@ static void read_tcp(const char *proc, const char *type)
 	FILE *f;
 	char buf[256];
 	unsigned long rxq, txq, time_len, retr, inode;
-	int local_port, rem_port, d, state, timer_run, uid, timeout;
+	unsigned int local_port, rem_port, state, timer_run;
+	int d, uid, timeout;
 	char rem_addr[128], local_addr[128], more[512];
 
 	f = fopen(proc, "rte");
@@ -308,7 +309,7 @@ static void read_tcp(const char *proc, const char *type)
 		more[0] = 0;
 		sscanf(buf, "%d: %64[0-9A-Fa-f]:%X %64[0-9A-Fa-f]:%X %X "
 			"%lX:%lX %X:%lX %lX %d %d %lu %511s\n",
-			&d, local_addr, &local_port, rem_addr, &rem_port,
+			&d, &local_addr, &local_port, &rem_addr, &rem_port,
 			&state, &txq, &rxq, &timer_run, &time_len, &retr,
 			&uid, &timeout, &inode, more);
 		if (list_find_inode(&l, inode))
@@ -323,7 +324,8 @@ static void read_udp(const char *proc, const char *type)
 	FILE *f;
 	char buf[256];
 	unsigned long rxq, txq, time_len, retr, inode;
-	int local_port, rem_port, d, state, timer_run, uid, timeout;
+	unsigned int local_port, rem_port, state, timer_run;
+	int d, uid, timeout;
 	char rem_addr[128], local_addr[128], more[512];
 
 	f = fopen(proc, "rte");
@@ -342,7 +344,7 @@ static void read_udp(const char *proc, const char *type)
 		more[0] = 0;
 		sscanf(buf, "%d: %64[0-9A-Fa-f]:%X %64[0-9A-Fa-f]:%X %X "
 			"%lX:%lX %X:%lX %lX %d %d %lu %511s\n",
-			&d, local_addr, &local_port, rem_addr, &rem_port,
+			&d, &local_addr, &local_port, &rem_addr, &rem_port,
 			&state, &txq, &rxq, &timer_run, &time_len, &retr,
 			&uid, &timeout, &inode, more);
 		if (list_find_inode(&l, inode))
@@ -357,7 +359,8 @@ static void read_raw(const char *proc, const char *type)
 	FILE *f;
 	char buf[256];
 	unsigned long rxq, txq, time_len, retr, inode;
-	int local_port, rem_port, d, state, timer_run, uid, timeout;
+	unsigned int local_port, rem_port, state, timer_run;
+	int d, uid, timeout;
 	char rem_addr[128], local_addr[128], more[512];
 
 	f = fopen(proc, "rte");
@@ -376,7 +379,7 @@ static void read_raw(const char *proc, const char *type)
 		more[0] = 0;
 		sscanf(buf, "%d: %64[0-9A-Fa-f]:%X %64[0-9A-Fa-f]:%X %X "
 			"%lX:%lX %X:%lX %lX %d %d %lu %511s\n",
-			&d, local_addr, &local_port, rem_addr, &rem_port,
+			&d, &local_addr, &local_port, &rem_addr, &rem_port,
 			&state, &txq, &rxq, &timer_run, &time_len, &retr,
 			&uid, &timeout, &inode, more);
 		if (list_find_inode(&l, inode))

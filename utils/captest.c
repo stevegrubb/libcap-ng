@@ -84,10 +84,10 @@ static void report(void)
 		}
 		printf("Child ");
 	}
-	printf("User  credentials uid:%d euid:%d suid:%d\n", uid, euid, suid);
+	printf("User  credentials uid:%u euid:%u suid:%u\n", uid, euid, suid);
 	if (no_child)
 		printf("Child ");
-	printf("Group credentials gid:%d egid:%d sgid:%d\n", gid, egid, sgid);
+	printf("Group credentials gid:%u egid:%u sgid:%u\n", gid, egid, sgid);
 	if (uid != euid || gid != egid)
 		printf("Note: app has mismatching credentials!!\n");
 
