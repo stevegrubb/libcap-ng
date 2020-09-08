@@ -1,7 +1,7 @@
 /*
 * proc-llist.c - Minimal linked list library
-* Copyright (c) 2009 Red Hat Inc., Durham, North Carolina.
-* All Rights Reserved. 
+* Copyright (c) 2009, 2020 Red Hat Inc.
+* All Rights Reserved.
 *
 * This software may be freely redistributed and/or modified under the
 * terms of the GNU General Public License as published by the Free
@@ -15,7 +15,7 @@
 *
 * You should have received a copy of the GNU General Public License
 * along with this program; see the file COPYING. If not, write to the
-* Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor 
+* Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor
 * Boston, MA 02110-1335, USA.
 *
 * Authors:
@@ -53,6 +53,7 @@ void list_append(llist *l, lnode *node)
 	newnode->cmd = node->cmd;
 	newnode->capabilities = node->capabilities;
 	newnode->bounds = node->bounds;
+	newnode->ambient = node->ambient;
 	newnode->next = NULL;
 
 	// if we are at top, fix this up
@@ -77,6 +78,7 @@ void list_clear(llist* l)
 		free(cur->cmd);
 		free(cur->capabilities);
 		free(cur->bounds);
+		free(cur->ambient);
 		free(cur);
 		cur=nextnode;
 	}
@@ -88,8 +90,8 @@ void list_clear(llist* l)
 lnode *list_find_inode(llist *l, unsigned long i)
 {
         register lnode* cur;
-                                                                                
-       	cur = l->head;	/* start at the beginning */
+
+	cur = l->head;	/* start at the beginning */
 	while (cur) {
 		if (cur->inode == i) {
 			l->cur = cur;

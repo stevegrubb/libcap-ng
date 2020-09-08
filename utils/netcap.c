@@ -60,7 +60,8 @@ static int collect_process_info(void)
 		int pid, ppid;
 		capng_results_t caps;
 		char buf[100];
-		char *tmp, cmd[16], state, *text, *bounds, *ambient;
+		char *tmp, cmd[16], state;
+		char *text = NULL, *bounds = NULL, *ambient = NULL;
 		int fd, len, euid = -1;
 
 		// Skip non-process dir entries
@@ -135,9 +136,9 @@ static int collect_process_info(void)
 			fclose(sf);
 		}
 
-		if (caps == CAPNG_PARTIAL) {
+		if (caps >= CAPNG_PARTIAL) {
 			caps = capng_have_capabilities(CAPNG_SELECT_AMBIENT);
-			if (caps == CAPNG_FULL)
+			if (caps >= CAPNG_FULL)
 				ambient = strdup("@");
 			else
 				ambient = strdup("");
@@ -161,6 +162,7 @@ static int collect_process_info(void)
 		if (!bounds) {
 			fprintf(stderr, "Out of memory\n");
 			free(text);
+			free(ambient);
 			continue;
 		}
 
