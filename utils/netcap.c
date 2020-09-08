@@ -136,13 +136,10 @@ static int collect_process_info(void)
 			fclose(sf);
 		}
 
-		if (caps >= CAPNG_PARTIAL) {
-			caps = capng_have_capabilities(CAPNG_SELECT_AMBIENT);
-			if (caps > CAPNG_NONE)
-				ambient = strdup("@");
-			else
-				ambient = strdup("");
-		} else
+		caps = capng_have_capabilities(CAPNG_SELECT_AMBIENT);
+		if (caps > CAPNG_NONE)
+			ambient = strdup("@");
+		else
 			ambient = strdup("");
 		if (!ambient) {
 			fprintf(stderr, "Out of memory\n");
@@ -151,13 +148,10 @@ static int collect_process_info(void)
 		}
 
 		// Now record the bounding set information
-		if (caps == CAPNG_PARTIAL) {
-			caps = capng_have_capabilities(CAPNG_SELECT_BOUNDS);
-			if (caps > CAPNG_NONE)
-				bounds = strdup("+");
-			else
-				bounds = strdup("");
-		} else
+		caps = capng_have_capabilities(CAPNG_SELECT_BOUNDS);
+		if (caps > CAPNG_NONE)
+			bounds = strdup("+");
+		else
 			bounds = strdup("");
 		if (!bounds) {
 			fprintf(stderr, "Out of memory\n");
