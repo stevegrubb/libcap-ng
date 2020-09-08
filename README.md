@@ -7,6 +7,7 @@ for apps that may have too much privileges.
 
 The included utilities are designed to let admins and developers spot apps from various ways that may be running with too much privilege. For example, any investigation should start with network facing apps since they would be prime targets for intrusion. The netcap program will check all running apps and display the results. Sample output from netcap:
 
+```
 ppid  pid   acct       command          type port  capabilities
 1     2295  root       nasd             tcp  8000  full
 2323  2383  root       dnsmasq          tcp  53    net_admin, net_raw +
@@ -17,6 +18,7 @@ ppid  pid   acct       command          type port  capabilities
 2323  2383  root       dnsmasq          udp  53    net_admin, net_raw +
 2323  2383  root       dnsmasq          udp  67    net_admin, net_raw +
 1     2365  root       cupsd            udp  631   full
+```
 
 C Examples
 ----------
