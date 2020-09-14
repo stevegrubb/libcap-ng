@@ -1,5 +1,6 @@
 0.8.1
 - If procfs is not available, leave last_cap as CAP_LAST_CAP
+- If bounding and ambient not found in status, try prctl method
 
 0.8
 - Add vararg support to python bindings for capng_updatev

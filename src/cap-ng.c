@@ -367,8 +367,8 @@ static int get_bounding_set(void)
 			fclose(f);
 			return 0;
 		}
+		// Didn't find bounding set, fall through and try prctl way
 		fclose(f);
-		return -1;
 	}
 	// Might be in a container with no procfs - do it the hard way
 	memset(m.bounds, 0, sizeof(m.bounds));
@@ -413,7 +413,7 @@ static int get_ambient_set(void)
 			return 0;
 		}
 		fclose(f);
-		return -1;
+		// Didn't find ambient set, fall through and try prctl way
 	}
 	// Might be in a container with no procfs - do it the hard way
 	memset(m.ambient, 0, sizeof(m.ambient));
