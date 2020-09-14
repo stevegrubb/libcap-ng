@@ -1,4 +1,5 @@
 0.8.1
+- If procfs is not available, leave last_cap as CAP_LAST_CAP
 
 0.8
 - Add vararg support to python bindings for capng_updatev

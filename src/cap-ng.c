@@ -227,12 +227,7 @@ static void init(void)
 		int fd;
 
 		fd = open("/proc/sys/kernel/cap_last_cap", O_RDONLY);
-		if (fd == -1) {
-			if (errno != ENOENT) {
-				m.state = CAPNG_ERROR;
-				return;
-			}
-		} else {
+		if (fd >= 0) {
 			char buf[8];
 			int num = read(fd, buf, sizeof(buf) - 1);
 			if (num > 0) {
