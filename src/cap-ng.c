@@ -684,7 +684,7 @@ int capng_apply(capng_select_t set)
 
 	// Before updating, we expect that the data is initialized to something
 	if (m.state < CAPNG_INIT)
-		return -1;
+		return rc;
 
 	if (set & CAPNG_SELECT_BOUNDS) {
 #ifdef PR_CAPBSET_DROP
@@ -699,10 +699,16 @@ int capng_apply(capng_select_t set)
 				if (capng_have_capability(CAPNG_BOUNDING_SET,
 								 i) == 0)
 					rc = prctl(PR_CAPBSET_DROP, i, 0, 0, 0);
-			if (rc == 0)
-				m.state = CAPNG_APPLIED;
-		} else
+			if (rc)
+				return rc;
+			m.state = CAPNG_APPLIED;
+			rc = get_bounding_set();
+			if (rc)
+				return rc;
+		} else {
 			memcpy(&m, &state, sizeof(m)); /* restore state */
+			return rc;
+		}
 #else
 		rc = 0;
 #endif
@@ -712,6 +718,8 @@ int capng_apply(capng_select_t set)
 				(cap_user_data_t)&m.data);
 		if (rc == 0)
 			m.state = CAPNG_APPLIED;
+		else
+			return rc;
 	}
 	// Put ambient last so that inheritable and permitted are set
 	if (set & CAPNG_SELECT_AMBIENT) {

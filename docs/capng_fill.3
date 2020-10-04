@@ -14,9 +14,13 @@ capng_fill sets all bits to a 1 in the selected posix capabilities set. The opti
 
 None.
 
+.SH NOTES
+
+During capng_apply, bits in the bounding set can only be dropped. You cannot set them.
+
 .SH "SEE ALSO"
 
-.BR capabilities (7) 
+.BR capabilities (7), capng_apply (3)
 
 .SH AUTHOR
 Steve Grubb

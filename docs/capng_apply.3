@@ -18,6 +18,8 @@ This returns 0 on success and -1 on failure.
 
 If you are doing multi-threaded programming, calling this function will only set capabilities on the calling thread. All other threads are unaffected. If you want to set overall capabilities for a multi-threaded process, you will need to do that before creating any threads. See the capset syscall for more information on this topic.
 
+Also, bits in the bounding set can only be dropped. You cannot set them. After dropping bounding set capabilities, the bounding set is synchronized with the kernel to reflect the true state in the kernel.
+
 .SH "SEE ALSO"
 
 .BR capset (2),
