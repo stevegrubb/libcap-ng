@@ -707,6 +707,13 @@ int capng_apply(capng_select_t set)
 		rc = 0;
 #endif
 	}
+	if (set & CAPNG_SELECT_CAPS) {
+		rc = capset((cap_user_header_t)&m.hdr,
+				(cap_user_data_t)&m.data);
+		if (rc == 0)
+			m.state = CAPNG_APPLIED;
+	}
+	// Put ambient last so that inheritable and permitted are set
 	if (set & CAPNG_SELECT_AMBIENT) {
 #ifdef PR_CAP_AMBIENT
 		unsigned int i;
@@ -729,12 +736,6 @@ int capng_apply(capng_select_t set)
 #else
 		rc = 0;
 #endif
-	}
-	if (set & CAPNG_SELECT_CAPS) {
-		rc = capset((cap_user_header_t)&m.hdr,
-				(cap_user_data_t)&m.data);
-		if (rc == 0)
-			m.state = CAPNG_APPLIED;
 	}
 	return rc;
 }
