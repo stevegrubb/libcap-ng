@@ -29,10 +29,12 @@ AC_DEFUN([LIBCAP_NG_PATH],
          AC_MSG_ERROR(libcap-ng libraries found but headers are missing)
       fi
   fi
+
   AC_SUBST(CAPNG_LDADD)
   AC_MSG_CHECKING(whether to use libcap-ng)
   if test x$CAPNG_LDADD != x ; then
       AC_DEFINE(HAVE_LIBCAP_NG,1,[libcap-ng support])
+      AC_CHECK_DECLS([CAPNG_AMBIENT], [], [], [[#include <cap-ng.h>]])
       AC_MSG_RESULT(yes)
   else
       AC_MSG_RESULT(no)
