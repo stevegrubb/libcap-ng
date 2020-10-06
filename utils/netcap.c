@@ -303,7 +303,7 @@ static void read_tcp(const char *proc, const char *type)
 		more[0] = 0;
 		sscanf(buf, "%d: %64[0-9A-Fa-f]:%X %64[0-9A-Fa-f]:%X %X "
 			"%lX:%lX %X:%lX %lX %d %d %lu %511s\n",
-			&d, &local_addr, &local_port, &rem_addr, &rem_port,
+			&d, local_addr, &local_port, rem_addr, &rem_port,
 			&state, &txq, &rxq, &timer_run, &time_len, &retr,
 			&uid, &timeout, &inode, more);
 		if (list_find_inode(&l, inode))
@@ -338,7 +338,7 @@ static void read_udp(const char *proc, const char *type)
 		more[0] = 0;
 		sscanf(buf, "%d: %64[0-9A-Fa-f]:%X %64[0-9A-Fa-f]:%X %X "
 			"%lX:%lX %X:%lX %lX %d %d %lu %511s\n",
-			&d, &local_addr, &local_port, &rem_addr, &rem_port,
+			&d, local_addr, &local_port, rem_addr, &rem_port,
 			&state, &txq, &rxq, &timer_run, &time_len, &retr,
 			&uid, &timeout, &inode, more);
 		if (list_find_inode(&l, inode))
@@ -373,7 +373,7 @@ static void read_raw(const char *proc, const char *type)
 		more[0] = 0;
 		sscanf(buf, "%d: %64[0-9A-Fa-f]:%X %64[0-9A-Fa-f]:%X %X "
 			"%lX:%lX %X:%lX %lX %d %d %lu %511s\n",
-			&d, &local_addr, &local_port, &rem_addr, &rem_port,
+			&d, local_addr, &local_port, rem_addr, &rem_port,
 			&state, &txq, &rxq, &timer_run, &time_len, &retr,
 			&uid, &timeout, &inode, more);
 		if (list_find_inode(&l, inode))
