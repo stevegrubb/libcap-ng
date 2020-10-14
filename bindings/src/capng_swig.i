@@ -1,5 +1,5 @@
 /* capngswig.i --
- * Copyright 2009,2020 Red Hat Inc.
+ * Copyright 2009 Red Hat Inc., Durham, North Carolina.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -29,7 +29,7 @@
 
 %varargs(16, unsigned capability = 0) capng_updatev;
 
-%exception(python) {
+%except(python) {
   $action
   if (result < 0) {
     PyErr_SetFromErrno(PyExc_OSError);
