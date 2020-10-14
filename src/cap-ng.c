@@ -46,7 +46,7 @@
 #endif
 
 # define hidden __attribute__ ((visibility ("hidden")))
-int last_cap hidden = -1;
+unsigned int last_cap hidden = 0;
 /*
  * Some milestones of when things became available:
  * 2.6.24 kernel	XATTR_NAME_CAPS
@@ -69,7 +69,7 @@ static void update_ambient_set(capng_act_t action, unsigned int capability,
 // Local defines
 #define MASK(x) (1U << (x))
 #ifdef PR_CAPBSET_DROP
-#define UPPER_MASK ~(unsigned)((~0U)<<(last_cap-31))
+#define UPPER_MASK ~((~0U)<<(last_cap-31))
 #else
 // For v1 systems UPPER_MASK will never be used
 #define UPPER_MASK (unsigned)(~0U)
@@ -77,7 +77,7 @@ static void update_ambient_set(capng_act_t action, unsigned int capability,
 
 // Re-define cap_valid so its uniform between V1 and V3
 #undef cap_valid
-#define cap_valid(x) ((x) <= (unsigned int)last_cap)
+#define cap_valid(x) ((x) <= last_cap)
 
 // If we don't have the xattr library, then we can't
 // compile-in file system capabilities
@@ -191,6 +191,26 @@ static void init_lib(void)
 #ifdef HAVE_PTHREAD_H
 	pthread_atfork(NULL, NULL, deinit);
 #endif
+	// Detect last cap
+	if (last_cap == 0) {
+		int fd;
+
+		fd = open("/proc/sys/kernel/cap_last_cap", O_RDONLY);
+		if (fd >= 0) {
+			char buf[8];
+			int num = read(fd, buf, sizeof(buf) - 1);
+			if (num > 0) {
+				buf[num] = 0;
+				errno = 0;
+				unsigned int val = strtoul(buf, NULL, 10);
+				if (errno == 0)
+					last_cap = val;
+			}
+			close(fd);
+		}
+		if (last_cap == 0)
+			last_cap = CAP_LAST_CAP;
+	}
 }
 
 static void init(void)
@@ -222,26 +242,6 @@ static void init(void)
 #else
 	m.hdr.pid = (unsigned)getpid();
 #endif
-	// Detect last cap
-	if (last_cap == -1) {
-		int fd;
-
-		fd = open("/proc/sys/kernel/cap_last_cap", O_RDONLY);
-		if (fd >= 0) {
-			char buf[8];
-			int num = read(fd, buf, sizeof(buf) - 1);
-			if (num > 0) {
-				buf[num] = 0;
-				errno = 0;
-				int val = strtoul(buf, NULL, 10);
-				if (errno == 0)
-					last_cap = val;
-			}
-			close(fd);
-		}
-		if (last_cap == -1)
-			last_cap = CAP_LAST_CAP;
-	}
 	m.rootid = CAPNG_UNSET_ROOTID;
 	m.state = CAPNG_ALLOCATED;
 }
@@ -724,12 +724,13 @@ int capng_apply(capng_select_t set)
 	// Put ambient last so that inheritable and permitted are set
 	if (set & CAPNG_SELECT_AMBIENT) {
 #ifdef PR_CAP_AMBIENT
-		unsigned int i;
 		if (capng_have_capabilities(CAPNG_SELECT_AMBIENT) ==
 								CAPNG_NONE) {
 			rc = prctl(PR_CAP_AMBIENT,
 					   PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0);
 		} else {
+			unsigned int i;
+
 			// Clear them all
 			rc = prctl(PR_CAP_AMBIENT,
 				   PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0);
@@ -1262,7 +1263,7 @@ char *capng_print_caps_numeric(capng_print_t where, capng_select_t set)
 
 char *capng_print_caps_text(capng_print_t where, capng_type_t which)
 {
-	int i, once = 0, cnt = 0;
+	unsigned int i, once = 0, cnt = 0;
 	char *ptr = NULL;
 
 	if (m.state < CAPNG_INIT)

@@ -4,6 +4,7 @@
 - In capng_apply, move ambient caps to the end of the transaction
 - In capng_apply, return errors more aggressively.
 - In capng_apply, if the action includes the bounding set,resync with the kernel
+- Fix signed/unsigned warning in cap-ng.c
 
 0.8
 - Add vararg support to python bindings for capng_updatev

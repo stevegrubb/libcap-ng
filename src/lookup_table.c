@@ -29,10 +29,10 @@
 
 
 #define hidden __attribute__ ((visibility ("hidden")))
-extern int last_cap hidden;
+extern unsigned int last_cap hidden;
 
 #undef cap_valid
-#define cap_valid(x) ((x) <= (unsigned int)last_cap)
+#define cap_valid(x) ((x) <= last_cap)
 
 
 struct transtab {

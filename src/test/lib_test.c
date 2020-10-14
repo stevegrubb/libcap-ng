@@ -29,7 +29,7 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 
-int get_last_cap(void)
+static unsigned int get_last_cap(void)
 {
 	int fd;
 
@@ -41,17 +41,19 @@ int get_last_cap(void)
 		int num = read(fd, buf, sizeof(buf));
 		if (num > 0) {
 			errno = 0;
-			int val = strtoul(buf, NULL, 10);
+			unsigned int val = strtoul(buf, NULL, 10);
 			if (errno == 0)
 				return val;
 		}
+		close(fd);
 	}
 	return CAP_LAST_CAP;
 }
 
 int main(void)
 {
-	int rc, i, len, last = get_last_cap();
+	int rc;
+	unsigned int i, len, last = get_last_cap();
 	char *text;
 	void *saved;
 
@@ -127,7 +129,7 @@ int main(void)
 			abort();
 		}
 		name = capng_capability_to_name(i);
-		if (name == NULL) { 
+		if (name == NULL) {
 			printf("Failed converting capability %d to name\n", i);
 			abort();
 		}
