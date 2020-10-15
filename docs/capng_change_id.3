@@ -36,7 +36,29 @@ Clear ambient capabilities regardless of the internal representation already set
 .RE
 .SH "RETURN VALUE"
 
-This returns 0 on success and a negative number on failure. -1 means capng has not been initted properly, -2 means a failure requesting to keep capabilities across the uid change, -3 means that applying the intermediate capabilities failed, -4 means changing gid failed, -5 means dropping supplemental groups failed, -6 means changing the uid failed, -7 means dropping the ability to retain caps across a uid change failed, -8 means clearing the bounding set failed, -9 means dropping CAP_SETPCAP failed, -10 means initializing supplemental groups failed.
+This returns 0 on success and a negative number on failure.
+.RS
+.TP
+-1 means capng has not been initted properly
+.TP
+-2 means a failure requesting to keep capabilities across the uid change
+.TP
+-3 means that applying the intermediate capabilities failed
+.TP
+-4 means changing gid failed
+.TP
+-5 means dropping supplemental groups failed
+.TP
+-6 means changing the uid failed
+.TP
+-7 means dropping the ability to retain caps across a uid change failed
+.TP
+-8 means clearing the bounding set failed
+.TP
+-9 means dropping CAP_SETPCAP or ambient capabilities failed
+.TP
+-10 means initializing supplemental groups failed
+.RE
 
 Note: the only safe action to do upon failure of this function is to probably exit. This is because you are likely in a situation with partial permissions and not what you intended.
 
