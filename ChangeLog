@@ -5,6 +5,7 @@
 - In capng_apply, return errors more aggressively.
 - In capng_apply, if the action includes the bounding set,resync with the kernel
 - Fix signed/unsigned warning in cap-ng.c
+- In capng_apply, return a unique error code to diagnose any failure
 
 0.8
 - Add vararg support to python bindings for capng_updatev

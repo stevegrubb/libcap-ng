@@ -680,11 +680,9 @@ int capng_updatev(capng_act_t action, capng_type_t type,
 
 int capng_apply(capng_select_t set)
 {
-	int rc = -1;
-
 	// Before updating, we expect that the data is initialized to something
 	if (m.state < CAPNG_INIT)
-		return rc;
+		return -1;
 
 	if (set & CAPNG_SELECT_BOUNDS) {
 #ifdef PR_CAPBSET_DROP
@@ -694,59 +692,55 @@ int capng_apply(capng_select_t set)
 		if (capng_have_capability(CAPNG_EFFECTIVE, CAP_SETPCAP)) {
 			unsigned int i;
 			memcpy(&m, &state, sizeof(m)); /* restore state */
-			rc = 0;
-			for (i=0; i <= last_cap && rc == 0; i++)
+			for (i=0; i <= last_cap; i++) {
 				if (capng_have_capability(CAPNG_BOUNDING_SET,
-								 i) == 0)
-					rc = prctl(PR_CAPBSET_DROP, i, 0, 0, 0);
-			if (rc)
-				return rc;
+								 i) == 0) {
+				    if (prctl(PR_CAPBSET_DROP, i, 0, 0, 0) <0)
+					return -2;
+				}
+			}
 			m.state = CAPNG_APPLIED;
-			rc = get_bounding_set();
-			if (rc)
-				return rc;
+			if (get_bounding_set() < 0)
+				return -3;
 		} else {
 			memcpy(&m, &state, sizeof(m)); /* restore state */
-			return rc;
+			return -4;
 		}
-#else
-		rc = 0;
 #endif
 	}
 	if (set & CAPNG_SELECT_CAPS) {
-		rc = capset((cap_user_header_t)&m.hdr,
-				(cap_user_data_t)&m.data);
-		if (rc == 0)
+		if (capset((cap_user_header_t)&m.hdr,
+				(cap_user_data_t)&m.data) == 0)
 			m.state = CAPNG_APPLIED;
 		else
-			return rc;
+			return -5;
 	}
 	// Put ambient last so that inheritable and permitted are set
 	if (set & CAPNG_SELECT_AMBIENT) {
 #ifdef PR_CAP_AMBIENT
 		if (capng_have_capabilities(CAPNG_SELECT_AMBIENT) ==
 								CAPNG_NONE) {
-			rc = prctl(PR_CAP_AMBIENT,
-					   PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0);
+			if (prctl(PR_CAP_AMBIENT,
+				   PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0) < 0)
+				return -6;
 		} else {
 			unsigned int i;
 
 			// Clear them all
-			rc = prctl(PR_CAP_AMBIENT,
-				   PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0);
-			for (i=0; i <= last_cap && rc == 0; i++) {
+			if (prctl(PR_CAP_AMBIENT,
+				   PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0) < 0)
+				return -7;
+			for (i=0; i <= last_cap; i++) {
 				if (capng_have_capability(CAPNG_AMBIENT, i))
-					rc = prctl(PR_CAP_AMBIENT,
-						PR_CAP_AMBIENT_RAISE, i, 0, 0);
+					if (prctl(PR_CAP_AMBIENT,
+					    PR_CAP_AMBIENT_RAISE, i, 0, 0) < 0)
+						return -8;
 			}
 		}
-		if (rc == 0)
-			m.state = CAPNG_APPLIED;
-#else
-		rc = 0;
+		m.state = CAPNG_APPLIED;
 #endif
 	}
-	return rc;
+	return 0;
 }
 
 #ifdef VFS_CAP_U32

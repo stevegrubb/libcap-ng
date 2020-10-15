@@ -12,7 +12,25 @@ capng_apply will transfer the specified internal posix capabilities settings to 
 
 .SH "RETURN VALUE"
 
-This returns 0 on success and -1 on failure.
+This returns 0 on success and a negative value on failure. The values are:
+.RS
+.TP
+-1 not initialized
+.TP
+-2 CAPNG_SELECT_BOUNDS and failure to drop a bounding set capability
+.TP
+-3 CAPNG_SELECT_BOUNDS and failure to re-read bounding set
+.TP
+-4 CAPNG_SELECT_BOUNDS and process does not have CAP_SETPCAP
+.TP
+-5 CAPNG_SELECT_CAPS and failure in capset syscall
+.TP
+-6 CAPNG_SELECT_AMBIENT and process has no capabilities and failed clearing ambient capabilities
+.TP
+-7 CAPNG_SELECT_AMBIENT and process has capabilities and failed clearing ambient capabilities
+.TP
+-8 CAPNG_SELECT_AMBIENT and process has capabilities and failed setting an ambient capability
+.RE
 
 .SH NOTES
 
