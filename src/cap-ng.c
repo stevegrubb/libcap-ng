@@ -1118,7 +1118,7 @@ int capng_have_capability(capng_type_t which, unsigned int capability)
 
 	// If we still don't have anything, error out
 	if (m.state < CAPNG_INIT)
-		return CAPNG_FAIL;
+		return 0;
 	if (m.cap_ver == 1 && capability > 31)
 		return 0;
 	if (!cap_valid(capability))
