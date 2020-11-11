@@ -1,5 +1,5 @@
 # Makefile.am -- 
-# Copyright 2009,2015 Red Hat Inc., Durham, North Carolina.
+# Copyright 2009,2015,2020 Red Hat Inc.
 # All Rights Reserved.
 #
 # This library is free software; you can redistribute it and/or
@@ -28,11 +28,12 @@ CLEANFILES = $(BUILT_SOURCES)
 CONFIG_CLEAN_FILES = *.loT *.rej *.orig
 AM_CFLAGS = -fPIC -DPIC -W -Wall -Wshadow -Wformat -Wundef -D_GNU_SOURCE
 AM_CPPFLAGS = -I. -I${top_srcdir}
-lib_LTLIBRARIES = libcap-ng.la
+lib_LTLIBRARIES = libcap-ng.la libdrop_ambient.la
 include_HEADERS = cap-ng.h
 noinst_HEADERS = captab.h
 libcap_ng_la_SOURCES = cap-ng.c lookup_table.c
 libcap_ng_la_LIBADD =
 libcap_ng_la_DEPENDENCIES = $(libcap_ng_la_SOURCES) ../config.h
 libcap_ng_la_LDFLAGS = -Wl,-z,relro
+libdrop_ambient_la_SOURCES = libdrop_ambient.c
 
