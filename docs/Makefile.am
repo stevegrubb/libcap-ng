@@ -31,5 +31,5 @@ man_MANS = capng_clear.3 capng_fill.3 capng_setpid.3 \
 	capng_get_rootid.3 capng_set_rootid.3 capng_have_capability.3 \
 	capng_print_caps_numeric.3 capng_print_caps_text.3 \
 	capng_name_to_capability.3  capng_capability_to_name.3 \
-	capng_save_state.3 capng_restore_state.3
+	capng_save_state.3 capng_restore_state.3 libdrop_ambient.7
 

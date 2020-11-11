@@ -74,6 +74,7 @@ make check
 %doc COPYING.LIB
 /%{_libdir}/libcap-ng.so.*
 /%{_libdir}/libdrop_ambient.so.*
+%attr(0644,root,root) %{_mandir}/man7/*
 
 %files devel
 %defattr(-,root,root,-)

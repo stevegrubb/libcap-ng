@@ -7,6 +7,7 @@
 - Fix signed/unsigned warning in cap-ng.c
 - In capng_apply, return a unique error code to diagnose any failure
 - In capng_have_capability, return 0 for failure
+- Add the libdrop_ambient admin tool
 
 0.8
 - Add vararg support to python bindings for capng_updatev
