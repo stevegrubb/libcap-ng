@@ -684,6 +684,13 @@ int capng_apply(capng_select_t set)
 	if (m.state < CAPNG_INIT)
 		return -1;
 
+	if (set & CAPNG_SELECT_CAPS) {
+		if (capset((cap_user_header_t)&m.hdr,
+				(cap_user_data_t)&m.data) == 0)
+			m.state = CAPNG_APPLIED;
+		else
+			return -5;
+	}
 	if (set & CAPNG_SELECT_BOUNDS) {
 #ifdef PR_CAPBSET_DROP
 		struct cap_ng state;
@@ -707,13 +714,6 @@ int capng_apply(capng_select_t set)
 			return -4;
 		}
 #endif
-	}
-	if (set & CAPNG_SELECT_CAPS) {
-		if (capset((cap_user_header_t)&m.hdr,
-				(cap_user_data_t)&m.data) == 0)
-			m.state = CAPNG_APPLIED;
-		else
-			return -5;
 	}
 	// Put ambient last so that inheritable and permitted are set
 	if (set & CAPNG_SELECT_AMBIENT) {
