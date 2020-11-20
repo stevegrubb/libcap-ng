@@ -1,4 +1,5 @@
 0.8.2
+- In capng_apply, if we blew up in bounding set, allow setting capabilities
 
 0.8.1
 - If procfs is not available, leave last_cap as CAP_LAST_CAP
