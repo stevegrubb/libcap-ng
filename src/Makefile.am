@@ -28,7 +28,10 @@ CLEANFILES = $(BUILT_SOURCES)
 CONFIG_CLEAN_FILES = *.loT *.rej *.orig
 AM_CFLAGS = -fPIC -DPIC -W -Wall -Wshadow -Wformat -Wundef -D_GNU_SOURCE
 AM_CPPFLAGS = -I. -I${top_srcdir}
-lib_LTLIBRARIES = libcap-ng.la libdrop_ambient.la
+lib_LTLIBRARIES = libcap-ng.la
+if BUILD_LIBDROP_AMBIENT
+  lib_LTLIBRARIES += libdrop_ambient.la
+endif
 include_HEADERS = cap-ng.h
 noinst_HEADERS = captab.h
 libcap_ng_la_SOURCES = cap-ng.c lookup_table.c
