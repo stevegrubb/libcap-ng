@@ -121,6 +121,12 @@ AC_CHECK_DECLS([CAP_PERFMON], [], [], [[#include <linux/capability.h>]])
 AC_CHECK_DECLS([CAP_BPF], [], [], [[#include <linux/capability.h>]])
 AC_CHECK_DECLS([CAP_CHECKPOINT_RESTORE], [], [], [[#include <linux/capability.h>]])
 
+dnl only build libdrop_ambient if support for ambient capabilities was found (which is normal)
+if test x"${ac_cv_have_decl_PR_CAP_AMBIENT}" = x"no" ; then
+    AC_MSG_WARN("PR_CAP_AMBIENT not available - libdrop_ambient will not be built")
+fi
+AM_CONDITIONAL(BUILD_LIBDROP_AMBIENT, test x"${ac_cv_have_decl_PR_CAP_AMBIENT}" = x"yes")
+
 AC_CHECK_PROG(swig_found, swig, yes, no)
 if test x"${swig_found}" = x"no" ; then
 	AC_MSG_WARN("Swig not found - python bindings will not be made")
