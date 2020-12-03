@@ -44,6 +44,10 @@
 #ifdef HAVE_LINUX_SECUREBITS_H
 #include <linux/securebits.h>
 #endif
+#ifdef HAVE_LINUX_MAGIC_H
+#include <sys/vfs.h>
+#include <linux/magic.h>
+#endif
 
 # define hidden __attribute__ ((visibility ("hidden")))
 unsigned int last_cap hidden = 0;
@@ -195,8 +199,15 @@ static void init_lib(void)
 	if (last_cap == 0) {
 		int fd;
 
+		// Try to read last cap from procfs
 		fd = open("/proc/sys/kernel/cap_last_cap", O_RDONLY);
 		if (fd >= 0) {
+#ifdef HAVE_LINUX_MAGIC_H
+			struct statfs st;
+			// Bail out if procfs is invalid or fstatfs fails
+			if (fstatfs(fd, &st) || st.f_type != PROC_SUPER_MAGIC)
+				goto fail;
+#endif
 			char buf[8];
 			int num = read(fd, buf, sizeof(buf) - 1);
 			if (num > 0) {
@@ -206,6 +217,7 @@ static void init_lib(void)
 				if (errno == 0)
 					last_cap = val;
 			}
+fail:
 			close(fd);
 		}
 		if (last_cap == 0)
