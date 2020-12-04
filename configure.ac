@@ -59,6 +59,9 @@ AC_CHECK_HEADERS(linux/securebits.h, [], [])
 AC_CHECK_HEADERS(pthread.h,
 	[AC_SEARCH_LIBS(pthread_atfork, pthread)],
 	[AC_MSG_WARN(pthread.h not found, disabling pthread_atfork.)])
+AC_CHECK_HEADERS(sys/vfs.h, [
+	AC_CHECK_HEADERS(linux/magic.h, [] [AC_MSG_WARN(linux/magic.h is required in order to verify procfs.)])
+	], [AC_MSG_WARN(sys/vfs.h is required in order to verify procfs.)])
 
 AC_C_CONST
 AC_C_INLINE

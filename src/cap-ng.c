@@ -44,6 +44,10 @@
 #ifdef HAVE_LINUX_SECUREBITS_H
 #include <linux/securebits.h>
 #endif
+#ifdef HAVE_LINUX_MAGIC_H
+#include <sys/vfs.h>
+#include <linux/magic.h>
+#endif
 
 # define hidden __attribute__ ((visibility ("hidden")))
 unsigned int last_cap hidden = 0;
@@ -185,6 +189,15 @@ static void deinit(void)
 	m.state = CAPNG_NEW;
 }
 
+static inline int test_cap(unsigned int cap)
+{
+	// prctl returns 0 or 1 for valid caps, -1 otherwise
+	return prctl(PR_CAPBSET_READ, cap) >= 0;
+}
+
+// The maximum cap value is determined by VFS_CAP_U32
+#define MAX_CAP_VALUE (VFS_CAP_U32 * sizeof(__le32) * 8)
+
 static void init_lib(void) __attribute__ ((constructor));
 static void init_lib(void)
 {
@@ -195,8 +208,15 @@ static void init_lib(void)
 	if (last_cap == 0) {
 		int fd;
 
+		// Try to read last cap from procfs
 		fd = open("/proc/sys/kernel/cap_last_cap", O_RDONLY);
 		if (fd >= 0) {
+#ifdef HAVE_LINUX_MAGIC_H
+			struct statfs st;
+			// Bail out if procfs is invalid or fstatfs fails
+			if (fstatfs(fd, &st) || st.f_type != PROC_SUPER_MAGIC)
+				goto fail;
+#endif
 			char buf[8];
 			int num = read(fd, buf, sizeof(buf) - 1);
 			if (num > 0) {
@@ -206,10 +226,25 @@ static void init_lib(void)
 				if (errno == 0)
 					last_cap = val;
 			}
+fail:
 			close(fd);
 		}
-		if (last_cap == 0)
-			last_cap = CAP_LAST_CAP;
+		// Run a binary search over capabilities
+		if (last_cap == 0) {
+			// starting with last_cap=MAX_CAP_VALUE means we always know
+			// that cap1 is invalid after the first iteration
+			last_cap = MAX_CAP_VALUE;
+			unsigned int cap0 = 0, cap1 = MAX_CAP_VALUE;
+
+			while (cap0 < last_cap) {
+				if (test_cap(last_cap))
+					cap0 = last_cap;
+				else
+					cap1 = last_cap;
+
+				last_cap = (cap0 + cap1) / 2U;
+			}
+		}
 	}
 }
 
