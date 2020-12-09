@@ -1,3 +1,5 @@
+0.8.3
+
 0.8.2
 - In capng_apply, if we blew up in bounding set, allow setting capabilities
 - If PR_CAP_AMBIENT is not available, do not build libdrop_ambient
