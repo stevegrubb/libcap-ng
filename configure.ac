@@ -1,7 +1,7 @@
 dnl
 define([AC_INIT_NOTICE],
 [### Generated automatically using autoconf version] AC_ACVERSION [
-### Copyright 2009-2020 Steve Grubb <sgrubb@redhat.com>
+### Copyright 2009-2021 Steve Grubb <sgrubb@redhat.com>
 ###
 ### Permission is hereby granted, free of charge, to any person obtaining a
 ### copy of this software and associated documentation files (the "Software"),
@@ -62,10 +62,6 @@ AC_CHECK_HEADERS(pthread.h,
 AC_CHECK_HEADERS(sys/vfs.h, [
 	AC_CHECK_HEADERS(linux/magic.h, [] [AC_MSG_WARN(linux/magic.h is required in order to verify procfs.)])
 	], [AC_MSG_WARN(sys/vfs.h is required in order to verify procfs.)])
-
-AC_C_CONST
-AC_C_INLINE
-AM_PROG_CC_C_O
 
 ALLWARNS=""
 ALLDEBUG="-g"
