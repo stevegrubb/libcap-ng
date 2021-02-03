@@ -56,9 +56,22 @@ unsigned int last_cap hidden = 0;
  * 2.6.24 kernel	XATTR_NAME_CAPS
  * 2.6.25 kernel	PR_CAPBSET_DROP, CAPABILITY_VERSION_2
  * 2.6.26 kernel	PR_SET_SECUREBITS, SECURE_*_LOCKED, VERSION_3
+ * 3.5    kernel	PR_SET_NO_NEW_PRIVS
  * 4.3    kernel	PR_CAP_AMBIENT
  * 4.14   kernel	VFS_CAP_REVISION_3
  */
+#ifdef PR_CAPBSET_DROP
+int HAVE_PR_CAPBSET_DROP hidden = 1;
+#endif
+#ifdef PR_SET_SECUREBITS
+int HAVE_PR_SET_SECUREBITS hidden = 1;
+#endif
+#ifdef PR_SET_NO_NEW_PRIVS
+int HAVE_PR_SET_NO_NEW_PRIVS hidden = 1;
+#endif
+#ifdef PR_CAP_AMBIENT
+int HAVE_PR_CAP_AMBIENT hidden = 1;
+#endif
 
 /* External syscall prototypes */
 extern int capset(cap_user_header_t header, cap_user_data_t data);
@@ -246,6 +259,23 @@ fail:
 			}
 		}
 	}
+	// Detect prctl options at runtime
+#ifdef PR_CAPBSET_DROP
+	if (prctl(PR_CAPBSET_READ, 0, 0, 0, 0) < 0 && errno == EINVAL)
+		HAVE_PR_CAPBSET_DROP = 0;
+#endif
+#ifdef PR_SET_SECUREBITS
+	if (prctl(PR_GET_SECUREBITS, 0, 0, 0, 0) < 0 && errno == EINVAL)
+		HAVE_PR_SET_SECUREBITS = 0;
+#endif
+#ifdef PR_SET_NO_NEW_PRIVS
+	if (prctl(PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) < 0 && errno == EINVAL)
+		HAVE_PR_SET_NO_NEW_PRIVS = 0;
+#endif
+#ifdef PR_CAP_AMBIENT
+	if (prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_IS_SET, 0, 0, 0) < 0 && errno == EINVAL)
+		HAVE_PR_CAP_AMBIENT = 0;
+#endif
 }
 
 static void init(void)
@@ -291,12 +321,16 @@ void capng_clear(capng_select_t set)
 	if (set & CAPNG_SELECT_CAPS)
 		memset(&m.data, 0, sizeof(cap_data_t));
 #ifdef PR_CAPBSET_DROP
+if (HAVE_PR_CAPBSET_DROP) {
 	if (set & CAPNG_SELECT_BOUNDS)
 		memset(m.bounds, 0, sizeof(m.bounds));
+}
 #endif
 #ifdef PR_CAP_AMBIENT
+if (HAVE_PR_CAP_AMBIENT) {
 	if (set & CAPNG_SELECT_AMBIENT)
 		memset(m.ambient, 0, sizeof(m.ambient));
+}
 #endif
 	m.state = CAPNG_INIT;
 }
@@ -323,18 +357,22 @@ void capng_fill(capng_select_t set)
 		}
 	}
 #ifdef PR_CAPBSET_DROP
+if (HAVE_PR_CAPBSET_DROP) {
 	if (set & CAPNG_SELECT_BOUNDS) {
 		unsigned i;
 		for (i=0; i<sizeof(m.bounds)/sizeof(__u32); i++)
 			m.bounds[i] = 0xFFFFFFFFU;
 	}
+}
 #endif
 #ifdef PR_CAP_AMBIENT
+if (HAVE_PR_CAP_AMBIENT) {
 	if (set & CAPNG_SELECT_AMBIENT) {
 		unsigned i;
 		for (i=0; i<sizeof(m.ambient)/sizeof(__u32); i++)
 			m.ambient[i] = 0xFFFFFFFFU;
 	}
+}
 #endif
 	m.state = CAPNG_INIT;
 }
@@ -481,14 +519,18 @@ int capng_get_caps_process(void)
 	if (rc == 0) {
 		m.state = CAPNG_INIT;
 #ifdef PR_CAPBSET_DROP
+if (HAVE_PR_CAPBSET_DROP) {
 		rc = get_bounding_set();
 		if (rc < 0)
 			m.state = CAPNG_ERROR;
+}
 #endif
 #ifdef PR_CAP_AMBIENT
+if (HAVE_PR_CAP_AMBIENT) {
 		rc = get_ambient_set();
 		if (rc < 0)
 			m.state = CAPNG_ERROR;
+}
 #endif
 	}
 
@@ -622,10 +664,12 @@ static void update_bounding_set(capng_act_t action, unsigned int capability,
 	unsigned int idx)
 {
 #ifdef PR_CAPBSET_DROP
+if (HAVE_PR_CAPBSET_DROP) {
 	if (action == CAPNG_ADD)
 		m.bounds[idx] |= MASK(capability);
 	else
 		m.bounds[idx] &= ~(MASK(capability));
+}
 #endif
 }
 
@@ -633,10 +677,12 @@ static void update_ambient_set(capng_act_t action, unsigned int capability,
 	unsigned int idx)
 {
 #ifdef PR_CAP_AMBIENT
+if (HAVE_PR_CAP_AMBIENT) {
 	if (action == CAPNG_ADD)
 		m.ambient[idx] |= MASK(capability);
 	else
 		m.ambient[idx] &= ~(MASK(capability));
+}
 #endif
 }
 
@@ -723,6 +769,7 @@ int capng_apply(capng_select_t set)
 
 	if (set & CAPNG_SELECT_BOUNDS) {
 #ifdef PR_CAPBSET_DROP
+if (HAVE_PR_CAPBSET_DROP) {
 		struct cap_ng state;
 		memcpy(&state, &m, sizeof(state)); /* save state */
 		capng_get_caps_process();
@@ -748,6 +795,7 @@ int capng_apply(capng_select_t set)
 			rc = -4;
 			goto try_caps;
 		}
+}
 #endif
 	}
 
@@ -774,6 +822,7 @@ try_caps:
 	// time we get here.
 	if (set & CAPNG_SELECT_AMBIENT) {
 #ifdef PR_CAP_AMBIENT
+if (HAVE_PR_CAP_AMBIENT) {
 		if (capng_have_capabilities(CAPNG_SELECT_AMBIENT) ==
 								CAPNG_NONE) {
 			if (prctl(PR_CAP_AMBIENT,
@@ -800,6 +849,7 @@ try_caps:
 			}
 		}
 		m.state = CAPNG_APPLIED;
+}
 #endif
 	}
 out:
@@ -900,11 +950,13 @@ int capng_change_id(int uid, int gid, capng_flags_t flag)
 
 	// Check the current capabilities
 #ifdef PR_CAPBSET_DROP
+if (HAVE_PR_CAPBSET_DROP) {
 	// If newer kernel, we need setpcap to change the bounding set
 	if (capng_have_capability(CAPNG_EFFECTIVE, CAP_SETPCAP) == 0 &&
 					flag & CAPNG_CLEAR_BOUNDING)
 		capng_update(CAPNG_ADD,
 				CAPNG_EFFECTIVE|CAPNG_PERMITTED, CAP_SETPCAP);
+}
 #endif
 	if (gid == -1 || capng_have_capability(CAPNG_EFFECTIVE, CAP_SETGID))
 		need_setgid = 0;
@@ -1003,17 +1055,21 @@ int capng_lock(void)
 {
 	// If either fail, return -1 since something is not right
 #ifdef PR_SET_SECUREBITS
+if (HAVE_PR_SET_SECUREBITS) {
 	int rc = prctl(PR_SET_SECUREBITS,
 			1 << SECURE_NOROOT |
 			1 << SECURE_NOROOT_LOCKED |
 			1 << SECURE_NO_SETUID_FIXUP |
 			1 << SECURE_NO_SETUID_FIXUP_LOCKED, 0, 0, 0);
 #ifdef PR_SET_NO_NEW_PRIVS
+if (HAVE_PR_SET_NO_NEW_PRIVS) {
 	if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0))
 		return -1;
+}
 #endif
 	if (rc)
 		return -1;
+}
 #endif
 
 	return 0;
@@ -1061,6 +1117,7 @@ capng_results_t capng_have_capabilities(capng_select_t set)
 		}
 	}
 #ifdef PR_CAPBSET_DROP
+if (HAVE_PR_CAPBSET_DROP) {
 	if (set & CAPNG_SELECT_BOUNDS) {
 		if (m.bounds[0] == 0)
 			empty = 1;
@@ -1075,8 +1132,10 @@ capng_results_t capng_have_capabilities(capng_select_t set)
 		else
 			return CAPNG_PARTIAL;
 	}
+}
 #endif
 #ifdef PR_CAP_AMBIENT
+if (HAVE_PR_CAP_AMBIENT) {
 	if (set & CAPNG_SELECT_AMBIENT) {
 		if (m.ambient[0] == 0)
 			empty = 1;
@@ -1091,6 +1150,7 @@ capng_results_t capng_have_capabilities(capng_select_t set)
 		else
 			return CAPNG_PARTIAL;
 	}
+}
 #endif
 	if (empty == 1 && full == 0)
 		return CAPNG_NONE;
@@ -1153,19 +1213,21 @@ static int check_inheritable(unsigned int capability, unsigned int idx)
 static int bounds_bit_check(unsigned int capability, unsigned int idx)
 {
 #ifdef PR_CAPBSET_DROP
+if (HAVE_PR_CAPBSET_DROP) {
 	return MASK(capability) & m.bounds[idx] ? 1 : 0;
-#else
-	return 0;
+}
 #endif
+	return 0;
 }
 
 static int ambient_bit_check(unsigned int capability, unsigned int idx)
 {
 #ifdef PR_CAP_AMBIENT
+if (HAVE_PR_CAP_AMBIENT) {
 	return MASK(capability) & m.ambient[idx] ? 1 : 0;
-#else
-	return 0;
+}
 #endif
+	return 0;
 }
 
 static int v1_check(unsigned int capability, __u32 data)
@@ -1246,14 +1308,18 @@ char *capng_print_caps_numeric(capng_print_t where, capng_select_t set)
 			}
 		}
 #ifdef PR_CAPBSET_DROP
+if (HAVE_PR_CAPBSET_DROP) {
 		if (set & CAPNG_SELECT_BOUNDS)
 			printf("Bounding Set: %08X, %08X\n",
 				m.bounds[1] & UPPER_MASK, m.bounds[0]);
+}
 #endif
 #ifdef PR_CAP_AMBIENT
+if (HAVE_PR_CAP_AMBIENT) {
 		if (set & CAPNG_SELECT_AMBIENT)
 			printf("Ambient :     %08X, %08X\n",
 				m.ambient[1] & UPPER_MASK, m.ambient[0]);
+}
 #endif
 	} else if (where == CAPNG_PRINT_BUFFER) {
 		if (set & CAPNG_SELECT_CAPS) {
@@ -1282,6 +1348,7 @@ char *capng_print_caps_numeric(capng_print_t where, capng_select_t set)
 		}
 		if (set & CAPNG_SELECT_BOUNDS) {
 #ifdef PR_CAPBSET_DROP
+if (HAVE_PR_CAPBSET_DROP) {
 			char *s;
 			// If ptr is NULL, we only room for bounding and ambient
 			if (ptr == NULL ) {
@@ -1294,10 +1361,12 @@ char *capng_print_caps_numeric(capng_print_t where, capng_select_t set)
 				s = ptr + strlen(ptr);
 			snprintf(s, 40, "Bounding Set: %08X, %08X\n",
 					m.bounds[1] & UPPER_MASK, m.bounds[0]);
+}
 #endif
 		}
 		if (set & CAPNG_SELECT_AMBIENT) {
 #ifdef PR_CAP_AMBIENT
+if (HAVE_PR_CAP_AMBIENT) {
 			char *s;
 			// If ptr is NULL, we only room for ambient
 			if (ptr == NULL ) {
@@ -1311,6 +1380,7 @@ char *capng_print_caps_numeric(capng_print_t where, capng_select_t set)
 			snprintf(s, 40, "Ambient Set: %08X, %08X\n",
 					m.ambient[1] & UPPER_MASK,
 					m.ambient[0]);
+}
 #endif
 		}
 	}
