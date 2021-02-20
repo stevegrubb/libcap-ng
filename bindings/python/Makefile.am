@@ -38,7 +38,7 @@ nodist__capng_la_SOURCES  = capng_wrap.c
 capng.py capng_wrap.c: ${srcdir}/../src/capng_swig.i caps.h capng.h
 	swig -o capng_wrap.c ${SWIG_FLAGS} ${SWIG_INCLUDES} ${srcdir}/../src/capng_swig.i 
 caps.h:
-	cat /usr/include/linux/capability.h | grep '^#define CAP'  | grep -v '[()]' > caps.h
+	cat $(CAPABILITY_HEADER) | grep '^#define CAP'  | grep -v '[()]' > caps.h
 capng.h:
 	cat ${top_srcdir}/src/cap-ng.h | grep -v '_state' > capng.h
 
