@@ -50,10 +50,12 @@ jobs:
     - name: Get python info
       run: |
            rpm -qlv python-unversioned-command
-           ls -l /usr/bin/python3
            ls -l /usr/bin/python
+           ls -l /usr/bin/python3
+           which python
+           which python3
            echo $PATH
-           ls
+           ls ..
 
     # Initializes the CodeQL tools for scanning.
     - name: Initialize CodeQL
