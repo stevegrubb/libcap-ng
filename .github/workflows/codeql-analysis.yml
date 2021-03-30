@@ -48,10 +48,12 @@ jobs:
       run: dnf -y install autoconf automake libtool gcc libattr-devel kernel-headers swig python3-devel python3 python-unversioned-command
 
     - name: Get python info
-      run: rpm -qlv python-unversioned-command
+      run: |
+           rpm -qlv python-unversioned-command
            ls -l /usr/bin/python3
            ls -l /usr/bin/python
            echo $PATH
+           ls
 
     # Initializes the CodeQL tools for scanning.
     - name: Initialize CodeQL
