@@ -45,7 +45,7 @@ jobs:
       run: cat /etc/fedora-release
 
     - name: install dependencies
-      run: dnf -y install autoconf automake libtool gcc libattr-devel kernel-headers python3-devel swig
+      run: dnf -y install autoconf automake libtool gcc libattr-devel kernel-headers swig python3-devel python3 python-unversioned-command
 
 
     # Initializes the CodeQL tools for scanning.
