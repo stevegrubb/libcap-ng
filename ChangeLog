@@ -1,4 +1,5 @@
 0.8.3
+- Fix parameters to capng_updatev python bindings to be signed
 
 0.8.2
 - In capng_apply, if we blew up in bounding set, allow setting capabilities
