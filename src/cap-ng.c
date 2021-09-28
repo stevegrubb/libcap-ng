@@ -1,5 +1,5 @@
 /* libcap-ng.c --
- * Copyright 2009-10, 2013, 2017, 2020 Red Hat Inc.
+ * Copyright 2009-10, 2013, 2017, 2020-21 Red Hat Inc.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -61,16 +61,16 @@ unsigned int last_cap hidden = 0;
  * 4.14   kernel	VFS_CAP_REVISION_3
  */
 #ifdef PR_CAPBSET_DROP
-int HAVE_PR_CAPBSET_DROP hidden = 1;
+static int HAVE_PR_CAPBSET_DROP = 0;
 #endif
 #ifdef PR_SET_SECUREBITS
-int HAVE_PR_SET_SECUREBITS hidden = 1;
+static int HAVE_PR_SET_SECUREBITS = 0;
 #endif
 #ifdef PR_SET_NO_NEW_PRIVS
-int HAVE_PR_SET_NO_NEW_PRIVS hidden = 1;
+static int HAVE_PR_SET_NO_NEW_PRIVS = 0;
 #endif
 #ifdef PR_CAP_AMBIENT
-int HAVE_PR_CAP_AMBIENT hidden = 1;
+static int HAVE_PR_CAP_AMBIENT = 0;
 #endif
 
 /* External syscall prototypes */
@@ -261,20 +261,28 @@ fail:
 	}
 	// Detect prctl options at runtime
 #ifdef PR_CAPBSET_DROP
-	if (prctl(PR_CAPBSET_READ, 0, 0, 0, 0) < 0 && errno == EINVAL)
-		HAVE_PR_CAPBSET_DROP = 0;
+	errno = 0;
+	prctl(PR_CAPBSET_READ, 0, 0, 0, 0);
+	if (!errno)
+		HAVE_PR_CAPBSET_DROP = 1;
 #endif
 #ifdef PR_SET_SECUREBITS
-	if (prctl(PR_GET_SECUREBITS, 0, 0, 0, 0) < 0 && errno == EINVAL)
-		HAVE_PR_SET_SECUREBITS = 0;
+	errno = 0;
+	prctl(PR_GET_SECUREBITS, 0, 0, 0, 0);
+	if (!errno)
+		HAVE_PR_SET_SECUREBITS = 1;
 #endif
 #ifdef PR_SET_NO_NEW_PRIVS
-	if (prctl(PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) < 0 && errno == EINVAL)
-		HAVE_PR_SET_NO_NEW_PRIVS = 0;
+	errno = 0;
+	prctl(PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0);
+	if (!errno)
+		HAVE_PR_SET_NO_NEW_PRIVS = 1;
 #endif
 #ifdef PR_CAP_AMBIENT
-	if (prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_IS_SET, 0, 0, 0) < 0 && errno == EINVAL)
-		HAVE_PR_CAP_AMBIENT = 0;
+	errno = 0;
+	prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_IS_SET, 0, 0, 0);
+	if (!errno)
+		HAVE_PR_CAP_AMBIENT = 1;
 #endif
 }
 
@@ -1132,7 +1140,8 @@ if (HAVE_PR_CAPBSET_DROP) {
 		else
 			return CAPNG_PARTIAL;
 	}
-}
+} else
+	empty = 1;
 #endif
 #ifdef PR_CAP_AMBIENT
 if (HAVE_PR_CAP_AMBIENT) {
@@ -1150,7 +1159,8 @@ if (HAVE_PR_CAP_AMBIENT) {
 		else
 			return CAPNG_PARTIAL;
 	}
-}
+} else
+	empty = 1;
 #endif
 	if (empty == 1 && full == 0)
 		return CAPNG_NONE;
