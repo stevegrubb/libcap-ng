@@ -294,7 +294,7 @@ fail:
 
 static void init(void)
 {
-	// This is for so static libs get initialized
+	// This is so static libs get initialized
 	init_lib();
 
 	if (m.state != CAPNG_NEW)
