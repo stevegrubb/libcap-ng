@@ -214,6 +214,12 @@ static inline int test_cap(unsigned int cap)
 static void init_lib(void) __attribute__ ((constructor));
 static void init_lib(void)
 {
+       // This is so dynamic libraries don't re-init
+       static unsigned int run_once = 0;
+       if (run_once)
+               return;
+       run_once = 1;
+
 #ifdef HAVE_PTHREAD_H
 	pthread_atfork(NULL, NULL, deinit);
 #endif
@@ -288,6 +294,9 @@ fail:
 
 static void init(void)
 {
+	// This is for so static libs get initialized
+	init_lib();
+
 	if (m.state != CAPNG_NEW)
 		return;
 
