@@ -93,8 +93,7 @@ const char *capng_capability_to_name(unsigned int capability);
 // may use libcap-ng also and want to make sure it doesn't alter something
 // important. Otherwise you shouldn't need to call these.
 void capng_restore_state(void **state);
-void *capng_save_state(void)
-	__attribute_malloc__ __attr_dealloc (capng_restore_state, 1);
+void *capng_save_state(void);
 
 #ifdef __cplusplus
 }
