@@ -1,5 +1,5 @@
 /* libcap-ng.h --
- * Copyright 2009, 2013, 2020 Red Hat Inc.
+ * Copyright 2009,2013,2020,2022 Red Hat Inc.
  * All Rights Reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -22,6 +22,12 @@
 
 #ifndef LIBCAP_NG_HEADER
 #define LIBCAP_NG_HEADER
+
+#include <sys/cdefs.h>
+#ifndef __attr_dealloc
+# define __attr_dealloc(dealloc, argno)
+# define __attr_dealloc_free
+#endif
 
 #include <stdint.h>
 #include <linux/capability.h>
@@ -74,8 +80,10 @@ capng_results_t capng_have_permitted_capabilities(void);
 int capng_have_capability(capng_type_t which, unsigned int capability);
 
 // These functions printout capabilities
-char *capng_print_caps_numeric(capng_print_t where, capng_select_t set);
-char *capng_print_caps_text(capng_print_t where, capng_type_t which);
+char *capng_print_caps_numeric(capng_print_t where, capng_select_t set)
+	__attr_dealloc_free;
+char *capng_print_caps_text(capng_print_t where, capng_type_t which)
+	__attr_dealloc_free;
 
 // These functions convert between numeric and text string
 int capng_name_to_capability(const char *name);
@@ -84,8 +92,9 @@ const char *capng_capability_to_name(unsigned int capability);
 // These function should be used when you suspect a third party library
 // may use libcap-ng also and want to make sure it doesn't alter something
 // important. Otherwise you shouldn't need to call these.
-void *capng_save_state(void);
 void capng_restore_state(void **state);
+void *capng_save_state(void)
+	__attribute_malloc__ __attr_dealloc (capng_restore_state, 1);
 
 #ifdef __cplusplus
 }
