@@ -26,7 +26,7 @@ pkgconfig_DATA = libcap-ng.pc
 DISTCLEANFILES = $(pkgconfig_DATA)
 CLEANFILES = $(BUILT_SOURCES)
 CONFIG_CLEAN_FILES = *.loT *.rej *.orig
-AM_CFLAGS = -fPIC -DPIC -W -Wall -Wshadow -Wformat -Wundef -D_GNU_SOURCE
+AM_CFLAGS = -fPIC -DPIC -W -Wall -Wshadow ${WFLAGS} -Wundef -D_GNU_SOURCE
 AM_CPPFLAGS = -I. -I${top_srcdir}
 lib_LTLIBRARIES = libcap-ng.la
 if BUILD_LIBDROP_AMBIENT

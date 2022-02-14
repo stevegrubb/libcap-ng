@@ -110,6 +110,16 @@ fi
 ],WARNS="$ALLWARNS")
 AC_SUBST(DEBUG)
 
+WFLAGS=""
+AC_MSG_CHECKING(for -Wformat-truncation)
+TMPCFLAGS="${CFLAGS}"
+CFLAGS="${CFLAGS} -Wformat-truncation"
+AC_LINK_IFELSE([AC_LANG_PROGRAM([[]], [[]])],[WFLAGS="-Wno-format-truncation"
+	AC_MSG_RESULT(yes)],
+	[AC_MSG_RESULT(no)])
+CFLAGS="${TMPCFLAGS}"
+AC_SUBST(WFLAGS)
+
 AC_CHECK_HEADER(sys/syscall.h,
 	[AC_DEFINE([HAVE_SYSCALL_H], [1],
 	[Define to 1 if you have <sys/syscall.h>.])], [],)
