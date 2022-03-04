@@ -23,7 +23,9 @@
 #ifndef LIBCAP_NG_HEADER
 #define LIBCAP_NG_HEADER
 
+#ifdef HAVE_FEATURES_H
 #include <features.h>
+#endif
 #ifndef __attr_dealloc
 # define __attr_dealloc(dealloc, argno)
 # define __attr_dealloc_free
