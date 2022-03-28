@@ -23,15 +23,14 @@
 #ifndef LIBCAP_NG_HEADER
 #define LIBCAP_NG_HEADER
 
-#include <features.h>
+#include <stdint.h>
+#include <linux/capability.h>
+#include <unistd.h>
+
 #ifndef __attr_dealloc
 # define __attr_dealloc(dealloc, argno)
 # define __attr_dealloc_free
 #endif
-
-#include <stdint.h>
-#include <linux/capability.h>
-#include <unistd.h>
 
 #ifdef __cplusplus
 extern "C" {
