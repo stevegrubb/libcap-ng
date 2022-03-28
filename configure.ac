@@ -99,6 +99,19 @@ fi
 ],
 [ DEBUG="-DNDEBUG"; AM_CONDITIONAL(DEBUG, false) ])
 
+AC_MSG_CHECKING(__attr_access support)
+AC_COMPILE_IFELSE(
+  [AC_LANG_SOURCE(
+    [[
+      #include <stdio.h>
+      int audit_fgets(char *buf, size_t blen, int fd)
+        __attr_access ((__write_only__, 1, 2));
+      int main(void) { return 0; }]])],
+  [ACCESS="yes"],
+  [ACCESS="no"]
+)
+AC_MSG_RESULT($ACCESS)
+
 AC_ARG_WITH(warn,
 [  --with-warn             turn on warnings [[default=yes]]],
 [
@@ -253,4 +266,5 @@ echo "
   Compiler:               $CC
   Compiler flags:
 `echo $CFLAGS | fmt -w 50 | sed 's,^,                          ,'`
+  __attr_access support:  $ACCESS
 "
