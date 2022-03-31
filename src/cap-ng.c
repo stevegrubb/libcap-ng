@@ -959,7 +959,7 @@ int capng_apply_caps_fd(int fd)
 // flag to drop supp groups
 int capng_change_id(int uid, int gid, capng_flags_t flag)
 {
-	int rc, need_setgid, need_setuid;
+	int rc, ret, need_setgid, need_setuid;
 
 	// Before updating, we expect that the data is initialized to something
 	if (m.state < CAPNG_INIT)
@@ -996,8 +996,10 @@ if (HAVE_PR_CAPBSET_DROP) {
 
 	// Change to the temp capabilities
 	rc = capng_apply(CAPNG_SELECT_CAPS);
-	if (rc < 0)
-		return -3;
+	if (rc < 0) {
+		ret = -3;
+		goto err_out;
+	}
 
 	// If we are clearing ambient, only clear since its applied at the end
 	if (flag & CAPNG_CLEAR_AMBIENT)
@@ -1007,40 +1009,54 @@ if (HAVE_PR_CAPBSET_DROP) {
 	if (flag & CAPNG_CLEAR_BOUNDING) {
 		capng_clear(CAPNG_SELECT_BOUNDS);
 		rc = capng_apply(CAPNG_SELECT_BOUNDS);
-		if (rc)
-			return -8;
+		if (rc) {
+			ret = -8;
+			goto err_out;
+		}
 	}
 
 	// Change gid
 	if (gid != -1) {
 		rc = setresgid(gid, gid, gid);
-		if (rc)
-			return -4;
+		if (rc) {
+			ret = -4;
+			goto err_out;
+		}
 	}
 
 	// See if we need to init supplemental groups
 	if ((flag & CAPNG_INIT_SUPP_GRP) && uid != -1) {
 		struct passwd *pw = getpwuid(uid);
-		if (pw == NULL)
-			return -10;
+		if (pw == NULL) {
+			ret = -10;
+			goto err_out;
+		}
 		if (gid != -1) {
-			if (initgroups(pw->pw_name, gid))
-				return -5;
-		} else if (initgroups(pw->pw_name, pw->pw_gid))
-			return -5;
+			if (initgroups(pw->pw_name, gid)) {
+				ret = -5;
+				goto err_out;
+			}
+		} else if (initgroups(pw->pw_name, pw->pw_gid)) {
+			ret = -5;
+			goto err_out;
+		}
 	}
 
 	// See if we need to unload supplemental groups
 	if ((flag & CAPNG_DROP_SUPP_GRP) && gid != -1) {
-		if (setgroups(0, NULL))
-			return -5;
+		if (setgroups(0, NULL)) {
+			ret = -5;
+			goto err_out;
+		}
 	}
 
 	// Change uid
 	if (uid != -1) {
 		rc = setresuid(uid, uid, uid);
-		if (rc)
-			return -6;
+		if (rc) {
+			ret = -6;
+			goto err_out;
+		}
 	}
 
 	// Tell it we are done keeping capabilities
@@ -1066,6 +1082,10 @@ if (HAVE_PR_CAPBSET_DROP) {
 	// Done
 	m.state = CAPNG_UPDATED;
 	return 0;
+
+err_out:
+	prctl(PR_SET_KEEPCAPS, 0, 0, 0, 0);
+	return ret;
 }
 
 int capng_lock(void)
