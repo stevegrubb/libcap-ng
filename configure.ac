@@ -38,7 +38,7 @@ echo Configuring libcap-ng $VERSION
 
 AC_CANONICAL_TARGET
 AM_INIT_AUTOMAKE
-AM_PROG_LIBTOOL
+LT_INIT
 AC_SUBST(LIBTOOL_DEPS)
 
 echo .
@@ -50,7 +50,6 @@ AC_PROG_AWK
 
 echo .
 echo Checking for header files
-AC_HEADER_STDC
 AC_CHECK_HEADERS(linux/capability.h, [], [AC_MSG_ERROR(linux/capability.h is required in order to build libcap-ng.)])
 AC_CHECK_HEADERS(sys/xattr.h, [], [
 	AC_CHECK_HEADERS(attr/xattr.h, [], [AC_MSG_WARN(attr/xattr.h not found, disabling file system capabilities.)])
@@ -251,11 +250,12 @@ else
 fi
 AM_CONDITIONAL(USE_PYTHON3, test ${use_python3} = "yes")
 
-AC_OUTPUT(Makefile src/Makefile src/libcap-ng.pc src/test/Makefile 
+AC_CONFIG_FILES([Makefile src/Makefile src/libcap-ng.pc src/test/Makefile 
 	bindings/Makefile bindings/python/Makefile 
 	bindings/python3/Makefile bindings/src/Makefile 
 	bindings/python/test/Makefile utils/Makefile 
-	m4/Makefile docs/Makefile)
+	m4/Makefile docs/Makefile])
+AC_OUTPUT
 
 echo .
 echo "
