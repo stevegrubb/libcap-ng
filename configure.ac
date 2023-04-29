@@ -63,7 +63,7 @@ AC_CHECK_HEADERS(sys/vfs.h, [
 	], [AC_MSG_WARN(sys/vfs.h is required in order to verify procfs.)])
 
 AC_ARG_WITH([capability_header],
-        [AS_HELP_STRING([--with-capability_header=path : path to cpapbility.h])],
+        [AS_HELP_STRING([--with-capability_header=path : path to capability.h])],
         [CAPABILITY_HEADER=$withval],
         [CAPABILITY_HEADER=/usr/include/linux/capability.h])
 AC_SUBST(CAPABILITY_HEADER)
