@@ -76,7 +76,7 @@ int capng_change_id(int uid, int gid, capng_flags_t flag) __wur;
 
 // These functions are used for file based capabilities
 int capng_get_rootid(void);
-int capng_set_rootid(int rootid) __wur;
+int capng_set_rootid(int rootid);
 int capng_get_caps_fd(int fd) __wur;
 int capng_apply_caps_fd(int fd) __wur;
 
