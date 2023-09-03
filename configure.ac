@@ -98,18 +98,17 @@ fi
 ],
 [ DEBUG="-DNDEBUG"; AM_CONDITIONAL(DEBUG, false) ])
 
-AC_MSG_CHECKING(__attr_access support)
+AC_MSG_CHECKING(__attr_dealloc_free support)
 AC_COMPILE_IFELSE(
   [AC_LANG_SOURCE(
     [[
       #include <stdio.h>
-      int audit_fgets(char *buf, size_t blen, int fd)
-        __attr_access ((__write_only__, 1, 2));
+      extern char *test(const char *name) __attr_dealloc_free;
       int main(void) { return 0; }]])],
-  [ACCESS="yes"],
-  [ACCESS="no"]
+  [DEALLOC="yes"],
+  [DEALLOC="no"]
 )
-AC_MSG_RESULT($ACCESS)
+AC_MSG_RESULT($DEALLOC)
 
 AC_ARG_WITH(warn,
 [  --with-warn             turn on warnings [[default=yes]]],
@@ -266,5 +265,5 @@ echo "
   Compiler:               $CC
   Compiler flags:
 `echo $CFLAGS | fmt -w 50 | sed 's,^,                          ,'`
-  __attr_access support:  $ACCESS
+  __attr_dealloc_free support:  $DEALLOC
 "

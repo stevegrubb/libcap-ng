@@ -1,4 +1,4 @@
-.TH "CAPNG_APPLY" "3" "Sept 2020" "Red Hat" "Libcap-ng API"
+.TH "CAPNG_APPLY" "3" "Sept 2023" "Red Hat" "Libcap-ng API"
 .SH NAME
 capng_apply \- apply the stored capabilities settings
 .SH "SYNOPSIS"
@@ -30,6 +30,8 @@ This returns 0 on success and a negative value on failure. The values are:
 -7 CAPNG_SELECT_AMBIENT and process has capabilities and failed clearing ambient capabilities
 .TP
 -8 CAPNG_SELECT_AMBIENT and process has capabilities and failed setting an ambient capability
+.TP
+-9 Unable to acquire process capabilities to check if CAP_SETPCAP is set.
 .RE
 
 .SH NOTES
