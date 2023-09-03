@@ -641,6 +641,8 @@ int capng_get_caps_fd(int fd)
 	rc = load_data(&filedata, rc);
 	if (rc == 0)
 		m.state = CAPNG_INIT;
+	else
+		m.state = CAPNG_ERROR; // If load data failed, malformed data
 
 	return rc;
 #endif
