@@ -50,7 +50,7 @@ lets you set the file system based capabilities.
 %setup -q
 
 %build
-%configure --libdir=%{_libdir} --with-python=no --with-python3
+%configure --libdir=%{_libdir} --with-python3
 make CFLAGS="%{optflags}" %{?_smp_mflags}
 
 %install
