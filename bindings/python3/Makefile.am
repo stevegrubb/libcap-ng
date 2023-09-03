@@ -46,4 +46,5 @@ capng.h:
 	cat ${top_srcdir}/src/cap-ng.h | grep -v '_state' > capng.h
 
 CLEANFILES = capng.py* capng_wrap.c caps.h capng.h *~
-
+clean-local:
+	$(RM) -rf __pycache__
