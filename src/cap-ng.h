@@ -28,9 +28,15 @@
 #include <linux/capability.h>
 #include <unistd.h>
 
+// gcc-analyzer notation
 #ifndef __attr_dealloc
 # define __attr_dealloc(dealloc, argno)
 # define __attr_dealloc_free
+#endif
+
+// Warn unused results
+#ifndef __wur
+# define __wur
 #endif
 
 #ifdef __cplusplus
@@ -58,21 +64,21 @@ typedef enum {  CAPNG_NO_FLAG=0, CAPNG_DROP_SUPP_GRP=1,
 void capng_clear(capng_select_t set);
 void capng_fill(capng_select_t set);
 void capng_setpid(int pid);
-int capng_get_caps_process(void);
+int capng_get_caps_process(void) __wur;
 int capng_update(capng_act_t action, capng_type_t type,unsigned int capability);
 int capng_updatev(capng_act_t action, capng_type_t type,
 		unsigned int capability, ...);
 
 // These functions apply the capabilities previously setup to a process
-int capng_apply(capng_select_t set);
-int capng_lock(void);
-int capng_change_id(int uid, int gid, capng_flags_t flag);
+int capng_apply(capng_select_t set) __wur;
+int capng_lock(void) __wur;
+int capng_change_id(int uid, int gid, capng_flags_t flag) __wur;
 
 // These functions are used for file based capabilities
 int capng_get_rootid(void);
-int capng_set_rootid(int rootid);
-int capng_get_caps_fd(int fd);
-int capng_apply_caps_fd(int fd);
+int capng_set_rootid(int rootid) __wur;
+int capng_get_caps_fd(int fd) __wur;
+int capng_apply_caps_fd(int fd) __wur;
 
 // These functions check capability bits
 capng_results_t capng_have_capabilities(capng_select_t set);
