@@ -22,7 +22,7 @@ ppid  pid   acct       command          type port  capabilities
 
 C Examples
 ----------
-As an application developer, there are probabaly 6 use cases that you are
+As an application developer, there are probably 6 use cases that you are
 interested in: drop all capabilities, keep one capability, keep several
 capabilities, check if you have any capabilities at all, check for certain
 capabilities, and retain capabilities across a uid change.
