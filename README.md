@@ -101,6 +101,30 @@ Libcap-ng 0.6 and later has python bindings. You simply add import capng in your
 The one caveat is that printing capabilities from python does not work. But
 you can still manipulate capabilities, though.
 
+Ambient Capabilities
+--------------------
+Ambient capabilities arrived in the 4.3 Linux kernel. Ambient capabilities
+allow a privileged process to bestow capabilities to a child process. This
+is how systemd grants capabilities to a daemon running in a service account.
+The problem with ambient capabilities is they are inherited forever. Every
+process exec'ed from the original service also has the capabilities. This is
+a security issue.
+
+To find and fix this, you can run the pscap program and grep for '@'. The '@'
+symbol denotes processes that have ambient capabilities. For example:
+
+```
+# pscap | grep @
+1     1655  systemd-oom  systemd-oomd        dac_override, kill @ +
+1     1656  systemd-resolve  systemd-resolve     net_raw @ +
+
+```
+
+To fix this, libcap-ng 0.8.3 and later ships libdrop_ambient.so.0. It is
+designed to be used with LD_PRELOAD. It has a constructor function that forces
+the dropping of ambient capabilities. You can either link it to an application
+run as a systemd service (using ld), or create a wrapper script that then
+starts the daemon.
 
 NOTE: to distributions
 ----------------------
