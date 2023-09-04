@@ -5,7 +5,7 @@ The libcap-ng library should make programming with posix capabilities
 easier. The library has some utilities to help you analyse a system
 for apps that may have too much privileges.
 
-The included utilities are designed to let admins and developers spot apps from various ways that may be running with too much privilege. For example, any investigation should start with network facing apps since they would be prime targets for intrusion. The netcap program will check all running apps and display the results. Sample output from netcap:
+The included utilities are designed to let admins and developers spot apps from various ways that may be running with too much privilege. For example, any investigation should start with network facing apps since they would be prime targets for intrusion. The netcap program will check all running apps that have listening socket and display the results. Sample output from netcap:
 
 ```
 ppid  pid   acct       command          type port  capabilities
@@ -19,6 +19,17 @@ ppid  pid   acct       command          type port  capabilities
 2323  2383  root       dnsmasq          udp  67    net_admin, net_raw +
 1     2365  root       cupsd            udp  631   full
 ```
+After checking the networking apps, you should check all running apps with
+pscap. If you are a developer and have to give your application
+CAP_DAC_OVERRIDE, you must be accessing files for which you have no permission
+to access. This typically can be resolved by having membership in the correct
+groups. Try to avoid needing CAP_DAC_OVERRIDE...you may as well be root if you
+need it.
+
+Some application developers have chosen to use file system base capabilities
+rather than be setuid root and have to drop capabilities. Libcap-ng provides
+filecap to recursively search directories and show you which ones have
+capabilities and exactly what those are.
 
 C Examples
 ----------
@@ -46,7 +57,7 @@ capabilities, and retain capabilities across a uid change.
      if (capng_have_capabilities(CAPNG_SELECT_CAPS) > CAPNG_NONE)
          do_something();
 
-5) Check for certain capabilities
+5) Check for a specific capability
      if (capng_have_capability(CAPNG_EFFECTIVE, CAP_CHOWN))
          do_something();
 
@@ -87,7 +98,7 @@ Libcap-ng 0.6 and later has python bindings. (Only python3 is supported from 0.8
      if capng.capng_have_capabilities(capng.CAPNG_SELECT_CAPS) > capng.CAPNG_NONE:
          do_something()
 
-5) Check for certain capabilities
+5) Check for a specific capability
      if capng.capng_have_capability(capng.CAPNG_EFFECTIVE, capng.CAP_CHOWN):
          do_something()
 
