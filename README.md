@@ -66,7 +66,7 @@ surround the optional capabilities code with #ifdef HAVE_LIBCAP_NG.
 
 Python
 ------
-Libcap-ng 0.6 and later has python bindings. You simply add import capng in your script.  Here are the same examples as above in python:
+Libcap-ng 0.6 and later has python bindings. (Only python3 is supported from 0.8.4 onward.) You simply add 'import capng' in your script.  Here are the same examples as above in python:
 
 ```
 1) Drop all capabilities
@@ -122,19 +122,23 @@ symbol denotes processes that have ambient capabilities. For example:
 
 To fix this, libcap-ng 0.8.3 and later ships libdrop_ambient.so.0. It is
 designed to be used with LD_PRELOAD. It has a constructor function that forces
-the dropping of ambient capabilities. You can either link it to an application
-run as a systemd service (using ld), or create a wrapper script that then
-starts the daemon.
+the dropping of ambient capabilities. By the time the application starts, it
+has both effective and ambient capabilities - meaning is safe to drop ambient
+capabilities very early. You can either link it to an application run as a
+systemd service (using ld), or create a wrapper script that then starts the
+daemon.
 
 NOTE: to distributions
 ----------------------
-There is a "make check" target. It only works if the headers match the kernel.
-IOW, if you have a chroot build system that is using a much older kernel,
-the macros in the kernel header files will do the wrong thing when the
-capng_init function probes the kernel and decides we are doing v1 rather
-than v3 protocol. If that is your case, just don't do the "make check" as
-part of the build process.
-
+There is a "make check" target. It only works if the available kernel headers
+roughly match the build root kernel. Iow, if you have a chroot build system
+that is using a much older kernel, the macros in the kernel header files will
+describe functionality that does not exist in the build root. The capng_init
+function will probe the kernel and decide we can only do v1 rather than v3
+capabilities instead of what the kernel headers said was possible. If that is
+your case, just don't do the "make check" as part of the build process. This
+problem should go away as build roots eventually switch to the 5.0 or later
+kernels.
 
 Reporting
 ---------
