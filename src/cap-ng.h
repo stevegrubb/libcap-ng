@@ -28,13 +28,14 @@
 #include <linux/capability.h>
 #include <unistd.h>
 
+// The next 2 macros originate in sys/cdefs.h
 // gcc-analyzer notation
 #ifndef __attr_dealloc
 # define __attr_dealloc(dealloc, argno)
 # define __attr_dealloc_free
 #endif
 
-// Warn unused results
+// Warn unused result
 #ifndef __wur
 # define __wur
 #endif
