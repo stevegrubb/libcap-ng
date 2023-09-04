@@ -194,7 +194,7 @@ int main(int argc, char *argv[])
 
 			if (header == 0) {
 				printf("%-5s %-5s %-10s  %-18s  %s\n",
-				    "ppid", "pid", "name", "command",
+				    "ppid", "pid", "uid", "command",
 				    "capabilities");
 				header = 1;
 			}
