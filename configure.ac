@@ -216,6 +216,8 @@ echo "
   Installation prefix:    $prefix
   Compiler:               $CC
   Compiler flags:
+  PYTHON3_PREFIX:         $PYTHON3_PREFIX
+  PYTHON3_EXECDIR:        $PYTHON3_EXECDIR
 `echo $CFLAGS | fmt -w 50 | sed 's,^,                          ,'`
   __attr_dealloc_free support:  $DEALLOC
 "
