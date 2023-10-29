@@ -1,7 +1,7 @@
 libcap-ng
 =========
 
-The libcap-ng library should make programming with posix capabilities
+The libcap-ng library should make programming with POSIX capabilities
 easier. The library has some utilities to help you analyse a system
 for apps that may have too much privileges.
 
