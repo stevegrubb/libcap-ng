@@ -38,35 +38,45 @@ interested in: drop all capabilities, keep one capability, keep several
 capabilities, check if you have any capabilities at all, check for certain
 capabilities, and retain capabilities across a uid change.
 
-```
 1) Drop all capabilities
-     capng_clear(CAPNG_SELECT_BOTH);
-     capng_apply(CAPNG_SELECT_BOTH);
+   ```c
+   capng_clear(CAPNG_SELECT_BOTH);
+   capng_apply(CAPNG_SELECT_BOTH);
+   ```
 
 2) Keep one capability
-     capng_clear(CAPNG_SELECT_BOTH);
-     capng_update(CAPNG_ADD, CAPNG_EFFECTIVE|CAPNG_PERMITTED, CAP_CHOWN);
-     capng_apply(CAPNG_SELECT_BOTH);
+   ```c
+   capng_clear(CAPNG_SELECT_BOTH);
+   capng_update(CAPNG_ADD, CAPNG_EFFECTIVE|CAPNG_PERMITTED, CAP_CHOWN);
+   capng_apply(CAPNG_SELECT_BOTH);
+   ```
 
 3) Keep several capabilities
-     capng_clear(CAPNG_SELECT_BOTH);
-     capng_updatev(CAPNG_ADD, CAPNG_EFFECTIVE|CAPNG_PERMITTED, CAP_SETUID, CAP_SETGID, -1);
-     capng_apply(CAPNG_SELECT_BOTH);
+   ```c
+   capng_clear(CAPNG_SELECT_BOTH);
+   capng_updatev(CAPNG_ADD, CAPNG_EFFECTIVE|CAPNG_PERMITTED, CAP_SETUID, CAP_SETGID, -1);
+   capng_apply(CAPNG_SELECT_BOTH);
+   ```
 
 4) Check if you have any capabilities
-     if (capng_have_capabilities(CAPNG_SELECT_CAPS) > CAPNG_NONE)
-         do_something();
+   ```c
+   if (capng_have_capabilities(CAPNG_SELECT_CAPS) > CAPNG_NONE)
+       do_something();
+   ```
 
 5) Check for a specific capability
-     if (capng_have_capability(CAPNG_EFFECTIVE, CAP_CHOWN))
-         do_something();
+   ```c
+   if (capng_have_capability(CAPNG_EFFECTIVE, CAP_CHOWN))
+       do_something();
+   ```
 
 6) Retain capabilities across a uid change
-     capng_clear(CAPNG_SELECT_BOTH);
-     capng_update(CAPNG_ADD, CAPNG_EFFECTIVE|CAPNG_PERMITTED, CAP_CHOWN);
-     if (capng_change_id(99, 99, CAPNG_DROP_SUPP_GRP | CAPNG_CLEAR_BOUNDING))
-         error();
-```
+   ```c
+   capng_clear(CAPNG_SELECT_BOTH);
+   capng_update(CAPNG_ADD, CAPNG_EFFECTIVE|CAPNG_PERMITTED, CAP_CHOWN);
+   if (capng_change_id(99, 99, CAPNG_DROP_SUPP_GRP | CAPNG_CLEAR_BOUNDING))
+       error();
+   ```
 
 Now, isn't that a lot simpler? Note that the last example takes about 60 lines
 of code using the older capabilities library. As of the 0.6 release, there is
@@ -79,35 +89,45 @@ Python
 ------
 Libcap-ng 0.6 and later has python bindings. (Only python3 is supported from 0.8.4 onward.) You simply add 'import capng' in your script.  Here are the same examples as above in python:
 
-```
 1) Drop all capabilities
-     capng.capng_clear(capng.CAPNG_SELECT_BOTH)
-     capng.capng_apply(capng.CAPNG_SELECT_BOTH)
+   ```python
+   capng.capng_clear(capng.CAPNG_SELECT_BOTH)
+   capng.capng_apply(capng.CAPNG_SELECT_BOTH)
+   ```
 
 2) Keep one capability
-     capng.capng_clear(capng.CAPNG_SELECT_BOTH)
-     capng.capng_update(capng.CAPNG_ADD, capng.CAPNG_EFFECTIVE|capng.CAPNG_PERMITTED, capng.CAP_CHOWN)
-     capng.capng_apply(capng.CAPNG_SELECT_BOTH)
+   ```python
+   capng.capng_clear(capng.CAPNG_SELECT_BOTH)
+   capng.capng_update(capng.CAPNG_ADD, capng.CAPNG_EFFECTIVE|capng.CAPNG_PERMITTED, capng.CAP_CHOWN)
+   capng.capng_apply(capng.CAPNG_SELECT_BOTH)
+   ```
 
 3) Keep several capabilities
-     capng.capng_clear(capng.CAPNG_SELECT_BOTH)
-     capng.capng_updatev(capng.CAPNG_ADD, capng.CAPNG_EFFECTIVE|capng.CAPNG_PERMITTED, capng.CAP_SETUID, capng.CAP_SETGID, -1)
-     capng.capng_apply(capng.CAPNG_SELECT_BOTH)
+   ```python
+   capng.capng_clear(capng.CAPNG_SELECT_BOTH)
+   capng.capng_updatev(capng.CAPNG_ADD, capng.CAPNG_EFFECTIVE|capng.CAPNG_PERMITTED, capng.CAP_SETUID, capng.CAP_SETGID, -1)
+   capng.capng_apply(capng.CAPNG_SELECT_BOTH)
+   ```
 
 4) Check if you have any capabilities
-     if capng.capng_have_capabilities(capng.CAPNG_SELECT_CAPS) > capng.CAPNG_NONE:
-         do_something()
+   ```python
+   if capng.capng_have_capabilities(capng.CAPNG_SELECT_CAPS) > capng.CAPNG_NONE:
+       do_something()
+   ```
 
 5) Check for a specific capability
-     if capng.capng_have_capability(capng.CAPNG_EFFECTIVE, capng.CAP_CHOWN):
-         do_something()
+   ```python
+   if capng.capng_have_capability(capng.CAPNG_EFFECTIVE, capng.CAP_CHOWN):
+       do_something()
+   ```
 
 6) Retain capabilities across a uid change
-     capng.capng_clear(capng.CAPNG_SELECT_BOTH)
-     capng.capng_update(capng.CAPNG_ADD, capng.CAPNG_EFFECTIVE|capng.CAPNG_PERMITTED, capng.CAP_CHOWN)
-     if capng.capng_change_id(99, 99, capng.CAPNG_DROP_SUPP_GRP | capng.CAPNG_CLEAR_BOUNDING) < 0:
-         error()
-```
+   ```python
+   capng.capng_clear(capng.CAPNG_SELECT_BOTH)
+   capng.capng_update(capng.CAPNG_ADD, capng.CAPNG_EFFECTIVE|capng.CAPNG_PERMITTED, capng.CAP_CHOWN)
+   if capng.capng_change_id(99, 99, capng.CAPNG_DROP_SUPP_GRP | capng.CAPNG_CLEAR_BOUNDING) < 0:
+       error()
+   ```
 
 The one caveat is that printing capabilities from python does not work. But
 you can still manipulate capabilities, though.
