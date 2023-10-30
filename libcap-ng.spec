@@ -1,4 +1,4 @@
-Summary: An alternate posix capabilities library
+Summary: An alternate POSIX capabilities library
 Name: libcap-ng
 Version: 0.8.4
 Release: 1%{?dist}
@@ -11,7 +11,7 @@ BuildRequires: kernel-headers >= 2.6.11
 BuildRequires: libattr-devel
 
 %description
-Libcap-ng is a library that makes using posix capabilities easier
+Libcap-ng is a library that makes using POSIX capabilities easier
 
 %package devel
 Summary: Header files for libcap-ng library
@@ -43,7 +43,7 @@ Group: Development/Libraries
 
 %description utils
 The libcap-ng-utils package contains applications to analyze the
-posix capabilities of all the program running on a system. It also
+POSIX capabilities of all the program running on a system. It also
 lets you set the file system based capabilities.
 
 %prep
