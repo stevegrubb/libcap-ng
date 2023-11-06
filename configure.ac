@@ -214,10 +214,9 @@ echo "
   libcap-ng Version:      $VERSION
   Target:                 $target
   Installation prefix:    $prefix
+  PYTHON3_PREFIX:         $PYTHON3_PREFIX
   Compiler:               $CC
   Compiler flags:
-  PYTHON3_PREFIX:         $PYTHON3_PREFIX
-  PYTHON3_EXECDIR:        $PYTHON3_EXECDIR
 `echo $CFLAGS | fmt -w 50 | sed 's,^,                          ,'`
   __attr_dealloc_free support:  $DEALLOC
 "
