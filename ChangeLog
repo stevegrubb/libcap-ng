@@ -1,3 +1,5 @@
+0.8.5
+
 0.8.4
 - In capng_change_id, clear PR_SET_KEEPCAPS if returning an error
 - pscap: add -p option for reporting a specified process (Masatake Yamato)
