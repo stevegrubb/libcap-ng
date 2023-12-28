@@ -159,6 +159,21 @@ capabilities very early. You can either link it to an application run as a
 systemd service (using ld), or create a wrapper script that then starts the
 daemon.
 
+Building
+--------
+
+After cloning libcap-ng, run:
+
+```
+cd libcap-ng
+./autogen.sh
+./configure
+make
+make install
+```
+
+If you want python bindings, add that option to the configure command. There is also a spec file to use if you are on a rpm based distribution. To do that, run "make dist" instead of make in the above instructions. Then use the resulting tar file with the spec file.
+
 NOTE: to distributions
 ----------------------
 There is a "make check" target. It only works if the available kernel headers
