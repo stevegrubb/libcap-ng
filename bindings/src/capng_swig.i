@@ -30,13 +30,6 @@
 
 %varargs(16, signed capability = 0) capng_updatev;
 
-%except(python) {
-  $action
-  if (result < 0) {
-    PyErr_SetFromErrno(PyExc_OSError);
-    return NULL;
-  }
-}
 #endif
 
 %define __signed__

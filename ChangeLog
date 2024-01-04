@@ -1,4 +1,5 @@
 0.8.5
+- Remove python global exception handler since it's deprecated
 
 0.8.4
 - In capng_change_id, clear PR_SET_KEEPCAPS if returning an error
