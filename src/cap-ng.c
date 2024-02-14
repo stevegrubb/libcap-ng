@@ -49,6 +49,9 @@
 #include <sys/vfs.h>
 #include <linux/magic.h>
 #endif
+#ifdef HAVE_UNISTD_H
+#include <unistd.h>
+#endif
 
 # define hidden __attribute__ ((visibility ("hidden")))
 unsigned int last_cap hidden = 0;
