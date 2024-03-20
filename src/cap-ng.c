@@ -445,7 +445,7 @@ static int get_bounding_set(void)
 #ifdef HAVE_SYSCALL_H
 		(int)syscall(__NR_gettid));
 #else
-		(int)getpid();
+		(int)getpid());
 #endif
 	f = fopen(buf, "re");
 	if (f) {
@@ -490,7 +490,7 @@ static int get_ambient_set(void)
 #ifdef HAVE_SYSCALL_H
 		(int)syscall(__NR_gettid));
 #else
-		(int)getpid();
+		(int)getpid());
 #endif
 	f = fopen(buf, "re");
 	if (f) {
