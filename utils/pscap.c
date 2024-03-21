@@ -75,6 +75,7 @@ static bool in_child_userns(int pid)
 
 int main(int argc, char *argv[])
 {
+	char *endptr = NULL;
 	DIR *d;
 	struct dirent *ent;
 	int header = 0, show_all = 0, caps;
@@ -94,9 +95,13 @@ int main(int argc, char *argv[])
 	else if (argc == 3) {
 		if (strcmp(argv[1], "-p") == 0) {
 			errno = 0;
-			target_pid = strtol(argv[2], NULL, 10);
+			target_pid = strtol(argv[2], &endptr, 10);
 			if (errno) {
 				fprintf(stderr, "Can't read pid: %s\n", argv[2]);
+				return 1;
+			}
+			if ((endptr == argv[2]) || (*endptr != '\0') || !target_pid) {
+				fprintf(stderr, "Invalid pid argument: %s\n", argv[2]);
 				return 1;
 			}
 			if (target_pid == 1)
