@@ -1,6 +1,6 @@
 Summary: An alternate POSIX capabilities library
 Name: libcap-ng
-Version: 0.8.5
+Version: 0.8.6
 Release: 1%{?dist}
 License: LGPLv2+
 Group: System Environment/Libraries
@@ -96,6 +96,6 @@ make check
 %attr(0644,root,root) %{_mandir}/man8/*
 
 %changelog
-* Tue Apr 09 2024 Steve Grubb <sgrubb@redhat.com> 0.8.5-1
+* Tue Apr 09 2024 Steve Grubb <sgrubb@redhat.com> 0.8.6-1
 - New upstream release
 

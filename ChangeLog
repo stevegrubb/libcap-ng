@@ -1,3 +1,5 @@
+0.8.6
+
 0.8.5
 - Remove python global exception handler since it's deprecated
 - Make the utilities link against just built libraries
