@@ -30,8 +30,7 @@
 
 // The next 2 macros originate in sys/cdefs.h
 // gcc-analyzer notation
-#ifndef __attr_dealloc
-# define __attr_dealloc(dealloc, argno)
+#ifndef __attr_dealloc_free
 # define __attr_dealloc_free
 #endif
 
