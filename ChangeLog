@@ -1,5 +1,7 @@
 0.8.5
 - Remove python global exception handler since it's deprecated
+- Make the utilities link against just built libraries
+- Remove unused macro in cap-ng.h
 
 0.8.4
 - In capng_change_id, clear PR_SET_KEEPCAPS if returning an error
