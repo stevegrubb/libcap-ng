@@ -109,9 +109,15 @@ static int collect_process_info(void)
 				fprintf(stderr, "Out of memory\n");
 				continue;
 			}
-		} else
+		} else {
 			text = capng_print_caps_text(CAPNG_PRINT_BUFFER,
 					CAPNG_PERMITTED);
+			if (text == NULL) {
+				fprintf(stderr, "Out of memory doing pid %d\n",
+					pid);
+				continue;
+			}
+		}
 
 		// Get the effective uid
 		snprintf(buf, 32, "/proc/%d/status", pid);
