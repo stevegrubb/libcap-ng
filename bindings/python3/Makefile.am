@@ -27,7 +27,6 @@ AM_CPPFLAGS = -I. -I$(top_builddir) $(PYTHON3_INCLUDES)
 LIBS = ${top_builddir}/src/libcap-ng.la
 SWIG_FLAGS = -python
 SWIG_INCLUDES = ${AM_CPPFLAGS}
-PYTHON = $(PYTHON3)
 pyexec_PYTHON = capng.py
 pyexec_LTLIBRARIES = _capng.la
 pyexec_SOLIBRARIES = _capng.so
