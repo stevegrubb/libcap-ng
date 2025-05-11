@@ -89,6 +89,9 @@ static inline int capng_lookup_name(const char *name)
 
 static inline const char *capng_lookup_number(unsigned int number)
 {
+	if (number >= CAP_NG_CAPABILITY_NAMES)
+		return NULL;
+
 	if (captab[number].value == number)
 		return captab_msgstr.str + captab[number].offset;
 
