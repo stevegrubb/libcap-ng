@@ -79,9 +79,8 @@ static const struct transtab captab[] = {
 
 static inline int capng_lookup_name(const char *name)
 {
-	size_t i;
-
-	for (i = 0; i < CAP_NG_CAPABILITY_NAMES; i++) {
+	// brute force search
+	for (size_t i = 0; i < CAP_NG_CAPABILITY_NAMES; i++) {
 		if (!strcasecmp(captab_msgstr.str + captab[i].offset, name))
 			return captab[i].value;
 	}
@@ -90,9 +89,11 @@ static inline int capng_lookup_name(const char *name)
 
 static inline const char *capng_lookup_number(unsigned int number)
 {
-	size_t i;
+	if (captab[number].value == number)
+		return captab_msgstr.str + captab[number].offset;
 
-	for (i = 0; i < CAP_NG_CAPABILITY_NAMES; i++) {
+	// Fallback to old search in case a capability is retired
+	for (size_t i = 0; i < CAP_NG_CAPABILITY_NAMES; i++) {
 		if (captab[i].value == number)
 			return captab_msgstr.str + captab[i].offset;
 	}
