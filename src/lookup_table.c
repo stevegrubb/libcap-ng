@@ -26,7 +26,6 @@
 #include <linux/capability.h>
 #include <strings.h>
 #include <stdio.h>
-#include <stdlib.h>  // free
 
 
 #pragma GCC optimize("O3")
@@ -108,7 +107,7 @@ int capng_name_to_capability(const char *name)
 	return capng_lookup_name(name);
 }
 
-static char *ptr2 = NULL;
+static char ptr2[32];
 const char *capng_capability_to_name(unsigned int capability)
 {
 	const char *ptr;
@@ -118,11 +117,8 @@ const char *capng_capability_to_name(unsigned int capability)
 
 	ptr = capng_lookup_number(capability);
 	if (ptr == NULL) { // This leaks memory, but should almost never be used
-		free(ptr2);
-		if (asprintf(&ptr2, "cap_%u", capability) < 0)
-			ptr = NULL;
-		else
-			ptr = ptr2;
+		snprintf(ptr2, sizeof(ptr2), "cap_%u", capability);
+		ptr = ptr2;
 	}
 	return ptr;
 }
