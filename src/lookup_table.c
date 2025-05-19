@@ -116,7 +116,7 @@ const char *capng_capability_to_name(unsigned int capability)
 		return NULL;
 
 	ptr = capng_lookup_number(capability);
-	if (ptr == NULL) { // This leaks memory, but should almost never be used
+	if (ptr == NULL) {
 		snprintf(ptr2, sizeof(ptr2), "cap_%u", capability);
 		ptr = ptr2;
 	}
