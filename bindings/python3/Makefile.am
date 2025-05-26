@@ -29,7 +29,6 @@ SWIG_FLAGS = -python
 SWIG_INCLUDES = ${AM_CPPFLAGS}
 pyexec_PYTHON = capng.py
 pyexec_LTLIBRARIES = _capng.la
-pyexec_SOLIBRARIES = _capng.so
 _capng_la_CFLAGS = -shared
 _capng_la_LDFLAGS = -module -avoid-version -Wl,-z,relro
 _capng_la_HEADERS: $(top_builddir)/config.h 
