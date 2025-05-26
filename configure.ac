@@ -205,7 +205,6 @@ echo "
   libcap-ng Version:      $VERSION
   Target:                 $target
   Installation prefix:    $prefix
-  PYTHON_PREFIX:          $PYTHON_PREFIX
   Compiler:               $CC
   Compiler flags:
 `echo $CFLAGS | fmt -w 50 | sed 's,^,                          ,'`
