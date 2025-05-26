@@ -194,8 +194,8 @@ AM_CONDITIONAL(USE_PYTHON3, test ${use_python3} = "yes")
 
 AC_CONFIG_FILES([Makefile src/Makefile src/libcap-ng.pc src/test/Makefile 
 	bindings/Makefile
-	bindings/python3/Makefile bindings/src/Makefile 
-	bindings/python3/test/Makefile utils/Makefile
+        bindings/python3/Makefile bindings/src/Makefile
+        bindings/python3/test/Makefile bindings/test/Makefile utils/Makefile
 	m4/Makefile docs/Makefile])
 AC_OUTPUT
 
