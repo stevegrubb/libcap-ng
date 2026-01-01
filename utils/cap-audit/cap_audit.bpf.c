@@ -23,6 +23,18 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
 
+/*
+ * BPF overview:
+ * The BPF side attaches to capability helpers (cap_capable, ns_capable,
+ * capable) and syscall tracepoints to capture capability checks only for a
+ * target process tree. A PID hash map gates all work; if the PID is not in
+ * target_pids the probes exit immediately. For traced tasks the program builds
+ * cap_event records with task identity, syscall context, namespace inode, and
+ * stack id, tracks per-capability statistics, and streams finalized events to
+ * userspace through a ring buffer. Fork/exit tracepoints keep the PID filter
+ * in sync so children are traced and exits are pruned.
+ */
+
 #ifndef PERF_MAX_STACK_DEPTH
 #define PERF_MAX_STACK_DEPTH 127
 #endif
@@ -114,6 +126,13 @@ struct {
 	__uint(max_entries, 4096);
 } current_syscalls SEC(".maps");
 
+/*
+ * should_trace_pid - check if the current PID is in the target set.
+ * @pid: process ID of the current task.
+ *
+ * Looks up the PID in target_pids and returns 1 when tracing is enabled for
+ * it, otherwise 0.
+ */
 static __always_inline int should_trace_pid(__u32 pid)
 {
 	__u8 *trace;
@@ -122,6 +141,13 @@ static __always_inline int should_trace_pid(__u32 pid)
 	return trace ? 1 : 0;
 }
 
+/*
+ * record_stats - increment capability check count.
+ * @cap: capability number.
+ *
+ * Increments the "checks" counter for the capability in capability_stats.
+ * Out-of-range capability numbers are ignored. Returns nothing.
+ */
 static __always_inline void record_stats(int cap)
 {
 	__u32 key;
@@ -143,6 +169,14 @@ static __always_inline void record_stats(int cap)
 	}
 }
 
+/*
+ * update_result_stats - record whether a capability check succeeded.
+ * @cap: capability number from the in-flight event.
+ * @ret: return value from the capability helper (0 = granted).
+ *
+ * Updates the granted/denied counters for the capability when a matching
+ * entry already exists. Out-of-range capability numbers are ignored.
+ */
 static __always_inline void update_result_stats(int cap, int ret)
 {
 	__u32 key;
@@ -162,6 +196,14 @@ static __always_inline void update_result_stats(int cap, int ret)
 		__sync_fetch_and_add(&stats->denied, 1);
 }
 
+/*
+ * read_syscall - fetch the syscall number for the current task.
+ * @ctx: pt_regs provided by the kprobe.
+ *
+ * Uses a per-thread map populated by sys_enter tracepoints when available,
+ * and falls back to architecture-specific pt_regs fields. Returns the syscall
+ * number or -1 when it cannot be determined.
+ */
 static __always_inline int read_syscall(struct pt_regs *ctx)
 {
 	__u64 pid_tgid;
@@ -185,6 +227,15 @@ static __always_inline int read_syscall(struct pt_regs *ctx)
 #endif
 }
 
+/*
+ * fill_event_common - populate the static fields of a cap_event.
+ * @ev: event structure to fill.
+ * @ctx: pt_regs from the capability hook.
+ * @cap: capability number being checked.
+ *
+ * Captures PID/TID, timestamp, UID/GID, command name, syscall number, and
+ * user stack id for the current task.
+ */
 static __always_inline void fill_event_common(struct cap_event *ev,
 					      struct pt_regs *ctx, int cap)
 {
@@ -207,6 +258,13 @@ static __always_inline void fill_event_common(struct cap_event *ev,
 				       BPF_F_USER_STACK);
 }
 
+/*
+ * stash_event - store a partially filled event until the kretprobe fires.
+ * @ev: event to stash.
+ *
+ * Keeps the event keyed by pid_tgid in cap_events_inflight so the return
+ * probe can finalize result status before emitting to userspace.
+ */
 static __always_inline void stash_event(struct cap_event *ev)
 {
 	__u64 pid_tgid;
@@ -216,6 +274,14 @@ static __always_inline void stash_event(struct cap_event *ev)
 			    BPF_ANY);
 }
 
+/*
+ * submit_event - finalize and emit a stashed event to the ring buffer.
+ * @ret: return code from the capability helper (0 = granted).
+ *
+ * Looks up the in-flight event, copies it to the ring buffer, sets the result
+ * flag (1 = granted, 0 = denied), and removes the temporary entry. Returns 0
+ * whether or not an event was emitted.
+ */
 static __always_inline int submit_event(int ret)
 {
 	__u64 pid_tgid;
@@ -241,6 +307,17 @@ cleanup:
 	return 0;
 }
 
+/*
+ * handle_capable - common logic for capability helper entry probes.
+ * @ctx: pt_regs for the probed function.
+ * @cap: capability number under evaluation.
+ * @targ_ns: optional target namespace pointer (may be NULL).
+ *
+ * Filters by PID first; for traced tasks it records a stats increment,
+ * populates a cap_event with contextual information, and stashes it so the
+ * return probe can attach the result. Returns 0 to indicate the kprobe should
+ * allow normal execution to continue.
+ */
 static __always_inline int handle_capable(struct pt_regs *ctx, int cap,
 					  struct user_namespace *targ_ns)
 {
@@ -251,7 +328,9 @@ static __always_inline int handle_capable(struct pt_regs *ctx, int cap,
 	if (!should_trace_pid(pid))
 		return 0;
 
+	/* Track how many times this capability was inspected. */
 	record_stats(cap);
+	/* Collect task identity, syscall, and stack trace information. */
 	fill_event_common(&ev, ctx, cap);
 
 	if (targ_ns) {
@@ -261,10 +340,17 @@ static __always_inline int handle_capable(struct pt_regs *ctx, int cap,
 		ev.targ_ns_inum = BPF_CORE_READ(ns, inum);
 	}
 
+	/* Save event so the kretprobe can add the success/failure result. */
 	stash_event(&ev);
 	return 0;
 }
 
+/*
+ * trace_cap_capable - entry probe for cap_capable().
+ *
+ * Delegates to handle_capable(). Arguments mirror the kernel helper but are
+ * unused here beyond the capability number and namespace pointer. Returns 0.
+ */
 SEC("kprobe/cap_capable")
 int BPF_KPROBE(trace_cap_capable, const struct cred *cred,
 	       struct user_namespace *targ_ns, int cap, unsigned int opts)
@@ -272,6 +358,13 @@ int BPF_KPROBE(trace_cap_capable, const struct cred *cred,
 	return handle_capable(ctx, cap, targ_ns);
 }
 
+/*
+ * trace_cap_capable_ret - return probe for cap_capable().
+ * @ret: kernel return value (0 = granted).
+ *
+ * Updates result statistics for the capability tied to this pid_tgid and
+ * emits the finalized event to userspace. Always returns 0.
+ */
 SEC("kretprobe/cap_capable")
 int BPF_KRETPROBE(trace_cap_capable_ret, int ret)
 {
@@ -286,42 +379,84 @@ int BPF_KRETPROBE(trace_cap_capable_ret, int ret)
 	return submit_event(ret);
 }
 
+/*
+ * trace_ns_capable - entry probe for ns_capable().
+ *
+ * Uses handle_capable() to capture namespace-aware capability checks. Returns
+ * 0.
+ */
 SEC("kprobe/ns_capable")
 int BPF_KPROBE(trace_ns_capable, struct user_namespace *ns, int cap)
 {
 	return handle_capable(ctx, cap, ns);
 }
 
+/*
+ * trace_ns_capable_ret - return probe for ns_capable().
+ * @ret: kernel return value.
+ *
+ * Emits the stored event with the grant/deny result. Returns 0.
+ */
 SEC("kretprobe/ns_capable")
 int BPF_KRETPROBE(trace_ns_capable_ret, int ret)
 {
 	return submit_event(ret);
 }
 
+/*
+ * trace_ns_capable_noaudit - entry probe for ns_capable_noaudit().
+ *
+ * Captures capability checks that bypass kernel audit logging but should be
+ * observed by the auditor. Returns 0.
+ */
 SEC("kprobe/ns_capable_noaudit")
 int BPF_KPROBE(trace_ns_capable_noaudit, struct user_namespace *ns, int cap)
 {
 	return handle_capable(ctx, cap, ns);
 }
 
+/*
+ * trace_ns_capable_noaudit_ret - return probe for ns_capable_noaudit().
+ * @ret: kernel return value.
+ *
+ * Finalizes and emits the stored event. Returns 0.
+ */
 SEC("kretprobe/ns_capable_noaudit")
 int BPF_KRETPROBE(trace_ns_capable_noaudit_ret, int ret)
 {
 	return submit_event(ret);
 }
 
+/*
+ * trace_capable - entry probe for capable().
+ *
+ * Handles capability checks that do not involve namespaces. Returns 0.
+ */
 SEC("kprobe/capable")
 int BPF_KPROBE(trace_capable, int cap)
 {
 	return handle_capable(ctx, cap, NULL);
 }
 
+/*
+ * trace_capable_ret - return probe for capable().
+ * @ret: kernel return value.
+ *
+ * Emits the stored capability event. Returns 0.
+ */
 SEC("kretprobe/capable")
 int BPF_KRETPROBE(trace_capable_ret, int ret)
 {
 	return submit_event(ret);
 }
 
+/*
+ * trace_sys_enter - remember syscall numbers on entry.
+ * @ctx: raw_syscalls/sys_enter tracepoint context.
+ *
+ * Stores the syscall number in a per-thread map for later lookup by the
+ * capability probes. No-op for non-traced PIDs. Returns 0.
+ */
 SEC("tracepoint/raw_syscalls/sys_enter")
 int trace_sys_enter(struct trace_event_raw_sys_enter *ctx)
 {
@@ -339,6 +474,12 @@ int trace_sys_enter(struct trace_event_raw_sys_enter *ctx)
 	return 0;
 }
 
+/*
+ * trace_sys_exit - clear syscall tracking on exit.
+ * @ctx: raw_syscalls/sys_exit tracepoint context.
+ *
+ * Removes the stored syscall number for the thread when tracing. Returns 0.
+ */
 SEC("tracepoint/raw_syscalls/sys_exit")
 int trace_sys_exit(struct trace_event_raw_sys_exit *ctx)
 {
@@ -354,6 +495,13 @@ int trace_sys_exit(struct trace_event_raw_sys_exit *ctx)
 	return 0;
 }
 
+/*
+ * trace_sched_process_fork - follow new child processes.
+ * @ctx: sched_process_fork tracepoint data.
+ *
+ * When a traced parent forks, automatically add the child PID to the filter
+ * map so subsequent capability checks are captured. Returns 0.
+ */
 SEC("tracepoint/sched/sched_process_fork")
 int trace_sched_process_fork(struct trace_event_raw_sched_process_fork *ctx)
 {
@@ -370,6 +518,13 @@ int trace_sched_process_fork(struct trace_event_raw_sched_process_fork *ctx)
 	return 0;
 }
 
+/*
+ * trace_sched_process_exit - prune exited processes from the target set.
+ * @ctx: sched_process_exit tracepoint data.
+ *
+ * Removes the exiting PID from the target_pids map to prevent stale entries.
+ * Returns 0.
+ */
 SEC("tracepoint/sched/sched_process_exit")
 int trace_sched_process_exit(struct trace_event_raw_sched_process_template *ctx)
 {

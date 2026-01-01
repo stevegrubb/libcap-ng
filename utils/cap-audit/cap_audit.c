@@ -37,6 +37,22 @@
 #include "cap-ng.h"
 #include "cap_audit.skel.h"
 
+/*
+ * Overview:
+ * cap-audit launches a target application, traces only that process tree
+ * using eBPF hooks, and reports which Linux capabilities were actually
+ * exercised. The userspace side performs three major jobs: (1) prepare the
+ * runtime environment by checking our own capabilities and raising rlimits;
+ * (2) coordinate with the eBPF program by registering the target PID before
+ * exec() and consuming capability check events from the ring buffer; and
+ * (3) analyze the collected data to present required, conditional, and denied
+ * capabilities in human and machine-readable formats. PID filtering is key:
+ * the parent registers the child PID immediately after fork(), while the BPF
+ * program follows forks and exits to keep the target set precise. Each event
+ * includes the capability, syscall context, namespace info, and result, which
+ * are aggregated into per-capability statistics and summarized for the user.
+ */
+
 typedef enum { UNSUPPORTED, ELF, PYTHON } type_t;
 #define ELFMAG "\177ELF"
 
@@ -93,14 +109,27 @@ struct audit_state {
 static struct audit_state state;
 static int audit_machine = -1;
 
+/*
+ * sig_handler - handle termination signals.
+ * @sig: signal number (unused).
+ *
+ * Sets the global stop flag so the main loop can exit cleanly. Returns
+ * nothing.
+ */
 static void sig_handler(int sig)
 {
 	(void)sig;
 
+	// Signal just toggles stop flag; main loop polls this.
 	state.stop = 1;
 }
 
-/* Raise memlock rlimit for BPF loading */
+/*
+ * set_memlock_rlimit - raise RLIMIT_MEMLOCK for BPF object loading.
+ *
+ * Returns 0 on success or -1 if the limit cannot be raised. Errors are
+ * reported to stderr with a hint about missing privileges.
+ */
 static int set_memlock_rlimit(void)
 {
 	struct rlimit rlim_new = {
@@ -118,6 +147,12 @@ static int set_memlock_rlimit(void)
 	return 0;
 }
 
+/*
+ * init_capng - initialize libcap-ng state for the auditor.
+ *
+ * Clears cached capability information and refreshes it from the current
+ * process. Returns 0 on success, -1 on failure.
+ */
 int init_capng(void)
 {
 	capng_clear(CAPNG_SELECT_BOTH);
@@ -130,6 +165,13 @@ int init_capng(void)
 	return 0;
 }
 
+/*
+ * check_audit_caps - verify the auditor has the capabilities it needs.
+ *
+ * Ensures CAP_BPF/CAP_SYS_ADMIN and CAP_PERFMON/CAP_SYS_ADMIN are available
+ * for loading and running the eBPF program. Warns if CAP_SYS_PTRACE is
+ * absent. Returns 0 if requirements are satisfied, -1 otherwise.
+ */
 int check_audit_caps(void)
 {
 	if (!capng_have_capability(CAPNG_EFFECTIVE, CAP_BPF) &&
@@ -154,6 +196,14 @@ int check_audit_caps(void)
 	return 0;
 }
 
+/*
+ * set_target_pid - register a PID in the BPF target map for tracing.
+ * @pid: process ID to watch.
+ *
+ * Looks up the target_pids map file descriptor, inserts the PID with a value
+ * of 1, and optionally logs the registration when verbose. Returns 0 on
+ * success or -1 on error.
+ */
 int set_target_pid(pid_t pid)
 {
 	int map_fd;
@@ -177,10 +227,19 @@ int set_target_pid(pid_t pid)
 	return 0;
 }
 
+/*
+ * read_system_state - snapshot kernel tunables relevant to capabilities.
+ * @app: application tracking structure to populate.
+ *
+ * Reads a handful of /proc/sys values that influence capability behavior
+ * (ptrace scope, perf_event paranoid, BPF toggles, kernel version). Missing
+ * files are recorded as -1 to indicate unknown. No return value.
+ */
 void read_system_state(struct app_caps *app)
 {
 	FILE *f;
 
+	// Each read is best-effort; -1 indicates the kernel entry was missing.
 	f = fopen("/proc/sys/kernel/yama/ptrace_scope", "r");
 	if (f) {
 		if (fscanf(f, "%d", &app->yama_ptrace_scope) != 1)
@@ -244,6 +303,13 @@ void read_system_state(struct app_caps *app)
 	}
 }
 
+/*
+ * syscall_name_from_nr - resolve a syscall number to a name using libaudit.
+ * @nr: syscall number.
+ *
+ * Detects the machine architecture once, then asks libaudit to translate the
+ * syscall number. Returns the syscall name or NULL if not known.
+ */
 const char *syscall_name_from_nr(int nr)
 {
 	static int warned_machine;
@@ -262,6 +328,15 @@ const char *syscall_name_from_nr(int nr)
 	return audit_syscall_to_name(nr, audit_machine);
 }
 
+/*
+ * update_reason - create or refresh the human-readable reason for a cap.
+ * @check: capability tracking entry to update.
+ * @syscall_nr: syscall that triggered the capability check.
+ *
+ * Frees any existing reason, then builds a new string that ties the
+ * capability to the triggering syscall. For unknown syscalls, uses a generic
+ * message. On allocation failure, leaves reason NULL.
+ */
 static void update_reason(struct cap_check *check, int syscall_nr)
 {
 	const char *syscall_name;
@@ -282,6 +357,16 @@ static void update_reason(struct cap_check *check, int syscall_nr)
 		check->reason = NULL;
 }
 
+/*
+ * handle_cap_event - process one capability event from the ring buffer.
+ * @ctx: unused callback context.
+ * @data: pointer to struct cap_event from BPF.
+ * @data_sz: size of the event (unused, validated by libbpf).
+ *
+ * Optionally prints verbose details, updates per-capability counters, and
+ * marks capabilities as definitely needed when the kernel granted them.
+ * Returns 0 to keep polling.
+ */
 int handle_cap_event(void *ctx, void *data, size_t data_sz)
 {
 	(void)ctx;
@@ -305,11 +390,13 @@ int handle_cap_event(void *ctx, void *data, size_t data_sz)
 		check->capability = e->capability;
 		check->count++;
 
+		// Track kernel decision outcome for this capability.
 		if (e->result > 0)
 			check->granted++;
 		else if (e->result == 0)
 			check->denied++;
 
+		// First grant marks the capability as definitively required.
 		if (e->result > 0 && check->needed != 1) {
 			check->needed = 1;
 			update_reason(check, e->syscall_nr);
@@ -319,6 +406,13 @@ int handle_cap_event(void *ctx, void *data, size_t data_sz)
 	return 0;
 }
 
+/*
+ * analyze_capabilities - print human-readable analysis of observations.
+ *
+ * Walks the aggregated per-capability statistics and system context to
+ * highlight required, conditional, and denied capabilities. Also emits
+ * configuration snippets for common deployment targets. No return value.
+ */
 void analyze_capabilities(void)
 {
 	int has_required = 0;
@@ -363,6 +457,7 @@ void analyze_capabilities(void)
 		check = &state.app.checks[i];
 		if (check->granted > 0) {
 			has_required = 1;
+			// Summarize how many times the kernel permitted usage.
 			printf("  %s (#%d)\n", capng_capability_to_name(i), i);
 			printf("    Checks: %lu granted, %lu denied\n",
 			       check->granted, check->denied);
@@ -402,6 +497,7 @@ void analyze_capabilities(void)
 			if (state.app.checks[i].count > 0 && i == CAP_PERFMON) {
 				has_conditional = 1;
 				conditional_count++;
+				// CAP_SYS_ADMIN may substitute on older kernels.
 				printf("  CAP_PERFMON\n");
 				printf("    Needed when "
 				       "kernel.perf_event_paranoid >= 2\n");
@@ -553,6 +649,12 @@ void analyze_capabilities(void)
 	       "=======\n");
 }
 
+/*
+ * output_json - emit collected results in JSON format.
+ *
+ * Serializes application info, system context, required capabilities, and
+ * denied-only attempts to stdout. No return value.
+ */
 void output_json(void)
 {
 	int i;
@@ -628,6 +730,12 @@ void output_json(void)
 	printf("}\n");
 }
 
+/*
+ * output_yaml - emit collected results in YAML format.
+ *
+ * Provides a YAML representation mirroring the JSON layout so consumers can
+ * parse the auditor output more easily. No return value.
+ */
 void output_yaml(void) {
 	int i;
 
@@ -677,6 +785,13 @@ void output_yaml(void) {
 	}
 }
 
+/*
+ * classify_app - determine if the target is an ELF binary or Python script.
+ * @exe: path to the executable.
+ *
+ * Reads the first line of the file to spot a shebang with "python" or the
+ * ELF magic. Returns PYTHON, ELF, or UNSUPPORTED accordingly.
+ */
 type_t classify_app(const char *exe)
 {
 	int fd;
@@ -712,6 +827,17 @@ type_t classify_app(const char *exe)
 	return UNSUPPORTED;
 }
 
+/*
+ * main - entry point for the capability auditor.
+ * @argc: number of command-line arguments.
+ * @argv: argument vector.
+ *
+ * Parses options, validates the auditor's own capabilities, loads and
+ * attaches the BPF program, forks the target, registers its PID for tracing,
+ * and drives the ring buffer loop until the target exits or the user stops
+ * tracing. On completion, prints the requested report format. Returns 0 on
+ * success or non-zero on failure.
+ */
 int main(int argc, char **argv)
 {
 	int err;
@@ -754,18 +880,22 @@ int main(int argc, char **argv)
 	}
 
 	state.target_argv = &argv[arg_idx];
+
+	// Confirm the auditor itself holds the privileges needed for tracing.
 	if (init_capng() != 0)
 		return 1;
 
 	if (check_audit_caps() != 0)
 		return 1;
 
+	// Allow libbpf to pin maps by removing memlock limits early.
 	if (set_memlock_rlimit() != 0)
 		return 1;
 
 	state.app.exe = strdup(state.target_argv[0]);
 	state.app.prog_type = classify_app(state.app.exe);
 
+	// Load and attach BPF program before forking so probes are ready.
 	state.skel = cap_audit_bpf__open_and_load();
 	if (!state.skel) {
 		fprintf(stderr, "Error: Failed to load BPF program: %s\n",
@@ -794,6 +924,7 @@ int main(int argc, char **argv)
 
 	child = fork();
 	if (child == 0) {
+		// Child pauses briefly so parent can insert PID into BPF map.
 		usleep(100000);
 		execvp(state.target_argv[0], state.target_argv);
 		perror("execvp");
@@ -825,6 +956,8 @@ int main(int argc, char **argv)
 	signal(SIGTERM, sig_handler);
 
 	while (!state.stop) {
+		// Poll ring buffer to drain events;
+		// timeout keeps signals timely.
 		err = ring_buffer__poll(state.rb, 100);
 		if (err < 0 && err != -EINTR) {
 			fprintf(stderr, "Error polling ring buffer: %s\n",
@@ -832,6 +965,7 @@ int main(int argc, char **argv)
 			break;
 		}
 
+		// Detect when the target process has exited.
 		ret_pid = waitpid(child, &wstatus, WNOHANG);
 		if (ret_pid == child) {
 			if (WIFEXITED(wstatus))
