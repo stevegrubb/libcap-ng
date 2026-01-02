@@ -22,6 +22,7 @@
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
 #include <errno.h>
+#include <ctype.h>
 #include <libaudit.h>
 #include <linux/capability.h>
 #include <signal.h>
@@ -111,6 +112,18 @@ struct audit_state {
 
 static struct audit_state state;
 static int audit_machine = -1;
+
+static void print_cap_name_upper(int cap)
+{
+	const char *name = capng_capability_to_name(cap);
+	int i;
+
+	if (!name)
+		return;
+
+	for (i = 0; name[i]; i++)
+		printf("%c", toupper((unsigned char)name[i]));
+}
 
 /*
  * sig_handler - handle termination signals.
@@ -604,6 +617,51 @@ void analyze_capabilities(void)
 		printf("RECOMMENDATIONS:\n");
 		printf("-------------------------------------------------------"
 		       "---------------\n");
+		if (state.app.prog_type != UNSUPPORTED) {
+			printf("  Programmatic solution (%s):\n",
+			       state.app.prog_type == ELF ?
+			       "C with libcap-ng" :
+			       "Python with python3-libcap-ng");
+
+			if (state.app.prog_type == ELF) {
+				printf("    #include <cap-ng.h>\n");
+				printf("    ...\n");
+				printf("    capng_clear(CAPNG_SELECT_BOTH);\n");
+				printf("    capng_updatev(CAPNG_ADD, "
+				       "CAPNG_EFFECTIVE|CAPNG_PERMITTED");
+				for (i = 0; i <= CAP_LAST_CAP; i++) {
+					if (state.app.checks[i].granted > 0) {
+						printf(", ");
+						print_cap_name_upper(i);
+					}
+				}
+				printf(", -1);\n");
+				printf("    if (capng_change_id(uid, gid, "
+				       "CAPNG_DROP_SUPP_GRP | "
+				       "CAPNG_CLEAR_BOUNDING))\n");
+				printf("\tperror(\"capng_change_id\");\n\n");
+			} else if (state.app.prog_type == PYTHON) {
+				printf("    import sys\n");
+				printf("    import _capng as capng\n");
+				printf("    ...\n");
+				printf("    capng.capng_clear(capng.CAPNG_SELECT_BOTH)\n");
+				printf("    capng.capng_updatev(capng.CAPNG_ADD, "
+				       "capng.CAPNG_EFFECTIVE|capng.CAPNG_PERMITTED");
+				for (i = 0; i <= CAP_LAST_CAP; i++) {
+					if (state.app.checks[i].granted > 0) {
+						printf(", capng.");
+						print_cap_name_upper(i);
+					}
+				}
+				printf(", -1)\n");
+				printf("    e = capng.capng_change_id(uid, gid, "
+				       "capng.CAPNG_DROP_SUPP_GRP | "
+				       "capng.CAPNG_CLEAR_BOUNDING)\n");
+				printf("    if e < 0:\n");
+				printf("\tprint(f\"Error: {e}\")\n");
+				printf("\tsys.exit(1)\n\n");
+			}
+		}
 
 		printf("  For systemd service:\n");
 		printf("    [Service]\n");
@@ -841,17 +899,17 @@ type_t classify_app(const char *exe)
 	if (rc > 0) {
 		// terminate buffer
 		buf[rc] = 0;
-		// limit search to first line
-		char *ptr = strchr(buf, '\n');
-		if (ptr)
-			*ptr = 0;
 		// check for shebang
 		if (buf[0] == '#' && buf[1] == '!') {
+			// limit search to first line
+			char *ptr = strchr(buf, '\n');
+			if (ptr)
+				*ptr = 0;
 			// see if python is anywhere on first line
 			if (strstr(buf, "python"))
 				return PYTHON;
 			// next check if elf binary
-		} else if (strncmp(buf, ELFMAG, 4))
+		} else if (strncmp(buf, ELFMAG, 4) == 0)
 			return ELF;
 	}
 
