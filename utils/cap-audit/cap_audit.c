@@ -87,6 +87,9 @@ struct app_caps {
 	type_t prog_type;
 	struct cap_check checks[CAP_LAST_CAP + 1];
 	int yama_ptrace_scope;
+	int kptr_restrict;
+	int dmesg_restrict;
+	int modules_disabled;
 	int perf_event_paranoid;
 	int unprivileged_bpf_disabled;
 	int bpf_jit_enable;
@@ -235,64 +238,39 @@ int set_target_pid(pid_t pid)
  * (ptrace scope, perf_event paranoid, BPF toggles, kernel version). Missing
  * files are recorded as -1 to indicate unknown. No return value.
  */
+static void read_sysctl(const char *path, int *value)
+{
+	FILE *f;
+
+	f = fopen(path, "r");
+	if (f) {
+		if (fscanf(f, "%d", value) != 1)
+			*value = -1;
+		fclose(f);
+	} else {
+		*value = -1;
+	}
+}
+
 void read_system_state(struct app_caps *app)
 {
 	FILE *f;
 
 	// Each read is best-effort; -1 indicates the kernel entry was missing.
-	f = fopen("/proc/sys/kernel/yama/ptrace_scope", "r");
-	if (f) {
-		if (fscanf(f, "%d", &app->yama_ptrace_scope) != 1)
-			app->yama_ptrace_scope = -1;
-		fclose(f);
-	} else {
-		app->yama_ptrace_scope = -1;
-	}
-
-	f = fopen("/proc/sys/kernel/perf_event_paranoid", "r");
-	if (f) {
-		if (fscanf(f, "%d", &app->perf_event_paranoid) != 1)
-			app->perf_event_paranoid = -1;
-		fclose(f);
-	} else {
-		app->perf_event_paranoid = -1;
-	}
-
-	f = fopen("/proc/sys/kernel/unprivileged_bpf_disabled", "r");
-	if (f) {
-		if (fscanf(f, "%d", &app->unprivileged_bpf_disabled) != 1)
-			app->unprivileged_bpf_disabled = -1;
-		fclose(f);
-	} else {
-		app->unprivileged_bpf_disabled = -1;
-	}
-
-	f = fopen("/proc/sys/net/core/bpf_jit_enable", "r");
-	if (f) {
-		if (fscanf(f, "%d", &app->bpf_jit_enable) != 1)
-			app->bpf_jit_enable = -1;
-		fclose(f);
-	} else {
-		app->bpf_jit_enable = -1;
-	}
-
-	f = fopen("/proc/sys/net/core/bpf_jit_harden", "r");
-	if (f) {
-		if (fscanf(f, "%d", &app->bpf_jit_harden) != 1)
-			app->bpf_jit_harden = -1;
-		fclose(f);
-	} else {
-		app->bpf_jit_harden = -1;
-	}
-
-	f = fopen("/proc/sys/net/core/bpf_jit_kallsyms", "r");
-	if (f) {
-		if (fscanf(f, "%d", &app->bpf_jit_kallsyms) != 1)
-			app->bpf_jit_kallsyms = -1;
-		fclose(f);
-	} else {
-		app->bpf_jit_kallsyms = -1;
-	}
+	read_sysctl("/proc/sys/kernel/yama/ptrace_scope",
+		    &app->yama_ptrace_scope);
+	read_sysctl("/proc/sys/kernel/kptr_restrict", &app->kptr_restrict);
+	read_sysctl("/proc/sys/kernel/dmesg_restrict", &app->dmesg_restrict);
+	read_sysctl("/proc/sys/kernel/modules_disabled",
+		    &app->modules_disabled);
+	read_sysctl("/proc/sys/kernel/perf_event_paranoid",
+		    &app->perf_event_paranoid);
+	read_sysctl("/proc/sys/kernel/unprivileged_bpf_disabled",
+		    &app->unprivileged_bpf_disabled);
+	read_sysctl("/proc/sys/net/core/bpf_jit_enable", &app->bpf_jit_enable);
+	read_sysctl("/proc/sys/net/core/bpf_jit_harden", &app->bpf_jit_harden);
+	read_sysctl("/proc/sys/net/core/bpf_jit_kallsyms",
+		    &app->bpf_jit_kallsyms);
 
 	f = fopen("/proc/sys/kernel/osrelease", "r");
 	if (f) {
@@ -438,6 +416,9 @@ void analyze_capabilities(void)
 	       "-------\n");
 	printf("  Kernel version: %s\n", state.app.kernel_version);
 	printf("  kernel.yama.ptrace_scope: %d\n", state.app.yama_ptrace_scope);
+	printf("  kernel.kptr_restrict: %d\n", state.app.kptr_restrict);
+	printf("  kernel.dmesg_restrict: %d\n", state.app.dmesg_restrict);
+	printf("  kernel.modules_disabled: %d\n", state.app.modules_disabled);
 	printf("  kernel.perf_event_paranoid: %d\n",
 	       state.app.perf_event_paranoid);
 	printf("  kernel.unprivileged_bpf_disabled: %d\n",
@@ -517,14 +498,62 @@ void analyze_capabilities(void)
 				has_conditional = 1;
 				conditional_count++;
 				printf("  CAP_BPF\n");
-				printf(
-				       "    Needed when "
+				printf("    Needed when "
 				       "kernel.unprivileged_bpf_disabled = 1\n");
 				printf("    Current value: %d (capability "
 				       "needed)\n",
 				       state.app.unprivileged_bpf_disabled);
 				printf("    Note: CAP_SYS_ADMIN can substitute "
 				       "on kernels < 5.8\n");
+				printf("\n");
+			}
+		}
+	}
+
+	if (state.app.kptr_restrict >= 1) {
+		for (i = 0; i <= CAP_LAST_CAP; i++) {
+			if (state.app.checks[i].count > 0 &&
+			    i == CAP_SYSLOG) {
+				has_conditional = 1;
+				conditional_count++;
+				printf("  CAP_SYSLOG\n");
+				printf("    Needed when "
+				       "kernel.kptr_restrict >= 1\n");
+				printf("    Current value: %d (capability "
+				       "needed)\n",
+				       state.app.kptr_restrict);
+				printf("\n");
+			}
+		}
+	}
+
+	if (state.app.dmesg_restrict >= 1) {
+		for (i = 0; i <= CAP_LAST_CAP; i++) {
+			if (state.app.checks[i].count > 0 &&
+			    i == CAP_SYSLOG) {
+				has_conditional = 1;
+				conditional_count++;
+				printf("  CAP_SYSLOG\n");
+				printf("    Needed when "
+				       "kernel.dmesg_restrict >= 1\n");
+				printf("    Current value: %d (capability "
+				       "needed)\n",
+				       state.app.dmesg_restrict);
+				printf("\n");
+			}
+		}
+	}
+
+	if (state.app.modules_disabled == 1) {
+		for (i = 0; i <= CAP_LAST_CAP; i++) {
+			if (state.app.checks[i].count > 0 &&
+			    i == CAP_SYS_MODULE) {
+				has_conditional = 1;
+				conditional_count++;
+				printf("  NOTE: kernel.modules_disabled = 1\n");
+				printf("    CAP_SYS_MODULE is ineffective!\n");
+				printf("    Module loading is permanently "
+				       "disabled.\n");
 				printf("\n");
 			}
 		}
@@ -644,9 +673,6 @@ void analyze_capabilities(void)
 		printf("  Run as an unprivileged user with no special "
 		       "capabilities.\n\n");
 	}
-
-	printf("==============================================================="
-	       "=======\n");
 }
 
 /*
@@ -671,6 +697,9 @@ void output_json(void)
 	printf("    \"kernel_version\": \"%s\",\n",
 	       state.app.kernel_version);
 	printf("    \"yama_ptrace_scope\": %d,\n", state.app.yama_ptrace_scope);
+	printf("    \"kptr_restrict\": %d,\n", state.app.kptr_restrict);
+	printf("    \"dmesg_restrict\": %d,\n", state.app.dmesg_restrict);
+	printf("    \"modules_disabled\": %d,\n", state.app.modules_disabled);
 	printf("    \"perf_event_paranoid\": %d,\n",
 	       state.app.perf_event_paranoid);
 	printf("    \"unprivileged_bpf_disabled\": %d,\n",
@@ -746,6 +775,9 @@ void output_yaml(void) {
 	printf("system_context:\n");
 	printf("  kernel_version: \"%s\"\n", state.app.kernel_version);
 	printf("  yama_ptrace_scope: %d\n", state.app.yama_ptrace_scope);
+	printf("  kptr_restrict: %d\n", state.app.kptr_restrict);
+	printf("  dmesg_restrict: %d\n", state.app.dmesg_restrict);
+	printf("  modules_disabled: %d\n", state.app.modules_disabled);
 	printf("  perf_event_paranoid: %d\n",
 	       state.app.perf_event_paranoid);
 	printf("  unprivileged_bpf_disabled: %d\n",
