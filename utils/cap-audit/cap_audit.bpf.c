@@ -86,25 +86,41 @@ struct cap_stats {
 	__u64 denied;
 };
 
+// This sets the limit for how many child processes can be traced.
+// Because of this limit, the tracer may not be suitable for shell
+// scripts or long running process that fork child handlers that
+// terminate soon after launching. When this fills up, no more
+// children will be traced. This is the breaking point for long
+// running apps. The other limits aren't as likely to be broken.
+// This is approx 16 bytes per entry. (Default uses 128K)
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
 	__type(key, __u32);
 	__type(value, __u8);
-	__uint(max_entries, 1024);
+	__uint(max_entries, 8192);
 } target_pids SEC(".maps");
 
+// This declares the size of the ring buf that holds events for
+// userspace to access.
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
 	__uint(max_entries, 256 * 1024);
 } cap_events SEC(".maps");
 
+// This declares how many unique stack traces to hold. This is used
+// to determine which syscall a capability was requested from. If this
+// fills up, no more stack traces will be collected. This is about
+// 1K per entry. (Default uses 20 MB)
 struct {
 	__uint(type, BPF_MAP_TYPE_STACK_TRACE);
 	__uint(key_size, sizeof(__u32));
 	__uint(value_size, PERF_MAX_STACK_DEPTH * sizeof(__u64));
-	__uint(max_entries, 10000);
+	__uint(max_entries, 20000);
 } stack_traces SEC(".maps");
 
+// This declares how many capabilities can be watched. As of the
+// 6.18 kernel, it only uses 40. So, 64 is future proof as none have
+// been added in a while.
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
 	__type(key, __u32);

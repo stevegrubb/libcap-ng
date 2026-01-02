@@ -40,7 +40,7 @@ while setting up tracing or executing the target command.
 .SH NOTES
 1. This utility observes the application behavior to decide what is needed. If you do not exercise all functionality, it can result in an incomplete inventory of needed capabilities. If it can't see it, cap-audit can't record it.
 
-2. If you use Ctl-C to stop this program, be aware that the program it starts will continue running. If you want to stop both, send SIGTERM to the child process.
+2. There are hard memory constraints for event collection. The limit for the number of children that can be traced is 8192. If an application is fork heavy, such as shell scripts or spawns a lot of short lived helper applications, the tracer will stop collecting events on new children once the buffer fills. Also, the tracer only has space to hold 20k unique stack traces. This is not as problematic as the other constraint as the same code paths often repeat. If this fills up, new code paths will not be collected. This buffer is used to map a capability request to the syscall needing it. In both cases, there is no indication to user space that the tracer is out of memory.
 .SH FILES
 .I /sys/kernel/btf/vmlinux
 .SH "SEE ALSO"
