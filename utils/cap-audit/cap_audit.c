@@ -85,6 +85,9 @@ struct cap_check {
 struct app_caps {
 	pid_t pid;
 	char *exe;
+	int execve_nr;
+	int mmap_nr;
+	int brk_nr;
 	type_t prog_type;
 	struct cap_check checks[CAP_LAST_CAP + 1];
 	int yama_ptrace_scope;
@@ -107,6 +110,7 @@ struct audit_state {
 	struct cap_audit_bpf *skel;
 	struct ring_buffer *rb;
 	struct app_caps app;
+	int recording_ready;
 	int verbose;
 	int json_output;
 	int yaml_output;
@@ -313,16 +317,6 @@ void read_system_state(struct app_caps *app)
  */
 const char *syscall_name_from_nr(int nr)
 {
-	static int warned_machine;
-
-	if (audit_machine < 0) {
-		audit_machine = audit_detect_machine();
-		if (audit_machine < 0 && !warned_machine) {
-			fprintf(stderr, "Warning: unable to determine audit machine for syscall lookup\n");
-			warned_machine = 1;
-		}
-	}
-
 	if (audit_machine < 0)
 		return NULL;
 
@@ -373,6 +367,25 @@ int handle_cap_event(void *ctx, void *data, size_t data_sz)
 	(void)ctx;
 	(void)data_sz;
 	const struct cap_event *e = data;
+
+	/*
+	 * Ignore CAP_SYS_ADMIN checks while the runtime linker is populating
+	 * the process address space. These happen during execve/mmap/brk
+	 * before control reaches the application's entry point and would
+	 * otherwise look like required capabilities.
+	 */
+	if (!state.recording_ready && e->capability == CAP_SYS_ADMIN) {
+		if (e->syscall_nr == state.app.execve_nr ||
+		    e->syscall_nr == state.app.mmap_nr ||
+		    e->syscall_nr == state.app.brk_nr) {
+			if (state.verbose)
+				printf("[CAP] Filtered startup noise: CAP_SYS_ADMIN in %s\n",
+				       syscall_name_from_nr(e->syscall_nr) ?: "startup");
+			return 0;
+		}
+	}
+	state.recording_ready = 1;
+
 
 	if (state.verbose) {
 		printf("[CAP] pid=%d cap=%d (%s) result=%s syscall=%d (%s) "
@@ -1023,7 +1036,8 @@ int main(int argc, char **argv)
 	int arg_idx;
 	pid_t child;
 	pid_t ret_pid;
-	int wstatus;
+	int wstatus, warned_machine = 0;
+
 
 	if (argc < 2) {
 		fprintf(stderr, "Usage: %s [options] -- command [args...]\n",
@@ -1073,6 +1087,16 @@ int main(int argc, char **argv)
 
 	state.app.exe = strdup(state.target_argv[0]);
 	state.app.prog_type = classify_app(state.app.exe);
+	if (audit_machine < 0)
+		audit_machine = audit_detect_machine();
+	if (audit_machine < 0 && !warned_machine) {
+		fprintf(stderr,
+			"Warning: unable to determine audit machine for syscall lookup\n");
+		warned_machine = 1;
+	}
+	state.app.execve_nr = audit_name_to_syscall("execve", audit_machine);
+	state.app.mmap_nr = audit_name_to_syscall("mmap", audit_machine);
+	state.app.brk_nr = audit_name_to_syscall("brk",audit_machine);
 
 	// Load and attach BPF program before forking so probes are ready.
 	state.skel = cap_audit_bpf__open_and_load();
