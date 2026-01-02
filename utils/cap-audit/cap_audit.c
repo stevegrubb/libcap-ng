@@ -96,6 +96,10 @@ struct app_caps {
 	int bpf_jit_enable;
 	int bpf_jit_harden;
 	int bpf_jit_kallsyms;
+	int mmap_min_addr;
+	int protected_hardlinks;
+	int protected_symlinks;
+	int suid_dumpable;
 	char kernel_version[64];
 };
 
@@ -284,6 +288,12 @@ void read_system_state(struct app_caps *app)
 	read_sysctl("/proc/sys/net/core/bpf_jit_harden", &app->bpf_jit_harden);
 	read_sysctl("/proc/sys/net/core/bpf_jit_kallsyms",
 		    &app->bpf_jit_kallsyms);
+	read_sysctl("/proc/sys/vm/mmap_min_addr", &app->mmap_min_addr);
+	read_sysctl("/proc/sys/fs/protected_hardlinks",
+		    &app->protected_hardlinks);
+	read_sysctl("/proc/sys/fs/protected_symlinks",
+		    &app->protected_symlinks);
+	read_sysctl("/proc/sys/fs/suid_dumpable", &app->suid_dumpable);
 
 	f = fopen("/proc/sys/kernel/osrelease", "r");
 	if (f) {
@@ -440,6 +450,10 @@ void analyze_capabilities(void)
 	printf("  net.core.bpf_jit_harden: %d\n", state.app.bpf_jit_harden);
 	printf("  net.core.bpf_jit_kallsyms: %d\n",
 	       state.app.bpf_jit_kallsyms);
+	printf("  vm.mmap_min_addr: %d\n", state.app.mmap_min_addr);
+	printf("  fs.protected_hardlinks: %d\n", state.app.protected_hardlinks);
+	printf("  fs.protected_symlinks: %d\n", state.app.protected_symlinks);
+	printf("  fs.suid_dumpable: %d\n", state.app.suid_dumpable);
 	printf("\n");
 
 	printf("REQUIRED CAPABILITIES:\n");
@@ -567,6 +581,69 @@ void analyze_capabilities(void)
 				printf("    CAP_SYS_MODULE is ineffective!\n");
 				printf("    Module loading is permanently "
 				       "disabled.\n");
+				printf("\n");
+			}
+		}
+	}
+
+	if (state.app.mmap_min_addr > 0) {
+		for (i = 0; i <= CAP_LAST_CAP; i++) {
+			if (state.app.checks[i].count > 0 &&
+			    i == CAP_SYS_RAWIO) {
+				has_conditional = 1;
+				conditional_count++;
+				printf("  CAP_SYS_RAWIO\n");
+				printf("    Needed when vm.mmap_min_addr > 0 to map "
+				       "low addresses\n");
+				printf("    Current value: %d (capability needed)\n",
+				       state.app.mmap_min_addr);
+				printf("\n");
+			}
+		}
+	}
+
+	if (state.app.protected_hardlinks == 1) {
+		for (i = 0; i <= CAP_LAST_CAP; i++) {
+			if (state.app.checks[i].count > 0 && i == CAP_FOWNER) {
+				has_conditional = 1;
+				conditional_count++;
+				printf("  CAP_FOWNER\n");
+				printf("    Needed when fs.protected_hardlinks = 1 to "
+				       "link files not owned by the caller\n");
+				printf("    Current value: %d (capability needed)\n",
+				       state.app.protected_hardlinks);
+				printf("\n");
+			}
+		}
+	}
+
+	if (state.app.protected_symlinks == 1) {
+		for (i = 0; i <= CAP_LAST_CAP; i++) {
+			if (state.app.checks[i].count > 0 &&
+			    i == CAP_DAC_OVERRIDE) {
+				has_conditional = 1;
+				conditional_count++;
+				printf("  CAP_DAC_OVERRIDE\n");
+				printf("    Needed when fs.protected_symlinks = 1 for "
+				       "symlinks in world-writable directories\n");
+				printf("    Current value: %d (capability needed)\n",
+				       state.app.protected_symlinks);
+				printf("\n");
+			}
+		}
+	}
+
+	if (state.app.suid_dumpable == 2) {
+		for (i = 0; i <= CAP_LAST_CAP; i++) {
+			if (state.app.checks[i].count > 0 &&
+			    i == CAP_SYS_PTRACE) {
+				has_conditional = 1;
+				conditional_count++;
+				printf("  CAP_SYS_PTRACE\n");
+				printf("    Needed when fs.suid_dumpable = 2 for core "
+				       "dumps and ptrace of setuid programs\n");
+				printf("    Current value: %d (capability needed)\n",
+				       state.app.suid_dumpable);
 				printf("\n");
 			}
 		}
@@ -764,8 +841,14 @@ void output_json(void)
 	       state.app.unprivileged_bpf_disabled);
 	printf("    \"bpf_jit_enable\": %d,\n", state.app.bpf_jit_enable);
 	printf("    \"bpf_jit_harden\": %d,\n", state.app.bpf_jit_harden);
-	printf("    \"bpf_jit_kallsyms\": %d\n",
+	printf("    \"bpf_jit_kallsyms\": %d,\n",
 	       state.app.bpf_jit_kallsyms);
+	printf("    \"vm_mmap_min_addr\": %d,\n", state.app.mmap_min_addr);
+	printf("    \"fs_protected_hardlinks\": %d,\n",
+	       state.app.protected_hardlinks);
+	printf("    \"fs_protected_symlinks\": %d,\n",
+	       state.app.protected_symlinks);
+	printf("    \"fs_suid_dumpable\": %d\n", state.app.suid_dumpable);
 	printf("  },\n");
 
 	printf("  \"required_capabilities\": [\n");
@@ -843,6 +926,12 @@ void output_yaml(void) {
 	printf("  bpf_jit_enable: %d\n", state.app.bpf_jit_enable);
 	printf("  bpf_jit_harden: %d\n", state.app.bpf_jit_harden);
 	printf("  bpf_jit_kallsyms: %d\n", state.app.bpf_jit_kallsyms);
+	printf("  vm_mmap_min_addr: %d\n", state.app.mmap_min_addr);
+	printf("  fs_protected_hardlinks: %d\n",
+	       state.app.protected_hardlinks);
+	printf("  fs_protected_symlinks: %d\n",
+	       state.app.protected_symlinks);
+	printf("  fs_suid_dumpable: %d\n", state.app.suid_dumpable);
 
 	printf("required_capabilities:\n");
 	for (i = 0; i <= CAP_LAST_CAP; i++) {
