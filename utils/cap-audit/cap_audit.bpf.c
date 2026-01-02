@@ -128,6 +128,48 @@ struct {
 	__uint(max_entries, 64);
 } capability_stats SEC(".maps");
 
+// The cap_events_inflight map uses pid_tgid as the key. There is a race
+// scenario when deep syscall chains that check multiple capabilities
+// or nested function calls where each checks a capability. In these cases
+// because it uses the same pid_tgid, it can overwrite a previous event.
+// example:
+//
+// In kernel, during mount():
+// sys_mount() {
+//  First check
+//  if (!capable(CAP_SYS_ADMIN))  // ← kprobe #1 fires
+//      return -EPERM;
+//
+//  Path resolution might trigger
+//  if (!capable(CAP_DAC_OVERRIDE))  // ← kprobe #2 fires BEFORE kretprobe #1!
+//      return -EACCES;
+//  ... more work ...
+//
+//    return 0;  // ← kretprobe #1 and #2 fire
+//}
+//
+// Statistics are SAFE: The capability_stats map is updated immediately in
+// the kprobe using atomic operations, so counts are always accurate. The
+// probability is higher for complex syscalls like mount, setuid, network
+// operations.
+//
+// Possible solutions
+// Option 1: Per-CPU Map - change to BPF_MAP_TYPE_PERCPU_HASH. Drawback is
+// it uses a map for each CPU so if 64 cores, map is 64KB.
+//
+// Option 2: Include Stack Pointer in Key -
+// key[0] = bpf_get_current_pid_tgid();
+// key[1] = PT_REGS_SP(ctx);  // Stack pointer makes it unique
+// bpf_map_update_elem(&cap_events_inflight, &key, ev, BPF_ANY);
+//
+// Option 3: Accept the Race (Current Approach)
+// Rationale:
+// * The capability_stats map is always correct (atomic updates)
+// * Individual event details might be wrong, but aggregate data is right
+// * For the tool's purpose (determining required capabilities), statistics
+//   are what matter
+// * Individual events are mainly for debugging/verbose mode
+
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
 	__type(key, __u64);
@@ -135,6 +177,16 @@ struct {
 	__uint(max_entries, 1024);
 } cap_events_inflight SEC(".maps");
 
+// In theory, if sys_exit is not called, a syscall can leak. This can
+// happen due to SIGKILL or a core dump. This might matter if this is
+// tracing a long running with many threads some of which get SIGKILL.
+// Or during application development. Because each run of the tracer
+// is a new instance, the only concern is long tracing sessions. If
+// this really was a concern, we could change to BPF_MAP_TYPE_PERCPU_HASH
+// so that a leak on CPU0 doesn't affect tracing on CPU1. This is just
+// mentioned here because it is an esoteric problem and not likely to
+// show up. But this documents it and a possible solution. The drawback
+// is that it uses more memory.
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
 	__type(key, __u64);
