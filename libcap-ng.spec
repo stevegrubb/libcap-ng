@@ -7,8 +7,11 @@ Group: System Environment/Libraries
 URL: http://people.redhat.com/sgrubb/libcap-ng
 Source0: http://people.redhat.com/sgrubb/libcap-ng/%{name}-%{version}.tar.gz
 BuildRoot: %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
-BuildRequires: kernel-headers >= 2.6.11 
+BuildRequires: kernel-headers >= 2.6.11
 BuildRequires: libattr-devel
+BuildRequires: clang
+BuildRequires: bpftool libbpf-devel
+BuildRequires: audit-libs-devel
 
 %description
 Libcap-ng is a library that makes using POSIX capabilities easier
