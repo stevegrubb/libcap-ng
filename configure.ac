@@ -144,36 +144,6 @@ AC_ARG_WITH([capability_header],
         [CAPABILITY_HEADER=/usr/include/linux/capability.h])
 AC_SUBST(CAPABILITY_HEADER)
 
-ALLWARNS=""
-ALLDEBUG="-g"
-OPT="-O"
-if test x"$GCC" = x"yes"; then
-  OPT="-O2 -pipe"
-  case "$target" in
-    *linux*)
-             ALLWARNS="-W -Wall -Wundef -Wpointer-arith -Wcast-align \
--Wwrite-strings -Waggregate-return -Wstrict-prototypes \
--Wmissing-prototypes -Wmissing-declarations -Wredundant-decls \
--Wnested-externs -Winline -Wfloat-equal -Wchar-subscripts"
-             ;;
-    esac
-fi
-
-ALLDEBUG="-g"
-AC_ARG_WITH(debug,
-[  --with-debug            turn on debugging [[default=no]]],
-[
-if test "x${withval}" = xyes; then
-        DEBUG="$ALLDEBUG"
-        OPT="-O"
-        AM_CONDITIONAL(DEBUG, true)
-else
-        DEBUG="-DNDEBUG"
-        AM_CONDITIONAL(DEBUG, false)
-fi
-],
-[ DEBUG="-DNDEBUG"; AM_CONDITIONAL(DEBUG, false) ])
-
 AC_MSG_CHECKING(__attr_dealloc_free support)
 AC_COMPILE_IFELSE(
   [AC_LANG_SOURCE(
