@@ -26,8 +26,11 @@ nodist_cap_audit_SOURCES = cap_audit.skel.h
 cap_audit_LDADD = ${top_builddir}/src/libcap-ng.la ${LIBBPF_LIBS} ${LIBAUDIT_LIBS}
 
 EXTRA_DIST = cap_audit.bpf.c cap-audit.8
-BUILT_SOURCES = cap_audit.bpf.o cap_audit.skel.h vmlinux.h
 CLEANFILES = cap_audit.bpf.o cap_audit.skel.h vmlinux.h
+
+if BUILD_CAP_AUDIT
+BUILT_SOURCES = cap_audit.bpf.o cap_audit.skel.h vmlinux.h
+endif
 
 BPF_ARCH = @BPF_ARCH@
 BPFTOOL = @BPFTOOL@

@@ -65,6 +65,12 @@ AS_HELP_STRING([--with-bpf-arch=ARCH],
 [override detected BPF target arch (x86, arm64, arm, powerpc, s390, riscv, mips, loongarch)]),
 [BPF_ARCH="$withval"])
 
+AC_ARG_ENABLE([cap-audit],
+AS_HELP_STRING([--enable-cap-audit],[build cap-audit [[default=no]]]),
+[enable_cap_audit=$enableval],
+[enable_cap_audit=no])
+
+if test "x$enable_cap_audit" = "xyes"; then
 missing_cap_audit_deps=no
 AC_CHECK_PROG([CLANG],[clang],[clang],[no])
 AC_CHECK_PROG([BPFTOOL],[bpftool],[bpftool],[no])
@@ -78,6 +84,7 @@ if test "$CLANG" = "no" -o "$BPFTOOL" = "no" -o \
 "x$have_libbpf" != "xyes" -o "x$have_libaudit" != "xyes" -o \
 "x$missing_cap_audit_deps" = "xyes"; then
 AC_MSG_ERROR([cap-audit requires clang, bpftool, libbpf, and libaudit])
+fi
 fi
 
 if test "x$BPF_ARCH" = "x"; then
@@ -123,6 +130,8 @@ AC_SUBST(LIBBPF_CFLAGS)
 AC_SUBST(LIBBPF_LIBS)
 AC_SUBST(LIBAUDIT_CFLAGS)
 AC_SUBST(LIBAUDIT_LIBS)
+
+AM_CONDITIONAL([BUILD_CAP_AUDIT], [test "x$enable_cap_audit" = "xyes"])
 
 echo .
 echo Checking for header files
@@ -241,8 +250,7 @@ AC_CONFIG_FILES([Makefile src/Makefile src/libcap-ng.pc src/test/Makefile
 bindings/Makefile
 bindings/python3/Makefile bindings/src/Makefile
 bindings/python3/test/Makefile bindings/test/Makefile utils/Makefile
-utils/cap-audit/Makefile
-m4/Makefile docs/Makefile])
+utils/cap-audit/Makefile m4/Makefile docs/Makefile])
 AC_OUTPUT
 
 echo .
