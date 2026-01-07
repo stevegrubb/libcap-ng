@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: LGPL-2.1-or-later
+// SPDX-License-Identifier: GPL-2.1-or-later
 /*
  * cap_audit.bpf.c - Capture capability checks for a target application
  * Copyright (c) 2026 Red Hat Inc.
@@ -92,7 +92,7 @@ struct cap_stats {
 // terminate soon after launching. When this fills up, no more
 // children will be traced. This is the breaking point for long
 // running apps. The other limits aren't as likely to be broken.
-// This is approx 16 bytes per entry. (Default uses 128K)
+// This is approx 16 bytes per entry. (Default uses 128K of memory)
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
 	__type(key, __u32);
@@ -110,7 +110,7 @@ struct {
 // This declares how many unique stack traces to hold. This is used
 // to determine which syscall a capability was requested from. If this
 // fills up, no more stack traces will be collected. This is about
-// 1K per entry. (Default uses 20 MB)
+// 1K per entry. (Default uses 20 MB of memory)
 struct {
 	__uint(type, BPF_MAP_TYPE_STACK_TRACE);
 	__uint(key_size, sizeof(__u32));
@@ -118,9 +118,9 @@ struct {
 	__uint(max_entries, 20000);
 } stack_traces SEC(".maps");
 
-// This declares how many capabilities can be watched. As of the
-// 6.18 kernel, it only uses 40. So, 64 is future proof as none have
-// been added in a while.
+// This declares how many capabilities can be watched. As of the 6.18
+// kernel, it only uses 40. So, 64 is future proof as none have been added
+// in a while.
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
 	__type(key, __u32);
@@ -150,12 +150,12 @@ struct {
 //
 // Statistics are SAFE: The capability_stats map is updated immediately in
 // the kprobe using atomic operations, so counts are always accurate. The
-// probability is higher for complex syscalls like mount, setuid, network
+// probability is higher for complex syscalls like mount, setuid, or network
 // operations.
 //
 // Possible solutions
 // Option 1: Per-CPU Map - change to BPF_MAP_TYPE_PERCPU_HASH. Drawback is
-// it uses a map for each CPU so if 64 cores, map is 64KB.
+// it uses a map for each CPU so if 64 cores, map is 64KB of memory.
 //
 // Option 2: Include Stack Pointer in Key -
 // key[0] = bpf_get_current_pid_tgid();
@@ -180,13 +180,13 @@ struct {
 // In theory, if sys_exit is not called, a syscall can leak. This can
 // happen due to SIGKILL or a core dump. This might matter if this is
 // tracing a long running with many threads some of which get SIGKILL.
-// Or during application development. Because each run of the tracer
-// is a new instance, the only concern is long tracing sessions. If
-// this really was a concern, we could change to BPF_MAP_TYPE_PERCPU_HASH
-// so that a leak on CPU0 doesn't affect tracing on CPU1. This is just
-// mentioned here because it is an esoteric problem and not likely to
-// show up. But this documents it and a possible solution. The drawback
-// is that it uses more memory.
+// Might be more likely if its a child process rather than a thread.
+// Because each run of the tracer is a new instance, the only concern
+// is long tracing sessions. If this really was a concern, we could
+// change to BPF_MAP_TYPE_PERCPU_HASH so that a leak on CPU0 doesn't
+// affect tracing on CPU1. This is just mentioned here because it is
+// an esoteric problem and not likely to show up. But this documents
+// it and a possible solution. The drawback is that it uses more memory.
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
 	__type(key, __u64);

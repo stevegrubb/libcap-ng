@@ -40,22 +40,26 @@
 
 /*
  * Overview:
- * cap-audit launches a target application, traces only that process tree
+ * cap-audit launches a target application, traces that process tree
  * using eBPF hooks, and reports which Linux capabilities were actually
- * exercised. The userspace side performs three major jobs: (1) prepare the
- * runtime environment by checking our own capabilities and raising rlimits;
+ * exercised. The userspace side performs three major jobs:
+ *
+ * (1) prepare the runtime environment by checking our own capabilities
+ * and raising rlimits;
  * (2) coordinate with the eBPF program by registering the target PID before
  * exec() and consuming capability check events from the ring buffer; and
  * (3) analyze the collected data to present required, conditional, and denied
- * capabilities in human and machine-readable formats. PID filtering is key:
- * the parent registers the child PID immediately after fork(), while the BPF
- * program follows forks and exits to keep the target set precise. Each event
- * includes the capability, syscall context, namespace info, and result, which
- * are aggregated into per-capability statistics and summarized for the user.
+ * capabilities in human and machine-readable formats.
+ *
+ * PID filtering is key: the parent registers the child PID immediately after
+ * fork(), while the BPF program follows forks and exits to keep the target
+ * set precise. Each event includes the capability, syscall context,
+ * namespace info, and result, which are aggregated into per-capability
+ * statistics and summarized for the user.
  */
 
 typedef enum { UNSUPPORTED, ELF, PYTHON } type_t;
-#define ELFMAG "\177ELF"
+#define ELFMAGIC "\177ELF"
 
 struct cap_event {
 	__u64 timestamp_ns;
@@ -82,6 +86,7 @@ struct cap_check {
 	size_t num_contexts;
 };
 
+// Program global variables
 struct app_caps {
 	pid_t pid;
 	char *exe;
@@ -106,6 +111,7 @@ struct app_caps {
 	char kernel_version[64];
 };
 
+// Global program state
 struct audit_state {
 	struct cap_audit_bpf *skel;
 	struct ring_buffer *rb;
@@ -119,7 +125,7 @@ struct audit_state {
 };
 
 static struct audit_state state;
-static int audit_machine = -1;
+static int audit_machine = -1;	// Hardware architecture (syscall lookup)
 
 static void print_cap_name_upper(int cap)
 {
@@ -140,10 +146,8 @@ static void print_cap_name_upper(int cap)
  * Sets the global stop flag so the main loop can exit cleanly. Returns
  * nothing.
  */
-static void sig_handler(int sig)
+static void sig_handler(int sig __attribute__((unused)))
 {
-	(void)sig;
-
 	// Signal just toggles stop flag; main loop polls this.
 	state.stop = 1;
 }
@@ -190,19 +194,19 @@ int init_capng(void)
 }
 
 /*
- * check_audit_caps - verify the auditor has the capabilities it needs.
+ * check_auditor_caps - verify the auditor has the capabilities it needs.
  *
  * Ensures CAP_BPF/CAP_SYS_ADMIN and CAP_PERFMON/CAP_SYS_ADMIN are available
  * for loading and running the eBPF program. Warns if CAP_SYS_PTRACE is
  * absent. Returns 0 if requirements are satisfied, -1 otherwise.
  */
-int check_audit_caps(void)
+int check_auditor_caps(void)
 {
 	if (!capng_have_capability(CAPNG_EFFECTIVE, CAP_BPF) &&
 	    !capng_have_capability(CAPNG_EFFECTIVE, CAP_SYS_ADMIN)) {
 		fprintf(
-			stderr,
-			"Error: Need CAP_BPF or CAP_SYS_ADMIN to run auditor\n");
+		    stderr,
+		    "Error: Need CAP_BPF or CAP_SYS_ADMIN to run auditor\n");
 		return -1;
 	}
 
@@ -362,10 +366,9 @@ static void update_reason(struct cap_check *check, int syscall_nr)
  * marks capabilities as definitely needed when the kernel granted them.
  * Returns 0 to keep polling.
  */
-int handle_cap_event(void *ctx, void *data, size_t data_sz)
+int handle_cap_event(void *ctx __attribute__((unused)), void *data,
+		     size_t data_sz __attribute__((unused)))
 {
-	(void)ctx;
-	(void)data_sz;
 	const struct cap_event *e = data;
 
 	/*
@@ -379,8 +382,10 @@ int handle_cap_event(void *ctx, void *data, size_t data_sz)
 		    e->syscall_nr == state.app.mmap_nr ||
 		    e->syscall_nr == state.app.brk_nr) {
 			if (state.verbose)
-				printf("[CAP] Filtered startup noise: CAP_SYS_ADMIN in %s\n",
-				       syscall_name_from_nr(e->syscall_nr) ?: "startup");
+				printf("[CAP] Filtered startup noise: "
+				       "CAP_SYS_ADMIN in %s\n",
+				       syscall_name_from_nr(e->syscall_nr) ?:
+				       "startup");
 			return 0;
 		}
 	}
@@ -410,7 +415,7 @@ int handle_cap_event(void *ctx, void *data, size_t data_sz)
 		else if (e->result == 0)
 			check->denied++;
 
-		// First grant marks the capability as definitively required.
+		// First access grant marks the capability as required.
 		if (e->result > 0 && check->needed != 1) {
 			check->needed = 1;
 			update_reason(check, e->syscall_nr);
@@ -606,9 +611,10 @@ void analyze_capabilities(void)
 				has_conditional = 1;
 				conditional_count++;
 				printf("  CAP_SYS_RAWIO\n");
-				printf("    Needed when vm.mmap_min_addr > 0 to map "
-				       "low addresses\n");
-				printf("    Current value: %d (capability needed)\n",
+				printf("    Needed when vm.mmap_min_addr > 0 "
+				       "to map low addresses\n");
+				printf("    Current value: %d (capability "
+				       "needed)\n",
 				       state.app.mmap_min_addr);
 				printf("\n");
 			}
@@ -621,8 +627,8 @@ void analyze_capabilities(void)
 				has_conditional = 1;
 				conditional_count++;
 				printf("  CAP_FOWNER\n");
-				printf("    Needed when fs.protected_hardlinks = 1 to "
-				       "link files not owned by the caller\n");
+				printf("    Needed when fs.protected_hardlinks "
+				       "= 1 to link files not owned by the caller\n");
 				printf("    Current value: %d (capability needed)\n",
 				       state.app.protected_hardlinks);
 				printf("\n");
@@ -1011,7 +1017,7 @@ type_t classify_app(const char *exe)
 			if (strstr(buf, "python"))
 				return PYTHON;
 			// next check if elf binary
-		} else if (strncmp(buf, ELFMAG, 4) == 0)
+		} else if (strncmp(buf, ELFMAGIC, 4) == 0)
 			return ELF;
 	}
 
@@ -1020,10 +1026,6 @@ type_t classify_app(const char *exe)
 }
 
 /*
- * main - entry point for the capability auditor.
- * @argc: number of command-line arguments.
- * @argv: argument vector.
- *
  * Parses options, validates the auditor's own capabilities, loads and
  * attaches the BPF program, forks the target, registers its PID for tracing,
  * and drives the ring buffer loop until the target exits or the user stops
@@ -1036,7 +1038,7 @@ int main(int argc, char **argv)
 	int arg_idx;
 	pid_t child;
 	pid_t ret_pid;
-	int wstatus, warned_machine = 0;
+	int wstatus;
 
 
 	if (argc < 2) {
@@ -1078,7 +1080,7 @@ int main(int argc, char **argv)
 	if (init_capng() != 0)
 		return 1;
 
-	if (check_audit_caps() != 0)
+	if (check_auditor_caps() != 0)
 		return 1;
 
 	// Allow libbpf to pin maps by removing memlock limits early.
@@ -1089,10 +1091,9 @@ int main(int argc, char **argv)
 	state.app.prog_type = classify_app(state.app.exe);
 	if (audit_machine < 0)
 		audit_machine = audit_detect_machine();
-	if (audit_machine < 0 && !warned_machine) {
+	if (audit_machine < 0) {
 		fprintf(stderr,
-			"Warning: unable to determine audit machine for syscall lookup\n");
-		warned_machine = 1;
+			"Warning: unable to determine hardware achitecture for syscall lookup\n");
 	}
 	state.app.execve_nr = audit_name_to_syscall("execve", audit_machine);
 	state.app.mmap_nr = audit_name_to_syscall("mmap", audit_machine);
@@ -1173,12 +1174,12 @@ int main(int argc, char **argv)
 		if (ret_pid == child) {
 			if (WIFEXITED(wstatus))
 				printf(
-				       "\n[*] Application exited with status %d\n",
-				       WEXITSTATUS(wstatus));
+				   "\n[*] Application exited with status %d\n",
+				   WEXITSTATUS(wstatus));
 			else if (WIFSIGNALED(wstatus))
-				printf("\n[*] Application terminated by signal "
-				       "%d\n",
-				       WTERMSIG(wstatus));
+				printf(
+				  "\n[*] Application terminated by signal %d\n",
+				  WTERMSIG(wstatus));
 			break;
 		}
 	}

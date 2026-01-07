@@ -9,6 +9,7 @@ Source0: http://people.redhat.com/sgrubb/libcap-ng/%{name}-%{version}.tar.gz
 BuildRoot: %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
 BuildRequires: kernel-headers >= 2.6.11
 BuildRequires: libattr-devel
+# These next ones are only if --enable-cap-audit is configured
 BuildRequires: clang
 BuildRequires: bpftool libbpf-devel
 BuildRequires: audit-libs-devel
