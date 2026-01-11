@@ -62,6 +62,7 @@ to determine exactly what capability checks a program asks for.
 
 %prep
 %setup -q
+autoreconf -fv --install
 
 %build
 %configure --libdir=%{_libdir} --with-python3 --enable-cap-audit=yes
