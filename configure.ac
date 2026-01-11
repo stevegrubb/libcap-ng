@@ -257,9 +257,9 @@ echo .
 echo "
 
   libcap-ng Version:      $VERSION
-  Target:                 `uname -r`
+  Target:                 $target
   Installation prefix:    $prefix
-  Build Kernel:           $uname
+  Build Kernel:           `uname -r`
   Compiler:               $CC
   Compiler flags:
 `echo $CFLAGS | fmt -w 50 | sed 's,^,                          ,'`

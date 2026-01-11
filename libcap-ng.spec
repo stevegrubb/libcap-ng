@@ -62,6 +62,7 @@ to determine exactly what capability checks a program asks for.
 
 %prep
 %setup -q
+touch NEWS
 autoreconf -fv --install
 
 %build
