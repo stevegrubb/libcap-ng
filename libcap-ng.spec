@@ -6,6 +6,8 @@ License: LGPLv2+
 Group: System Environment/Libraries
 URL: https://github.com/stevegrubb/libcap-ng
 Source0: %{name}-%{version}.tar.gz
+BuildRequires: gcc make
+BuildRequires: autoconf automake libtool
 BuildRequires: kernel-headers >= 2.6.11
 BuildRequires: libattr-devel
 # These next ones are only if --enable-cap-audit is configured
