@@ -4,9 +4,8 @@ Version: 0.9
 Release: 1%{?dist}
 License: LGPLv2+
 Group: System Environment/Libraries
-URL: http://people.redhat.com/sgrubb/libcap-ng
-Source0: http://people.redhat.com/sgrubb/libcap-ng/%{name}-%{version}.tar.gz
-BuildRoot: %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
+URL: https://github.com/stevegrubb/libcap-ng
+Source0: %{name}-%{version}.tar.gz
 BuildRequires: kernel-headers >= 2.6.11
 BuildRequires: libattr-devel
 # These next ones are only if --enable-cap-audit is configured
