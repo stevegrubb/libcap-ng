@@ -2,7 +2,7 @@ Summary: An alternate POSIX capabilities library
 Name: libcap-ng
 Version: 0.9
 Release: 1%{?dist}
-License: LGPLv2+
+License: LGPL-2.0-or-later
 Group: System Environment/Libraries
 URL: https://github.com/stevegrubb/libcap-ng
 Source0: %{name}-%{version}.tar.gz
@@ -20,7 +20,7 @@ Libcap-ng is a library that makes using POSIX capabilities easier
 
 %package devel
 Summary: Header files for libcap-ng library
-License: LGPLv2+
+License: LGPL-2.0-or-later
 Requires: kernel-headers >= 2.6.11
 Requires: %{name} = %{version}-%{release}
 Requires: pkgconfig
@@ -31,7 +31,7 @@ applications that need to use the libcap-ng library.
 
 %package python3
 Summary: Python3 bindings for libcap-ng library
-License: LGPLv2+
+License: LGPL-2.0-or-later
 BuildRequires: python3-devel swig
 Requires: %{name} = %{version}-%{release}
 
@@ -41,7 +41,7 @@ and can be used by python3 applications.
 
 %package utils
 Summary: Utilities for analyzing and setting file capabilities
-License: GPLv2+
+License: GPL-2.0-or-later
 Requires: %{name} = %{version}-%{release}
 Recommends: %{name}-audit
 
@@ -52,7 +52,7 @@ lets you set the file system based capabilities.
 
 %package audit
 Summary: Utility for capturing needed capabilities
-License: GPLv2+
+License: GPL-2.0-or-later
 Requires: %{name} = %{version}-%{release}
 
 %description audit
