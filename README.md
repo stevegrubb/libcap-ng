@@ -2,7 +2,7 @@ libcap-ng
 =========
 
 The libcap-ng library should make programming with POSIX capabilities
-easier. The library has some utilities to help you analyse a system
+easier. The library has some utilities to help you analyze a system
 for apps that may have too much privileges.
 
 The included utilities are designed to let admins and developers spot apps from various ways that may be running with too much privilege. For example, any investigation should start with network facing apps since they would be prime targets for intrusion. The **netcap** program will check all running apps that have listening socket and display the results. Sample output from netcap:
@@ -192,7 +192,7 @@ kernels.
 
 cap-audit
 ---------
-As of the 0.9 release of libcap-ng, there is a new utility **cap-audit**. This program can be used to determine the actual capabilities that a program needs. To do this, use it to run the applictaion kind of the way one would use strace. Use '--' to separate the options to cap-audit from the program being audited. You need to use cap-audit as root because it places an eBPF program in the kernel to hook the capability checks to determine what was requested, was it granted, and what syscall did it originate from. When testing a daemon, pass command line options that keep it in the foreground. The following is an example checking sshd: 
+As of the 0.9 release of libcap-ng, there is a new utility **cap-audit**. This program can be used to determine the actual capabilities that a program needs. To do this, use it to run the application kind of the way one would use strace. Use '--' to separate the options to cap-audit from the program being audited. You need to use cap-audit as root because it places an eBPF program in the kernel to hook the capability checks to determine what was requested, was it granted, and what syscall did it originate from. When testing a daemon, pass command line options that keep it in the foreground. The following is an example checking sshd: 
 
 ```
 cap-audit -- /usr/sbin/sshd -D
