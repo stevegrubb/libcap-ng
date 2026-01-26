@@ -1,19 +1,21 @@
+%global bpf_supported_arches aarch64 x86_64 ppc64le riscv64 s390x
 Summary: An alternate POSIX capabilities library
 Name: libcap-ng
 Version: 0.9
 Release: 1%{?dist}
 License: LGPL-2.0-or-later
-Group: System Environment/Libraries
 URL: https://github.com/stevegrubb/libcap-ng
 Source0: %{name}-%{version}.tar.gz
 BuildRequires: gcc make
 BuildRequires: autoconf automake libtool
 BuildRequires: kernel-headers >= 2.6.11
 BuildRequires: libattr-devel
+%ifarch %{bpf_supported_arches}
 # These next ones are only if --enable-cap-audit is configured
 BuildRequires: clang
 BuildRequires: bpftool libbpf-devel
 BuildRequires: audit-libs-devel
+%endif
 
 %description
 Libcap-ng is a library that makes using POSIX capabilities easier
@@ -43,13 +45,16 @@ and can be used by python3 applications.
 Summary: Utilities for analyzing and setting file capabilities
 License: GPL-2.0-or-later
 Requires: %{name} = %{version}-%{release}
+%ifarch %{bpf_supported_arches}
 Recommends: %{name}-audit
+%endif
 
 %description utils
 The libcap-ng-utils package contains applications to analyze the
 POSIX capabilities of all the program running on a system. It also
 lets you set the file system based capabilities.
 
+%ifarch %{bpf_supported_arches}
 %package audit
 Summary: Utility for capturing needed capabilities
 License: GPL-2.0-or-later
@@ -59,6 +64,7 @@ Requires: %{name} = %{version}-%{release}
 This utility can be used to determine the necessary capabilities
 that a program needs. It does this by adding eBPF hooks in the kernel
 to determine exactly what capability checks a program asks for.
+%endif
 
 %prep
 %setup -q
@@ -66,19 +72,24 @@ touch NEWS
 autoreconf -fv --install
 
 %build
-%configure --libdir=%{_libdir} --with-python3 --enable-cap-audit=yes
+%configure --libdir=%{_libdir}
+%ifarch %{bpf_supported_arches} \
+	--enable-cap-audit=yes \
+%endif
+	--with-python3
+
 make CFLAGS="%{optflags}" %{?_smp_mflags}
 
 %install
-make DESTDIR="${RPM_BUILD_ROOT}" INSTALL='install -p' install
+%make_install
 
 # Remove a couple things so they don't get picked up
 rm -f $RPM_BUILD_ROOT/%{_libdir}/libcap-ng.la
 rm -f $RPM_BUILD_ROOT/%{_libdir}/libcap-ng.a
 rm -f $RPM_BUILD_ROOT/%{_libdir}/libdrop_ambient.la
 rm -f $RPM_BUILD_ROOT/%{_libdir}/libdrop_ambient.a
-rm -f $RPM_BUILD_ROOT/%{_libdir}/python?.?/site-packages/_capng.a
-rm -f $RPM_BUILD_ROOT/%{_libdir}/python?.?/site-packages/_capng.la
+rm -f $RPM_BUILD_ROOT/%{_libdir}/python%{python3_version}/site-packages/_capng.a
+rm -f $RPM_BUILD_ROOT/%{_libdir}/python%{python3_version}/site-packages/_capng.la
 
 %check
 make check
@@ -86,14 +97,12 @@ make check
 %ldconfig_scriptlets
 
 %files
-%defattr(-,root,root,-)
 %doc COPYING.LIB
 /%{_libdir}/libcap-ng.so.*
 /%{_libdir}/libdrop_ambient.so.*
 %attr(0644,root,root) %{_mandir}/man7/*
 
 %files devel
-%defattr(-,root,root,-)
 %attr(0644,root,root) %{_mandir}/man3/*
 %attr(0644,root,root) %{_includedir}/cap-ng.h
 %{_libdir}/libcap-ng.so
@@ -102,11 +111,9 @@ make check
 %{_libdir}/pkgconfig/libcap-ng.pc
 
 %files python3
-%defattr(-,root,root,-)
 %attr(755,root,root) %{python3_sitearch}/*
 
 %files utils
-%defattr(-,root,root,-)
 %doc COPYING
 %attr(0755,root,root) %{_bindir}/captest
 %attr(0755,root,root) %{_bindir}/filecap
@@ -117,10 +124,12 @@ make check
 %attr(0644,root,root) %{_mandir}/man8/netcap.8.gz
 %attr(0644,root,root) %{_mandir}/man8/pscap.8.gz
 
+%ifarch %{bpf_supported_arches}
 %files audit
 %defattr(-,root,root,-)
 %attr(0755,root,root) %{_bindir}/cap-audit
 %attr(0644,root,root) %{_mandir}/man8/cap-audit.8.gz
+%endif
 
 %changelog
 * Sun Jan 11 2026 Steve Grubb <sgrubb@redhat.com> 0.9-1
