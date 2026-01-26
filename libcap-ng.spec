@@ -46,25 +46,14 @@ Summary: Utilities for analyzing and setting file capabilities
 License: GPL-2.0-or-later
 Requires: %{name} = %{version}-%{release}
 %ifarch %{bpf_supported_arches}
-Recommends: %{name}-audit
+Provides: %{name}-audit
 %endif
 
 %description utils
 The libcap-ng-utils package contains applications to analyze the
 POSIX capabilities of all the program running on a system. It also
-lets you set the file system based capabilities.
-
-%ifarch %{bpf_supported_arches}
-%package audit
-Summary: Utility for capturing needed capabilities
-License: GPL-2.0-or-later
-Requires: %{name} = %{version}-%{release}
-
-%description audit
-This utility can be used to determine the necessary capabilities
-that a program needs. It does this by adding eBPF hooks in the kernel
-to determine exactly what capability checks a program asks for.
-%endif
+lets you set the file system based capabilities, and use cap-audit
+to determine the necessary capabilities for a program.
 
 %prep
 %setup -q
@@ -121,10 +110,7 @@ make check
 %attr(0644,root,root) %{_mandir}/man8/filecap.8.gz
 %attr(0644,root,root) %{_mandir}/man8/netcap.8.gz
 %attr(0644,root,root) %{_mandir}/man8/pscap.8.gz
-
 %ifarch %{bpf_supported_arches}
-%files audit
-%defattr(-,root,root,-)
 %attr(0755,root,root) %{_bindir}/cap-audit
 %attr(0644,root,root) %{_mandir}/man8/cap-audit.8.gz
 %endif
