@@ -115,11 +115,9 @@ make check
 
 %files utils
 %doc COPYING
-%attr(0755,root,root) %{_bindir}/captest
 %attr(0755,root,root) %{_bindir}/filecap
 %attr(0755,root,root) %{_bindir}/netcap
 %attr(0755,root,root) %{_bindir}/pscap
-%attr(0644,root,root) %{_mandir}/man8/captest.8.gz
 %attr(0644,root,root) %{_mandir}/man8/filecap.8.gz
 %attr(0644,root,root) %{_mandir}/man8/netcap.8.gz
 %attr(0644,root,root) %{_mandir}/man8/pscap.8.gz
@@ -134,4 +132,3 @@ make check
 %changelog
 * Sun Jan 11 2026 Steve Grubb <sgrubb@redhat.com> 0.9-1
 - New upstream release
-

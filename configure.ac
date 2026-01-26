@@ -70,6 +70,12 @@ AS_HELP_STRING([--enable-cap-audit],[build cap-audit [[default=no]]]),
 [enable_cap_audit=$enableval],
 [enable_cap_audit=no])
 
+AC_ARG_ENABLE([deprecated],
+AS_HELP_STRING([--enable-deprecated],
+[enable deprecated utilities such as captest [[default=no]]]),
+[enable_deprecated=$enableval],
+[enable_deprecated=no])
+
 if test "x$enable_cap_audit" = "xyes"; then
 missing_cap_audit_deps=no
 AC_CHECK_PROG([CLANG],[clang],[clang],[no])
@@ -132,6 +138,7 @@ AC_SUBST(LIBAUDIT_CFLAGS)
 AC_SUBST(LIBAUDIT_LIBS)
 
 AM_CONDITIONAL([BUILD_CAP_AUDIT], [test "x$enable_cap_audit" = "xyes"])
+AM_CONDITIONAL([BUILD_DEPRECATED], [test "x$enable_deprecated" = "xyes"])
 
 echo .
 echo Checking for header files
