@@ -1,4 +1,7 @@
-0.8.6
+0.9.1
+- Deprecate captest
+
+0.9
 - Fix python path when invoking py-compile (Jan Palus)
 - Drop python2 bindings (Rudi Heitbaum)
 - Optimize capability name translation lookups
