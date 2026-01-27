@@ -47,6 +47,7 @@ License: GPL-2.0-or-later
 Requires: %{name} = %{version}-%{release}
 %ifarch %{bpf_supported_arches}
 Provides: %{name}-audit
+Obsoletes: %{name}-audit < %{version}-%{release}
 %endif
 
 %description utils
