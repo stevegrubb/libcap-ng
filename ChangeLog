@@ -1,5 +1,6 @@
 0.9.1
 - Deprecate captest
+- If file system based capabilities, drop setpcap
 
 0.9
 - Fix python path when invoking py-compile (Jan Palus)
