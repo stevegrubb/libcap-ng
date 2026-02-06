@@ -26,6 +26,7 @@
 #include <ctype.h>
 #include <libaudit.h>
 #include <linux/capability.h>
+#include <limits.h>
 #include <signal.h>
 #include <sys/resource.h>
 #include <stdio.h>
@@ -33,6 +34,7 @@
 #include <string.h>
 #include <sys/syscall.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -110,6 +112,8 @@ struct app_caps {
 	int protected_symlinks;
 	int suid_dumpable;
 	char kernel_version[64];
+	int file_caps;
+	int file_setpcap;
 };
 
 // Global program state
@@ -127,6 +131,118 @@ struct audit_state {
 
 static struct audit_state state;
 static int audit_machine = -1;	// Hardware architecture (syscall lookup)
+
+static int include_cap_in_recommendations(int cap)
+{
+	if (cap == CAP_SETPCAP && state.app.file_caps &&
+	    !state.app.file_setpcap)
+		return 0;
+
+	return 1;
+}
+
+/*
+ * inspect_target_file_caps - read file capability xattr of target program.
+ * @pid: pid of the traced process.
+ *
+ * Uses /proc/<pid>/exe to query file capabilities with capng_get_caps_fd.
+ * Sets flags describing whether file capabilities are present and whether
+ * CAP_SETPCAP appears in that xattr. Returns 0 on success, -1 on error.
+ */
+static int inspect_target_file_caps(pid_t pid)
+{
+	char linkpath[64];
+	char exepath[PATH_MAX];
+	char selfpath[PATH_MAX];
+	ssize_t len;
+	ssize_t self_len;
+	int fd;
+	int tries = 50;
+	struct stat st;
+	capng_results_t caps;
+
+	state.app.file_caps = 0;
+	state.app.file_setpcap = 0;
+
+	if (snprintf(linkpath, sizeof(linkpath), "/proc/%d/exe", pid) < 0)
+		return -1;
+
+	self_len = readlink("/proc/self/exe", selfpath, sizeof(selfpath) - 1);
+	if (self_len >= 0)
+		selfpath[self_len] = '\0';
+
+	while (tries--) {
+		len = readlink(linkpath, exepath, sizeof(exepath) - 1);
+		if (len < 0) {
+			fprintf(stderr, "Warning: readlink(%s) failed: %s\n",
+				linkpath, strerror(errno));
+			return -1;
+		}
+		exepath[len] = '\0';
+
+		if (self_len < 0 || strcmp(exepath, selfpath) != 0)
+			break;
+
+		if (tries == 0)
+			fprintf(stderr,
+				"Warning: %s still points to auditor binary (%s)\n",
+				linkpath, exepath);
+		usleep(10000);
+	}
+
+	fd = open(exepath, O_RDONLY | O_CLOEXEC);
+	if (fd < 0) {
+		fprintf(stderr, "Warning: open(%s) failed: %s\n",
+			exepath, strerror(errno));
+		return -1;
+	}
+
+	if (fstat(fd, &st) < 0) {
+		fprintf(stderr, "Warning: fstat(%s) failed: %s\n",
+			exepath, strerror(errno));
+		close(fd);
+		return -1;
+	}
+	if (!S_ISREG(st.st_mode)) {
+		fprintf(stderr, "Warning: %s is not a regular file\n",
+			exepath);
+		close(fd);
+		return -1;
+	}
+
+	capng_clear(CAPNG_SELECT_BOTH);
+	if (capng_get_caps_fd(fd)) {
+		if (errno != ENODATA)
+			fprintf(stderr,
+				"Warning: capng_get_caps_fd(%s) failed: %s\n",
+				exepath, strerror(errno));
+		close(fd);
+		if (capng_get_caps_process())
+			fprintf(stderr,
+				"Warning: failed to restore process capabilities\n");
+		return -1;
+	}
+	close(fd);
+
+	caps = capng_have_capabilities(CAPNG_SELECT_CAPS);
+	if (caps == CAPNG_NONE)
+		caps = capng_have_permitted_capabilities();
+	if (caps > CAPNG_NONE)
+		state.app.file_caps = 1;
+
+	if (capng_have_capability(CAPNG_PERMITTED, CAP_SETPCAP) ||
+	    capng_have_capability(CAPNG_INHERITABLE, CAP_SETPCAP))
+		state.app.file_setpcap = 1;
+
+	if (state.verbose)
+		printf("[*] File caps source: %s (has_caps=%d setpcap=%d)\n",
+		       exepath, state.app.file_caps, state.app.file_setpcap);
+
+	if (capng_get_caps_process())
+		fprintf(stderr, "Warning: failed to restore process capabilities\n");
+
+	return 0;
+}
 
 static void print_cap_name_upper(int cap)
 {
@@ -490,6 +606,10 @@ void analyze_capabilities(void)
 			       check->granted, check->denied);
 			if (check->reason)
 				printf("    Reason: %s\n", check->reason);
+			if (i == CAP_SETPCAP && check->granted == 1 &&
+			    state.app.file_caps && !state.app.file_setpcap)
+				printf("    Note: Granted once, but not present in "
+				       "file xattr; likely internal check.\n");
 			printf("\n");
 		}
 	}
@@ -727,7 +847,8 @@ void analyze_capabilities(void)
 				printf("    capng_updatev(CAPNG_ADD, "
 				       "CAPNG_EFFECTIVE|CAPNG_PERMITTED");
 				for (i = 0; i <= CAP_LAST_CAP; i++) {
-					if (state.app.checks[i].granted > 0) {
+					if (state.app.checks[i].granted > 0 &&
+					    include_cap_in_recommendations(i)) {
 						printf(", ");
 						print_cap_name_upper(i);
 					}
@@ -745,7 +866,8 @@ void analyze_capabilities(void)
 				printf("    capng.capng_updatev(capng.CAPNG_ADD, "
 				       "capng.CAPNG_EFFECTIVE|capng.CAPNG_PERMITTED");
 				for (i = 0; i <= CAP_LAST_CAP; i++) {
-					if (state.app.checks[i].granted > 0) {
+					if (state.app.checks[i].granted > 0 &&
+					    include_cap_in_recommendations(i)) {
 						printf(", capng.");
 						print_cap_name_upper(i);
 					}
@@ -767,7 +889,8 @@ void analyze_capabilities(void)
 		printf("    AmbientCapabilities=");
 		first = 1;
 		for (i = 0; i <= CAP_LAST_CAP; i++) {
-			if (state.app.checks[i].granted > 0) {
+			if (state.app.checks[i].granted > 0 &&
+			    include_cap_in_recommendations(i)) {
 				if (!first)
 					printf(" ");
 				printf("%s", capng_capability_to_name(i));
@@ -778,7 +901,8 @@ void analyze_capabilities(void)
 		printf("    CapabilityBoundingSet=");
 		first = 1;
 		for (i = 0; i <= CAP_LAST_CAP; i++) {
-			if (state.app.checks[i].granted > 0) {
+			if (state.app.checks[i].granted > 0 &&
+			    include_cap_in_recommendations(i)) {
 				if (!first)
 					printf(" ");
 				printf("%s", capng_capability_to_name(i));
@@ -790,7 +914,8 @@ void analyze_capabilities(void)
 		printf("  For file capabilities (via filecap):\n");
 		printf("    filecap /path/to/binary");
 		for (i = 0; i <= CAP_LAST_CAP; i++) {
-			if (state.app.checks[i].granted > 0)
+			if (state.app.checks[i].granted > 0 &&
+			    include_cap_in_recommendations(i))
 				printf(" %s", capng_capability_to_name(i));
 		}
 		printf("\n\n");
@@ -799,7 +924,8 @@ void analyze_capabilities(void)
 		printf("    docker run --user $(id -u):$(id -g) \\\n");
 		printf("      --cap-drop=ALL \\\n");
 		for (i = 0; i <= CAP_LAST_CAP; i++) {
-			if (state.app.checks[i].granted > 0)
+			if (state.app.checks[i].granted > 0 &&
+			    include_cap_in_recommendations(i))
 				printf("      --cap-add=%s \\\n",
 				       capng_capability_to_name(i));
 		}
@@ -814,7 +940,8 @@ void analyze_capabilities(void)
 		printf("          - ALL\n");
 		printf("        add:\n");
 		for (i = 0; i <= CAP_LAST_CAP; i++) {
-			if (state.app.checks[i].granted > 0)
+			if (state.app.checks[i].granted > 0 &&
+			    include_cap_in_recommendations(i))
 				printf("          - %s\n",
 				       capng_capability_to_name(i));
 		}
@@ -1153,6 +1280,7 @@ int main(int argc, char **argv)
 	}
 
 	read_system_state(&state.app);
+	inspect_target_file_caps(child);
 
 	printf("[*] Tracing application: %s (PID %d)\n", state.app.exe, child);
 	printf("[*] Press Ctrl-C to stop\n\n");
@@ -1208,4 +1336,3 @@ int main(int argc, char **argv)
 
 	return 0;
 }
-
