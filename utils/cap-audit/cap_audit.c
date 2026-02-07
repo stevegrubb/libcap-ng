@@ -85,8 +85,6 @@ struct cap_check {
 	unsigned long denied;
 	int needed;
 	char *reason;
-	char **syscall_contexts;
-	size_t num_contexts;
 };
 
 // Program global variables
