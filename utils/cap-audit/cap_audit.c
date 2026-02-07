@@ -1249,6 +1249,7 @@ void output_yaml(void) {
 type_t classify_app(const char *exe)
 {
 	int fd;
+	ssize_t rc;
 	char buf[257];
 
 	fd = open(exe, O_RDONLY);
@@ -1258,7 +1259,7 @@ type_t classify_app(const char *exe)
 	}
 
 	// classify the app
-	ssize_t rc = read(fd, buf, 256);
+	rc = read(fd, buf, 256);
 	close(fd);
 	if (rc > 0) {
 		// terminate buffer
