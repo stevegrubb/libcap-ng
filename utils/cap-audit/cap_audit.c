@@ -479,6 +479,9 @@ static void update_reason(struct cap_check *check, int syscall_nr)
 {
 	const char *syscall_name;
 
+	if (check->reason)
+		free(check->reason);
+
 	if (syscall_nr < 0) {
 		if (asprintf(&check->reason,
 			     "Used during capability check (syscall unknown)") < 0)
@@ -487,9 +490,6 @@ static void update_reason(struct cap_check *check, int syscall_nr)
 	}
 
 	syscall_name = syscall_name_from_nr(syscall_nr);
-	if (check->reason)
-		free(check->reason);
-
 	if (asprintf(&check->reason, "Used by %s (syscall %d)",
 		     syscall_name ? syscall_name : "unknown", syscall_nr) < 0)
 		check->reason = NULL;
