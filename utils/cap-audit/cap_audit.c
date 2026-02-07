@@ -272,6 +272,12 @@ static void print_cap_name_upper(int cap)
 		printf("%c", toupper((unsigned char)name[i]));
 }
 
+static const char *cap_name_safe(int cap)
+{
+	const char *name = capng_capability_to_name(cap);
+	return name ? name : "unknown";
+}
+
 /*
  * sig_handler - handle termination signals.
  * @sig: signal number (unused).
@@ -619,7 +625,7 @@ int handle_cap_event(void *ctx __attribute__((unused)), void *data,
 		printf("[CAP] pid=%d cap=%d (%s) result=%s syscall=%d (%s) "
 		       "comm=%s\n",
 		       e->pid, e->capability,
-		       capng_capability_to_name(e->capability),
+		       cap_name_safe(e->capability),
 		       e->result ? "GRANTED" : "DENIED", e->syscall_nr,
 		       syscall_name_from_nr(e->syscall_nr) ?: "unknown",
 		       e->comm);
@@ -707,7 +713,7 @@ void analyze_capabilities(void)
 		if (check->granted > 0) {
 			has_required = 1;
 			// Summarize how many times the kernel permitted usage.
-			printf("  %s (#%d)\n", capng_capability_to_name(i), i);
+			printf("  %s (#%d)\n", cap_name_safe(i), i);
 			printf("    Checks: %lu granted, %lu denied\n",
 			       check->granted, check->denied);
 			if (check->reason)
@@ -907,7 +913,7 @@ void analyze_capabilities(void)
 		check = &state.app.checks[i];
 		if (check->denied > 0 && check->granted == 0) {
 			has_denied = 1;
-			printf("  %s (#%d)\n", capng_capability_to_name(i), i);
+			printf("  %s (#%d)\n", cap_name_safe(i), i);
 			printf("    Attempts: %lu (all denied)\n",
 			       check->denied);
 			printf("    Impact: Application may have reduced "
@@ -999,7 +1005,7 @@ void analyze_capabilities(void)
 			    include_cap_in_recommendations(i)) {
 				if (!first)
 					printf(" ");
-				printf("%s", capng_capability_to_name(i));
+				printf("%s", cap_name_safe(i));
 				first = 0;
 			}
 		}
@@ -1011,7 +1017,7 @@ void analyze_capabilities(void)
 			    include_cap_in_recommendations(i)) {
 				if (!first)
 					printf(" ");
-				printf("%s", capng_capability_to_name(i));
+				printf("%s", cap_name_safe(i));
 				first = 0;
 			}
 		}
@@ -1022,7 +1028,7 @@ void analyze_capabilities(void)
 		for (i = 0; i <= CAP_LAST_CAP; i++) {
 			if (state.app.checks[i].granted > 0 &&
 			    include_cap_in_recommendations(i))
-				printf(" %s", capng_capability_to_name(i));
+				printf(" %s", cap_name_safe(i));
 		}
 		printf("\n\n");
 
@@ -1033,7 +1039,7 @@ void analyze_capabilities(void)
 			if (state.app.checks[i].granted > 0 &&
 			    include_cap_in_recommendations(i))
 				printf("      --cap-add=%s \\\n",
-				       capng_capability_to_name(i));
+				       cap_name_safe(i));
 		}
 		printf("      your-image:tag\n\n");
 
@@ -1048,8 +1054,7 @@ void analyze_capabilities(void)
 		for (i = 0; i <= CAP_LAST_CAP; i++) {
 			if (state.app.checks[i].granted > 0 &&
 			    include_cap_in_recommendations(i))
-				printf("          - %s\n",
-				       capng_capability_to_name(i));
+				printf("          - %s\n", cap_name_safe(i));
 		}
 		printf("\n");
 	} else {
@@ -1228,8 +1233,7 @@ void output_yaml(void) {
 
 		if (check->denied > 0 && check->granted == 0) {
 			printf("  - number: %d\n", i);
-			printf("    name: %s\n",
-			       capng_capability_to_name(i));
+			printf("    name: %s\n", cap_name_safe(i));
 			printf("    attempts: %lu\n", check->denied);
 		}
 	}
