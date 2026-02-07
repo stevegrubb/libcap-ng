@@ -123,6 +123,7 @@ struct audit_state {
 	int verbose;
 	int json_output;
 	int yaml_output;
+	int sync_pipe[2];
 	char **target_argv;
 	volatile sig_atomic_t stop;
 };
@@ -1383,15 +1384,37 @@ int main(int argc, char **argv)
 
 	printf("[*] Capability auditor started\n");
 
+	if (pipe(state.sync_pipe) != 0) {
+		fprintf(stderr, "Error: pipe failed: %s\n", strerror(errno));
+		ring_buffer__free(state.rb);
+		cap_audit_bpf__destroy(state.skel);
+		return 1;
+	}
+
 	child = fork();
 	if (child == 0) {
-		// Child pauses briefly so parent can insert PID into BPF map.
-		usleep(100000);
+		char sync_byte;
+		ssize_t bytes;
+
+		close(state.sync_pipe[1]);
+		bytes = read(state.sync_pipe[0], &sync_byte, 1);
+		if (bytes != 1) {
+			if (bytes < 0)
+				perror("read");
+			else
+				fprintf(stderr,
+					"Error: failed to sync with parent\n");
+			close(state.sync_pipe[0]);
+			exit(1);
+		}
+		close(state.sync_pipe[0]);
 		execvp(state.target_argv[0], state.target_argv);
 		perror("execvp");
 		exit(1);
 	} else if (child < 0) {
 		fprintf(stderr, "Error: fork failed: %s\n", strerror(errno));
+		close(state.sync_pipe[0]);
+		close(state.sync_pipe[1]);
 		ring_buffer__free(state.rb);
 		cap_audit_bpf__destroy(state.skel);
 		return 1;
@@ -1399,7 +1422,9 @@ int main(int argc, char **argv)
 
 	state.app.pid = child;
 
+	close(state.sync_pipe[0]);
 	if (set_target_pid(child) != 0) {
+		close(state.sync_pipe[1]);
 		kill(child, SIGKILL);
 		waitpid(child, NULL, 0);
 		ring_buffer__free(state.rb);
@@ -1407,6 +1432,18 @@ int main(int argc, char **argv)
 		free(state.app.exe);
 		return 1;
 	}
+
+	if (write(state.sync_pipe[1], "1", 1) != 1) {
+		fprintf(stderr, "Error: write failed: %s\n", strerror(errno));
+		close(state.sync_pipe[1]);
+		kill(child, SIGKILL);
+		waitpid(child, NULL, 0);
+		ring_buffer__free(state.rb);
+		cap_audit_bpf__destroy(state.skel);
+		free(state.app.exe);
+		return 1;
+	}
+	close(state.sync_pipe[1]);
 
 	{
 		char resolved[PATH_MAX];
