@@ -490,6 +490,96 @@ static void update_reason(struct cap_check *check, int syscall_nr)
 }
 
 /*
+ * json_escape - escape a string for JSON output.
+ * @input: string to escape.
+ *
+ * Returns a newly allocated escaped string or NULL on allocation failure.
+ */
+static char *json_escape(const char *input)
+{
+	size_t i;
+	size_t needed = 0;
+	char *out;
+	char *pos;
+
+	if (!input)
+		return strdup("");
+
+	for (i = 0; input[i]; i++) {
+		unsigned char c = input[i];
+
+		switch (c) {
+		case '\"':
+		case '\\':
+		case '\b':
+		case '\f':
+		case '\n':
+		case '\r':
+		case '\t':
+			needed += 2;
+			break;
+		default:
+			if (c < 0x20)
+				needed += 6;
+			else
+				needed++;
+			break;
+		}
+	}
+
+	out = malloc(needed + 1);
+	if (!out)
+		return NULL;
+
+	pos = out;
+	for (i = 0; input[i]; i++) {
+		unsigned char c = input[i];
+
+		switch (c) {
+		case '\"':
+			*pos++ = '\\';
+			*pos++ = '\"';
+			break;
+		case '\\':
+			*pos++ = '\\';
+			*pos++ = '\\';
+			break;
+		case '\b':
+			*pos++ = '\\';
+			*pos++ = 'b';
+			break;
+		case '\f':
+			*pos++ = '\\';
+			*pos++ = 'f';
+			break;
+		case '\n':
+			*pos++ = '\\';
+			*pos++ = 'n';
+			break;
+		case '\r':
+			*pos++ = '\\';
+			*pos++ = 'r';
+			break;
+		case '\t':
+			*pos++ = '\\';
+			*pos++ = 't';
+			break;
+		default:
+			if (c < 0x20) {
+				snprintf(pos, 7, "\\u%04x", c);
+				pos += 6;
+			} else {
+				*pos++ = c;
+			}
+			break;
+		}
+	}
+	*pos = '\0';
+
+	return out;
+}
+
+/*
  * handle_cap_event - process one capability event from the ring buffer.
  * @ctx: unused callback context.
  * @data: pointer to struct cap_event from BPF.
@@ -984,16 +1074,21 @@ void output_json(void)
 	int i;
 	int first_cap;
 	int first_denied;
+	char *exe_json;
+	char *kernel_json;
+
+	exe_json = json_escape(state.app.exe);
+	kernel_json = json_escape(state.app.kernel_version);
 
 	printf("{\n");
 	printf("  \"application\": {\n");
 	printf("    \"pid\": %d,\n", state.app.pid);
-	printf("    \"comm\": \"%s\"\n", state.app.exe);
+	printf("    \"comm\": \"%s\"\n", exe_json ? exe_json : "");
 	printf("  },\n");
 
 	printf("  \"system_context\": {\n");
 	printf("    \"kernel_version\": \"%s\",\n",
-	       state.app.kernel_version);
+	       kernel_json ? kernel_json : "");
 	printf("    \"yama_ptrace_scope\": %d,\n", state.app.yama_ptrace_scope);
 	printf("    \"kptr_restrict\": %d,\n", state.app.kptr_restrict);
 	printf("    \"dmesg_restrict\": %d,\n", state.app.dmesg_restrict);
@@ -1014,18 +1109,26 @@ void output_json(void)
 	printf("    \"fs_suid_dumpable\": %d\n", state.app.suid_dumpable);
 	printf("  },\n");
 
+	free(exe_json);
+	free(kernel_json);
+
 	printf("  \"required_capabilities\": [\n");
 	first_cap = 1;
 	for (i = 0; i <= CAP_LAST_CAP; i++) {
 		struct cap_check *check = &state.app.checks[i];
+		char *name_json;
+		char *reason_json;
 
 		if (check->granted > 0) {
+			name_json = json_escape(capng_capability_to_name(i));
+			reason_json = check->reason ?
+				json_escape(check->reason) : NULL;
 			if (!first_cap)
 				printf(",\n");
 			printf("    {\n");
 			printf("      \"number\": %d,\n", i);
 			printf("      \"name\": \"%s\",\n",
-			       capng_capability_to_name(i));
+			       name_json ? name_json : "");
 			printf("      \"checks\": {\n");
 			printf("        \"total\": %lu,\n", check->count);
 			printf("        \"granted\": %lu,\n", check->granted);
@@ -1033,11 +1136,13 @@ void output_json(void)
 			printf("      }");
 			if (check->reason)
 				printf(",\n      \"reason\": \"%s\"\n",
-				       check->reason);
+				       reason_json ? reason_json : "");
 			else
 				printf("\n");
 			printf("    }");
 			first_cap = 0;
+			free(name_json);
+			free(reason_json);
 		}
 	}
 	printf("\n  ],\n");
@@ -1046,17 +1151,20 @@ void output_json(void)
 	first_denied = 1;
 	for (i = 0; i <= CAP_LAST_CAP; i++) {
 		struct cap_check *check = &state.app.checks[i];
+		char *name_json;
 
 		if (check->denied > 0 && check->granted == 0) {
+			name_json = json_escape(capng_capability_to_name(i));
 			if (!first_denied)
 				printf(",\n");
 			printf("    {\n");
 			printf("      \"number\": %d,\n", i);
 			printf("      \"name\": \"%s\",\n",
-			       capng_capability_to_name(i));
+			       name_json ? name_json : "");
 			printf("      \"attempts\": %lu\n", check->denied);
 			printf("    }");
 			first_denied = 0;
+			free(name_json);
 		}
 	}
 	printf("\n  ]\n");
