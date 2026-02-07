@@ -1251,7 +1251,7 @@ type_t classify_app(const char *exe)
 	int fd;
 	char buf[257];
 
-	fd = open(exe, O_RDONLY|O_NONBLOCK);
+	fd = open(exe, O_RDONLY);
 	if (fd < 0) {
 		fprintf(stderr, "Cannot open %s - %s\n", exe, strerror(errno));
 		exit(1);
