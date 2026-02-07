@@ -140,27 +140,21 @@ static int include_cap_in_recommendations(int cap)
 }
 
 /*
- * inspect_target_file_caps - read file capability xattr of target program.
+ * resolve_target_exe - read resolved executable path for target process.
  * @pid: pid of the traced process.
+ * @exepath: buffer for resolved path.
+ * @exepath_len: size of buffer.
  *
- * Uses /proc/<pid>/exe to query file capabilities with capng_get_caps_fd.
- * Sets flags describing whether file capabilities are present and whether
- * CAP_SETPCAP appears in that xattr. Returns 0 on success, -1 on error.
+ * Waits for /proc/<pid>/exe to update after exec by ignoring pointers to
+ * the auditor binary. Returns 0 on success, -1 on error.
  */
-static int inspect_target_file_caps(pid_t pid)
+static int resolve_target_exe(pid_t pid, char *exepath, size_t exepath_len)
 {
 	char linkpath[64];
-	char exepath[PATH_MAX];
 	char selfpath[PATH_MAX];
 	ssize_t len;
 	ssize_t self_len;
-	int fd;
 	int tries = 50;
-	struct stat st;
-	capng_results_t caps;
-
-	state.app.file_caps = 0;
-	state.app.file_setpcap = 0;
 
 	if (snprintf(linkpath, sizeof(linkpath), "/proc/%d/exe", pid) < 0)
 		return -1;
@@ -170,7 +164,7 @@ static int inspect_target_file_caps(pid_t pid)
 		selfpath[self_len] = '\0';
 
 	while (tries--) {
-		len = readlink(linkpath, exepath, sizeof(exepath) - 1);
+		len = readlink(linkpath, exepath, exepath_len - 1);
 		if (len < 0) {
 			fprintf(stderr, "Warning: readlink(%s) failed: %s\n",
 				linkpath, strerror(errno));
@@ -187,6 +181,30 @@ static int inspect_target_file_caps(pid_t pid)
 				linkpath, exepath);
 		usleep(10000);
 	}
+
+	return 0;
+}
+
+/*
+ * inspect_target_file_caps - read file capability xattr of target program.
+ * @pid: pid of the traced process.
+ *
+ * Uses /proc/<pid>/exe to query file capabilities with capng_get_caps_fd.
+ * Sets flags describing whether file capabilities are present and whether
+ * CAP_SETPCAP appears in that xattr. Returns 0 on success, -1 on error.
+ */
+static int inspect_target_file_caps(pid_t pid)
+{
+	char exepath[PATH_MAX];
+	int fd;
+	struct stat st;
+	capng_results_t caps;
+
+	state.app.file_caps = 0;
+	state.app.file_setpcap = 0;
+
+	if (resolve_target_exe(pid, exepath, sizeof(exepath)) < 0)
+		return -1;
 
 	fd = open(exepath, O_RDONLY | O_CLOEXEC);
 	if (fd < 0) {
@@ -1214,7 +1232,7 @@ int main(int argc, char **argv)
 		return 1;
 
 	state.app.exe = strdup(state.target_argv[0]);
-	state.app.prog_type = classify_app(state.app.exe);
+	state.app.prog_type = UNSUPPORTED;
 	if (audit_machine < 0)
 		audit_machine = audit_detect_machine();
 	if (audit_machine < 0) {
@@ -1275,6 +1293,23 @@ int main(int argc, char **argv)
 		cap_audit_bpf__destroy(state.skel);
 		free(state.app.exe);
 		return 1;
+	}
+
+	{
+		char resolved[PATH_MAX];
+
+		if (resolve_target_exe(child, resolved, sizeof(resolved)) == 0) {
+			char *resolved_dup = strdup(resolved);
+
+			if (resolved_dup) {
+				free(state.app.exe);
+				state.app.exe = resolved_dup;
+			}
+			state.app.prog_type = classify_app(state.app.exe);
+		} else {
+			fprintf(stderr,
+				"Warning: unable to resolve target path\n");
+		}
 	}
 
 	read_system_state(&state.app);
