@@ -321,7 +321,7 @@ static int set_memlock_rlimit(void)
  * Clears cached capability information and refreshes it from the current
  * process. Returns 0 on success, -1 on failure.
  */
-int init_capng(void)
+static int init_capng(void)
 {
 	capng_clear(CAPNG_SELECT_BOTH);
 
@@ -340,7 +340,7 @@ int init_capng(void)
  * for loading and running the eBPF program. Warns if CAP_SYS_PTRACE is
  * absent. Returns 0 if requirements are satisfied, -1 otherwise.
  */
-int check_auditor_caps(void)
+static int check_auditor_caps(void)
 {
 	if (!capng_have_capability(CAPNG_EFFECTIVE, CAP_BPF) &&
 	    !capng_have_capability(CAPNG_EFFECTIVE, CAP_SYS_ADMIN)) {
@@ -372,7 +372,7 @@ int check_auditor_caps(void)
  * of 1, and optionally logs the registration when verbose. Returns 0 on
  * success or -1 on error.
  */
-int set_target_pid(pid_t pid)
+static int set_target_pid(pid_t pid)
 {
 	int map_fd;
 	__u8 val = 1;
@@ -396,12 +396,11 @@ int set_target_pid(pid_t pid)
 }
 
 /*
- * read_system_state - snapshot kernel tunables relevant to capabilities.
- * @app: application tracking structure to populate.
+ * read_sysctl - a helper function to read a given sysctl value
+ * @path: the path to the sysctl to read
+ * @value: a pointer where the value is stored
  *
- * Reads a handful of /proc/sys values that influence capability behavior
- * (ptrace scope, perf_event paranoid, BPF toggles, kernel version). Missing
- * files are recorded as -1 to indicate unknown. No return value.
+ * No return value
  */
 static void read_sysctl(const char *path, int *value)
 {
@@ -417,7 +416,15 @@ static void read_sysctl(const char *path, int *value)
 	}
 }
 
-void read_system_state(struct app_caps *app)
+/*
+ * read_system_state - snapshot kernel tunables relevant to capabilities.
+ * @app: application tracking structure to populate.
+ *
+ * Reads a handful of /proc/sys values that influence capability behavior
+ * (ptrace scope, perf_event paranoid, BPF toggles, kernel version). Missing
+ * files are recorded as -1 to indicate unknown. No return value.
+ */
+static void read_system_state(struct app_caps *app)
 {
 	FILE *f;
 
@@ -596,7 +603,7 @@ static char *json_escape(const char *input)
  * marks capabilities as definitely needed when the kernel granted them.
  * Returns 0 to keep polling.
  */
-int handle_cap_event(void *ctx __attribute__((unused)), void *data,
+static int handle_cap_event(void *ctx __attribute__((unused)), void *data,
 		     size_t data_sz __attribute__((unused)))
 {
 	const struct cap_event *e = data;
@@ -662,7 +669,7 @@ int handle_cap_event(void *ctx __attribute__((unused)), void *data,
  * highlight required, conditional, and denied capabilities. Also emits
  * configuration snippets for common deployment targets. No return value.
  */
-void analyze_capabilities(void)
+static void analyze_capabilities(void)
 {
 	int has_required = 0;
 	int has_conditional = 0;
@@ -1075,7 +1082,7 @@ void analyze_capabilities(void)
  * Serializes application info, system context, required capabilities, and
  * denied-only attempts to stdout. No return value.
  */
-void output_json(void)
+static void output_json(void)
 {
 	int i;
 	int first_cap;
@@ -1183,7 +1190,7 @@ void output_json(void)
  * Provides a YAML representation mirroring the JSON layout so consumers can
  * parse the auditor output more easily. No return value.
  */
-void output_yaml(void) {
+static void output_yaml(void) {
 	int i;
 
 	printf("application:\n");
@@ -1247,7 +1254,7 @@ void output_yaml(void) {
  * Reads the first line of the file to spot a shebang with "python" or the
  * ELF magic. Returns PYTHON, ELF, or UNSUPPORTED accordingly.
  */
-type_t classify_app(const char *exe)
+static type_t classify_app(const char *exe)
 {
 	int fd;
 	ssize_t rc;
