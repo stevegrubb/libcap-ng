@@ -233,8 +233,13 @@ static __always_inline void record_stats(int cap)
 		struct cap_stats new_stats = { 0 };
 
 		new_stats.checks = 1;
-		bpf_map_update_elem(&capability_stats, &key, &new_stats,
-				    BPF_ANY);
+		if (!bpf_map_update_elem(&capability_stats, &key,
+					 &new_stats, BPF_NOEXIST))
+			return;
+
+		stats = bpf_map_lookup_elem(&capability_stats, &key);
+		if (stats)
+			__sync_fetch_and_add(&stats->checks, 1);
 	}
 }
 
