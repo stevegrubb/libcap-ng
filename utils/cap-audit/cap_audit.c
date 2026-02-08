@@ -94,6 +94,7 @@ struct app_caps {
 	int execve_nr;
 	int mmap_nr;
 	int brk_nr;
+	int mprotect_nr;
 	type_t prog_type;
 	struct cap_check checks[CAP_LAST_CAP + 1];
 	int yama_ptrace_scope;
@@ -126,6 +127,7 @@ struct audit_state {
 	int sync_pipe[2];
 	char **target_argv;
 	volatile sig_atomic_t stop;
+	int shutting_down;
 };
 
 static struct audit_state state;
@@ -138,6 +140,48 @@ static int include_cap_in_recommendations(int cap)
 		return 0;
 
 	return 1;
+}
+
+/*
+ * is_always_noise - capability checks that are never real application needs.
+ *
+ * SYS_ADMIN and SETPCAP from execve are always kernel-internal credential
+ * transitions (install_exec_creds/commit_creds). No application needs these
+ * capabilities for exec to succeed. Filtering these unconditionally also
+ * keeps the startup gate closed across shebang re-exec chains, so that the
+ * startup_noise filter remains effective for the interpreter's linker.
+ */
+static int is_always_noise(const struct cap_event *e)
+{
+	if (e->syscall_nr == state.app.execve_nr &&
+	   (e->capability == CAP_SYS_ADMIN ||
+	    e->capability == CAP_SETPCAP))
+		return 1;
+
+	return 0;
+}
+
+/*
+ * is_startup_noise - identify capability checks from exec credential
+ * transition and runtime linker memory setup.
+ *
+ * These are kernel-internal checks that occur between exec completion
+ * and the application's main() and do not represent capabilities the
+ * application itself needs. The patterns are stable kernel behavior:
+ *
+ *   SYS_ADMIN from mmap/brk/mprotect: security_mmap_addr() checks
+ *       triggered when root maps memory; the runtime linker does this
+ *       while loading shared libraries.
+ */
+static int is_startup_noise(const struct cap_event *e)
+{
+	if (e->capability == CAP_SYS_ADMIN &&
+	    (e->syscall_nr == state.app.mmap_nr ||
+	     e->syscall_nr == state.app.brk_nr ||
+	     e->syscall_nr == state.app.mprotect_nr))
+		return 1;
+
+	return 0;
 }
 
 /*
@@ -609,25 +653,51 @@ static int handle_cap_event(void *ctx __attribute__((unused)), void *data,
 	const struct cap_event *e = data;
 
 	/*
-	 * Ignore CAP_SYS_ADMIN checks while the runtime linker is populating
-	 * the process address space. These happen during execve/mmap/brk
-	 * before control reaches the application's entry point and would
-	 * otherwise look like required capabilities.
+	 * Always-filter: credential transition noise from exec. These are
+	 * never real application needs and are dropped silently so the
+	 * recording_ready gate stays closed across shebang re-exec chains.
 	 */
-	if (!state.recording_ready && e->capability == CAP_SYS_ADMIN) {
-		if (e->syscall_nr == state.app.execve_nr ||
-		    e->syscall_nr == state.app.mmap_nr ||
-		    e->syscall_nr == state.app.brk_nr) {
+	if (is_always_noise(e)) {
+		if (state.verbose)
+			printf("[CAP] Filtered exec noise: cap=%s syscall=%s\n",
+			       cap_name_safe(e->capability),
+			       syscall_name_from_nr(e->syscall_nr) ?:
+			       "unknown");
+		return 0;
+	}
+
+	/*
+	 * Startup-filter: runtime linker noise, only active until the first
+	 * genuine application capability check arrives.
+	 */
+	if (!state.recording_ready) {
+		if (is_startup_noise(e)) {
 			if (state.verbose)
 				printf("[CAP] Filtered startup noise: "
-				       "CAP_SYS_ADMIN in %s\n",
+				       "cap=%s syscall=%s\n",
+				       capng_capability_to_name(e->capability),
 				       syscall_name_from_nr(e->syscall_nr) ?:
-				       "startup");
+				       "unknown");
 			return 0;
 		}
+		state.recording_ready = 1;
+		printf("[CAP] Recording started\n");
 	}
-	state.recording_ready = 1;
 
+	/*
+	 * Shutdown-filter: interpreter cleanup triggers the same mmap/brk
+	 * SYS_ADMIN noise as startup.  Once we have decided to stop, filter
+	 * these so the final ring-buffer drain doesn't pollute results.
+	 */
+	if (state.shutting_down && is_startup_noise(e)) {
+		if (state.verbose)
+			printf("[CAP] Filtered shutdown noise: "
+			       "cap=%s syscall=%s\n",
+				cap_name_safe(e->capability),
+				syscall_name_from_nr(e->syscall_nr) ?:
+				"unknown");
+		return 0;
+	}
 
 	if (state.verbose) {
 		printf("[CAP] pid=%d cap=%d (%s) result=%s syscall=%d (%s) "
@@ -1362,7 +1432,9 @@ int main(int argc, char **argv)
 	}
 	state.app.execve_nr = audit_name_to_syscall("execve", audit_machine);
 	state.app.mmap_nr = audit_name_to_syscall("mmap", audit_machine);
-	state.app.brk_nr = audit_name_to_syscall("brk",audit_machine);
+	state.app.brk_nr = audit_name_to_syscall("brk", audit_machine);
+	state.app.mprotect_nr = audit_name_to_syscall("mprotect",
+						      audit_machine);
 
 	// Load and attach BPF program before forking so probes are ready.
 	state.skel = cap_audit_bpf__open_and_load();
@@ -1471,7 +1543,8 @@ int main(int argc, char **argv)
 
 	read_system_state(&state.app);
 	inspect_target_file_caps(child);
-
+	if (state.app.prog_type == PYTHON && state.verbose)
+		printf("[*] Script interpreter: %s\n", state.app.exe);
 	printf("[*] Tracing application: %s (PID %d)\n", state.app.exe, child);
 	printf("[*] Press Ctrl-C to stop\n\n");
 
@@ -1505,6 +1578,7 @@ int main(int argc, char **argv)
 
 	printf("[*] Analyzing results...\n");
 
+	state.shutting_down = 1;
 	usleep(100000);
 	ring_buffer__poll(state.rb, 0);
 

@@ -195,6 +195,13 @@ struct {
 	__uint(max_entries, 4096);
 } current_syscalls SEC(".maps");
 
+static __always_inline int get_pid_phase(__u32 pid)
+{
+	__u8 *val = bpf_map_lookup_elem(&target_pids, &pid);
+
+	return val ? *val : 0;
+}
+
 /*
  * should_trace_pid - check if the current PID is in the target set.
  * @pid: process ID of the current task.
@@ -204,10 +211,18 @@ struct {
  */
 static __always_inline int should_trace_pid(__u32 pid)
 {
-	__u8 *trace;
+	return get_pid_phase(pid) > 0;
+}
 
-	trace = bpf_map_lookup_elem(&target_pids, &pid);
-	return trace ? 1 : 0;
+/*
+ * should_record_pid - check if the current PID is post-exec.
+ * @pid: process ID of the current task.
+ *
+ * Returns 1 for traced PIDs that have completed exec.
+ */
+static __always_inline int should_record_pid(__u32 pid)
+{
+	return get_pid_phase(pid) >= 2;
 }
 
 /*
@@ -399,7 +414,7 @@ static __always_inline int handle_capable(struct pt_regs *ctx, int cap,
 	__u32 pid;
 
 	pid = bpf_get_current_pid_tgid() >> 32;
-	if (!should_trace_pid(pid))
+	if (!should_record_pid(pid))
 		return 0;
 
 	/* Track how many times this capability was inspected. */
@@ -579,15 +594,42 @@ int trace_sys_exit(struct trace_event_raw_sys_exit *ctx)
 SEC("tracepoint/sched/sched_process_fork")
 int trace_sched_process_fork(struct trace_event_raw_sched_process_fork *ctx)
 {
-	__u8 val = 1;
 	__u32 parent_pid;
 	__u32 child_pid;
+	__u8 *parent_val;
 
 	parent_pid = ctx->parent_pid;
 	child_pid = ctx->child_pid;
 
-	if (should_trace_pid(parent_pid))
-		bpf_map_update_elem(&target_pids, &child_pid, &val, BPF_ANY);
+	parent_val = bpf_map_lookup_elem(&target_pids, &parent_pid);
+	if (parent_val) {
+		__u8 child_val = *parent_val;
+
+		bpf_map_update_elem(&target_pids, &child_pid, &child_val,
+				    BPF_ANY);
+	}
+
+	return 0;
+}
+
+/*
+ * trace_sched_process_exec - mark a traced PID as post-exec.
+ * @ctx: sched_process_exec tracepoint data.
+ *
+ * Transitions the PID from pre-exec (phase 1) to post-exec (phase 2) once
+ * the new binary image is loaded.
+ */
+SEC("tracepoint/sched/sched_process_exec")
+int trace_sched_process_exec(struct trace_event_raw_sched_process_exec *ctx)
+{
+	__u32 pid;
+	__u8 *val;
+	__u8 new_val = 2;
+
+	pid = bpf_get_current_pid_tgid() >> 32;
+	val = bpf_map_lookup_elem(&target_pids, &pid);
+	if (val)
+		bpf_map_update_elem(&target_pids, &pid, &new_val, BPF_ANY);
 
 	return 0;
 }
