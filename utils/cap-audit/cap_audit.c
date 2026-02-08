@@ -305,22 +305,19 @@ static int inspect_target_file_caps(pid_t pid)
 	return 0;
 }
 
-static void print_cap_name_upper(int cap)
-{
-	const char *name = capng_capability_to_name(cap);
-	int i;
-
-	if (!name)
-		return;
-
-	for (i = 0; name[i]; i++)
-		printf("%c", toupper((unsigned char)name[i]));
-}
-
 static const char *cap_name_safe(int cap)
 {
 	const char *name = capng_capability_to_name(cap);
 	return name ? name : "unknown";
+}
+
+static void print_cap_name_upper(int cap)
+{
+	const char *name = cap_name_safe(cap);
+	int i;
+
+	for (i = 0; name[i]; i++)
+		printf("%c", toupper((unsigned char)name[i]));
 }
 
 /*
@@ -675,7 +672,7 @@ static int handle_cap_event(void *ctx __attribute__((unused)), void *data,
 			if (state.verbose)
 				printf("[CAP] Filtered startup noise: "
 				       "cap=%s syscall=%s\n",
-				       capng_capability_to_name(e->capability),
+				       cap_name_safe(e->capability),
 				       syscall_name_from_nr(e->syscall_nr) ?:
 				       "unknown");
 			return 0;
@@ -1293,8 +1290,7 @@ static void output_yaml(void) {
 
 		if (check->granted > 0) {
 			printf("  - number: %d\n", i);
-			printf("    name: %s\n",
-			       capng_capability_to_name(i));
+			printf("    name: %s\n", cap_name_safe(i));
 			printf("    checks:\n");
 			printf("      total: %lu\n", check->count);
 			printf("      granted: %lu\n", check->granted);
