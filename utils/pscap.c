@@ -41,8 +41,173 @@
 
 static void usage(void)
 {
-	fprintf(stderr, "usage: pscap [-a|-p pid]\n");
+	fprintf(stderr, "usage: pscap [-a] [-p pid] [--tree]\n");
 	exit(1);
+}
+
+struct proc_info {
+	pid_t pid;
+	pid_t ppid;
+	char cmd[CMD_LEN + USERNS_MARK_LEN];
+	char *caps_text;
+};
+
+/*
+ * compare_pid - order processes by pid for sorting/bsearch
+ * @a: pointer to left struct proc_info
+ * @b: pointer to right struct proc_info
+ *
+ * Returns -1, 0, or 1 for ordering.
+ */
+static int compare_pid(const void *a, const void *b)
+{
+	const struct proc_info *left = a;
+	const struct proc_info *right = b;
+
+	if (left->pid < right->pid)
+		return -1;
+	if (left->pid > right->pid)
+		return 1;
+	return 0;
+}
+
+/*
+ * find_proc - locate a process record by pid
+ * @procs: process array sorted by pid
+ * @count: number of entries in @procs
+ * @pid: process id to locate
+ *
+ * Returns pointer to the matching entry or NULL if not found.
+ */
+static void *find_proc(struct proc_info *procs, size_t count, pid_t pid)
+{
+	struct proc_info key;
+
+	key.pid = pid;
+	return bsearch(&key, procs, count, sizeof(*procs), compare_pid);
+}
+
+/*
+ * append_marker - append a marker string to the capability text
+ * @text: capability text buffer pointer to append to
+ * @marker: marker string to append (e.g. " @" or " +")
+ *
+ * Returns 0 on success, -1 on allocation failure.
+ */
+static int append_marker(char **text, const char *marker)
+{
+	size_t len = strlen(*text);
+	size_t marker_len = strlen(marker);
+	char *tmp = realloc(*text, len + marker_len + 1);
+
+	if (!tmp)
+		return -1;
+	memcpy(tmp + len, marker, marker_len + 1);
+	*text = tmp;
+	return 0;
+}
+
+/*
+ * format_caps - format capability text with optional markers
+ * @caps: capability summary state from capng_have_capabilities()
+ * @ambient: true if ambient capabilities are present
+ * @bounds: true if bounding set differs from full
+ *
+ * Returns allocated capability string or NULL on allocation failure.
+ */
+static char *format_caps(int caps, bool ambient, bool bounds)
+{
+	char *text;
+
+	if (caps == CAPNG_PARTIAL)
+		text = capng_print_caps_text(CAPNG_PRINT_BUFFER,
+					     CAPNG_PERMITTED);
+	else if (caps == CAPNG_FULL)
+		text = strdup("full");
+	else
+		text = strdup("none");
+
+	if (!text)
+		return NULL;
+	if (ambient && append_marker(&text, " @"))
+		return text;
+	if (bounds && append_marker(&text, " +"))
+		return text;
+	return text;
+}
+
+/*
+ * print_tree_node - render a node and its children in tree mode
+ * @procs: process array
+ * @count: number of entries in @procs
+ * @index: index of current node in @procs
+ * @prefix: current line prefix
+ * @is_last: true if this node is the last child of its parent
+ * @is_root: true if this node is a tree root
+ *
+ * Returns nothing. Recurses through children to emit full subtree.
+ */
+static void print_tree_node(struct proc_info *procs, size_t count,
+			    size_t index, const char *prefix, bool is_last,
+			    bool is_root)
+{
+	struct proc_info *proc = &procs[index];
+	size_t child_total = 0;
+	size_t child_seen = 0;
+	size_t i;
+	const char *branch = "";
+	char *child_prefix;
+
+	if (!is_root) {
+		printf("%s%s", prefix, is_last ? "└─ " : "├─ ");
+		branch = is_last ? "   " : "│  ";
+	} else {
+		printf("%s", prefix);
+	}
+
+	printf("%s(%d) [%s]\n", proc->cmd, proc->pid, proc->caps_text);
+
+	for (i = 0; i < count; i++) {
+		if (procs[i].ppid == proc->pid)
+			child_total++;
+	}
+
+	if (child_total == 0)
+		return;
+
+	child_prefix = malloc(strlen(prefix) + strlen(branch) + 1);
+	if (!child_prefix)
+		return;
+	strcpy(child_prefix, prefix);
+	strcat(child_prefix, branch);
+
+	for (i = 0; i < count; i++) {
+		if (procs[i].ppid != proc->pid)
+			continue;
+		child_seen++;
+		print_tree_node(procs, count, i, child_prefix,
+				child_seen == child_total, false);
+	}
+
+	free(child_prefix);
+}
+
+/*
+ * print_tree - render all process trees in pid order
+ * @procs: process array
+ * @count: number of entries in @procs
+ *
+ * Returns nothing. Each tree starts at a pid whose parent isn't present.
+ */
+static void print_tree(struct proc_info *procs, size_t count)
+{
+	size_t i;
+
+	qsort(procs, count, sizeof(*procs), compare_pid);
+	for (i = 0; i < count; i++) {
+		if (!find_proc(procs, count, procs[i].ppid))
+			print_tree_node(procs, count, i, "", true, true);
+	}
 }
 
 /*
@@ -81,33 +246,42 @@ int main(int argc, char *argv[])
 	int header = 0, show_all = 0, caps;
 	pid_t our_pid = getpid();
 	pid_t target_pid = 0;
+	int tree_mode = 0;
+	struct proc_info *procs = NULL;
+	size_t proc_count = 0;
+	size_t proc_capacity = 0;
+	size_t i;
 
-	if (argc > 3) {
-		fputs("Too many arguments\n", stderr);
-		usage();
-	}
-	if (argc == 2) {
-		if (strcmp(argv[1], "-a") == 0)
+	for (i = 1; i < (size_t)argc; i++) {
+		if (strcmp(argv[i], "-a") == 0) {
 			show_all = 1;
-		else
-			usage();
-	}
-	else if (argc == 3) {
-		if (strcmp(argv[1], "-p") == 0) {
+			continue;
+		}
+		if (strcmp(argv[i], "--tree") == 0) {
+			tree_mode = 1;
+			continue;
+		}
+		if (strcmp(argv[i], "-p") == 0) {
+			if (i + 1 >= (size_t)argc)
+				usage();
 			errno = 0;
-			target_pid = strtol(argv[2], &endptr, 10);
+			target_pid = strtol(argv[++i], &endptr, 10);
 			if (errno) {
-				fprintf(stderr, "Can't read pid: %s\n", argv[2]);
+				fprintf(stderr, "Can't read pid: %s\n",
+					argv[i]);
 				return 1;
 			}
-			if ((endptr == argv[2]) || (*endptr != '\0') || !target_pid) {
-				fprintf(stderr, "Invalid pid argument: %s\n", argv[2]);
+			if ((endptr == argv[i]) || (*endptr != '\0')
+			    || !target_pid) {
+				fprintf(stderr, "Invalid pid argument: %s\n",
+					argv[i]);
 				return 1;
 			}
 			if (target_pid == 1)
 				show_all = 1;
-		} else
-			usage();
+			continue;
+		}
+		usage();
 	}
 
 	d = opendir("/proc");
@@ -160,9 +334,6 @@ int main(int argc, char *argv[])
 		if (pid == 2 || ppid == 2)
 			continue;
 
-		if (!show_all && pid == 1)
-			continue;
-
 		// now get the capabilities
 		capng_clear(CAPNG_SELECT_ALL);
 		capng_setpid(pid);
@@ -171,7 +342,49 @@ int main(int argc, char *argv[])
 
 		// And print out anything with capabilities
 		caps = capng_have_capabilities(CAPNG_SELECT_CAPS);
-		if (caps > CAPNG_NONE) {
+		if (in_child_userns(pid))
+			strcat(cmd, " *");
+		if (tree_mode) {
+			char *caps_text;
+			bool has_ambient;
+			bool has_bounds;
+
+			if (!show_all && caps <= CAPNG_NONE)
+				continue;
+
+			has_ambient = capng_have_capabilities(
+					CAPNG_SELECT_AMBIENT) > CAPNG_NONE;
+			has_bounds = capng_have_capabilities(
+					CAPNG_SELECT_BOUNDS) > CAPNG_NONE;
+
+			caps_text = format_caps(caps, has_ambient, has_bounds);
+			if (!caps_text)
+				continue;
+
+			if (proc_count == proc_capacity) {
+				size_t new_capacity = proc_capacity ?
+					proc_capacity * 2 : 256;
+				struct proc_info *tmp;
+
+				tmp = realloc(procs, new_capacity *
+					      sizeof(*procs));
+				if (!tmp) {
+					free(caps_text);
+					continue;
+				}
+				procs = tmp;
+				proc_capacity = new_capacity;
+			}
+
+			procs[proc_count].pid = pid;
+			procs[proc_count].ppid = ppid;
+			strncpy(procs[proc_count].cmd, cmd,
+				sizeof(procs[proc_count].cmd) - 1);
+			procs[proc_count].cmd[
+				sizeof(procs[proc_count].cmd) - 1] = '\0';
+			procs[proc_count].caps_text = caps_text;
+			proc_count++;
+		} else if (caps > CAPNG_NONE) {
 			// Get the effective uid
 			FILE *f;
 			int line;
@@ -216,9 +429,6 @@ int main(int argc, char *argv[])
 				// If not taking this branch, use last val
 			}
 
-			if (in_child_userns(pid))
-				strcat(cmd, " *");
-
 			if (name) {
 				printf("%-5d %-5d %-10s  %-18s  ", ppid, pid,
 					name, cmd);
@@ -248,7 +458,11 @@ int main(int argc, char *argv[])
 		}
 	}
 	closedir(d);
+	if (tree_mode) {
+		print_tree(procs, proc_count);
+		for (i = 0; i < proc_count; i++)
+			free(procs[i].caps_text);
+		free(procs);
+	}
 	return 0;
 }
-
-
