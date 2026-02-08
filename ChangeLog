@@ -3,6 +3,7 @@
 - If file system based capabilities, drop setpcap
 - In cap-audit, fully resolve paths before classifying
 - In cap-audit, add JSON escaping to output
+- In cap-audit, filter pre-exec, startup, and shutdown capability noise
 
 0.9
 - Fix python path when invoking py-compile (Jan Palus)
