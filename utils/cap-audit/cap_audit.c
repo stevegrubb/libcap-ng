@@ -793,10 +793,6 @@ static void analyze_capabilities(void)
 			       check->granted, check->denied);
 			if (check->reason)
 				printf("    Reason: %s\n", check->reason);
-			if (i == CAP_SETPCAP && check->granted == 1 &&
-			    state.app.file_caps && !state.app.file_setpcap)
-				printf("    Note: Granted once, but not present in "
-				       "file xattr; likely internal check.\n");
 			printf("\n");
 		}
 	}
