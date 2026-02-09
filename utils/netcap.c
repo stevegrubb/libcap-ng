@@ -262,7 +262,7 @@ static void report_finding(unsigned int port, const char *type, const char *ifc)
 		printf("%-5s %-5s %-10s %-16s %-8s %-6s %s\n",
 			"ppid", "pid", "acct", "command", "type", "port",
 			"capabilities");
-			header = 1;
+		header = 1;
 	}
 	if (n->uid == 0) {
 		// Take short cut for this one
