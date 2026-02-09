@@ -162,16 +162,12 @@ static int is_always_noise(const struct cap_event *e)
 }
 
 /*
- * is_startup_noise - identify capability checks from exec credential
- * transition and runtime linker memory setup.
+ * is_startup_noise - runtime linker noise filtered during startup only.
  *
- * These are kernel-internal checks that occur between exec completion
- * and the application's main() and do not represent capabilities the
- * application itself needs. The patterns are stable kernel behavior:
- *
- *   SYS_ADMIN from mmap/brk/mprotect: security_mmap_addr() checks
- *       triggered when root maps memory; the runtime linker does this
- *       while loading shared libraries.
+ * SYS_ADMIN from mmap/brk/mprotect happens when root maps memory via
+ * security_mmap_addr(). The runtime linker does this while loading shared
+ * libraries. After startup (recording_ready=1), these are not filtered
+ * because they could represent legitimate app usage (e.g., MAP_HUGETLB).
  */
 static int is_startup_noise(const struct cap_event *e)
 {
@@ -507,7 +503,7 @@ static void read_system_state(struct app_caps *app)
  * Detects the machine architecture once, then asks libaudit to translate the
  * syscall number. Returns the syscall name or NULL if not known.
  */
-const char *syscall_name_from_nr(int nr)
+static const char *syscall_name_from_nr(int nr)
 {
 	if (audit_machine < 0)
 		return NULL;
@@ -678,7 +674,8 @@ static int handle_cap_event(void *ctx __attribute__((unused)), void *data,
 			return 0;
 		}
 		state.recording_ready = 1;
-		printf("[CAP] Recording started\n");
+		if (state.verbose)
+			printf("[CAP] Recording started\n");
 	}
 
 	/*
@@ -793,6 +790,9 @@ static void analyze_capabilities(void)
 			       check->granted, check->denied);
 			if (check->reason)
 				printf("    Reason: %s\n", check->reason);
+			if (!include_cap_in_recommendations(i))
+				printf("    Note: Internal to capability setup; "
+				       "excluded from recommendations.\n");
 			printf("\n");
 		}
 	}
@@ -1255,13 +1255,15 @@ static void output_json(void)
  */
 static void output_yaml(void) {
 	int i;
+	char *exe_yaml = json_escape(state.app.exe);
+	char *kernel_yaml = json_escape(state.app.kernel_version);
 
 	printf("application:\n");
 	printf("  pid: %d\n", state.app.pid);
-	printf("  comm: \"%s\"\n", state.app.exe);
+	printf("  comm: \"%s\"\n", exe_yaml ? exe_yaml : "");
 
 	printf("system_context:\n");
-	printf("  kernel_version: \"%s\"\n", state.app.kernel_version);
+	printf("  kernel_version: \"%s\"\n", kernel_yaml ? kernel_yaml : "");
 	printf("  yama_ptrace_scope: %d\n", state.app.yama_ptrace_scope);
 	printf("  kptr_restrict: %d\n", state.app.kptr_restrict);
 	printf("  dmesg_restrict: %d\n", state.app.dmesg_restrict);
@@ -1279,6 +1281,8 @@ static void output_yaml(void) {
 	printf("  fs_protected_symlinks: %d\n",
 	       state.app.protected_symlinks);
 	printf("  fs_suid_dumpable: %d\n", state.app.suid_dumpable);
+	free(exe_yaml);
+	free(kernel_yaml);
 
 	printf("required_capabilities:\n");
 	for (i = 0; i <= CAP_LAST_CAP; i++) {
@@ -1291,9 +1295,12 @@ static void output_yaml(void) {
 			printf("      total: %lu\n", check->count);
 			printf("      granted: %lu\n", check->granted);
 			printf("      denied: %lu\n", check->denied);
-			if (check->reason)
+			if (check->reason) {
+				char *reason_yaml = json_escape(check->reason);
 				printf("    reason: \"%s\"\n",
-				       check->reason);
+				       reason_yaml ? reason_yaml : "");
+				free(reason_yaml);
+			}
 		}
 	}
 
@@ -1420,7 +1427,7 @@ int main(int argc, char **argv)
 		audit_machine = audit_detect_machine();
 	if (audit_machine < 0) {
 		fprintf(stderr,
-			"Warning: unable to determine hardware achitecture for syscall lookup\n");
+			"Warning: unable to determine hardware architecture for syscall lookup\n");
 	}
 	state.app.execve_nr = audit_name_to_syscall("execve", audit_machine);
 	state.app.mmap_nr = audit_name_to_syscall("mmap", audit_machine);
