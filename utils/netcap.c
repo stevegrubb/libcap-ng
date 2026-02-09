@@ -335,8 +335,8 @@ static void get_interface(unsigned int iface, char *ifc)
 	// Terminate the interface in case of error
 	*ifc = 0;
 
-	// Increment the interface number since header is 2 lines long
-	iface++;
+	// Offset the interface number since header is 2 lines long
+	iface += 2;
 
 	f = fopen("/proc/net/dev", "rte");
 	if (f == NULL) {
