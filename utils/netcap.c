@@ -288,7 +288,7 @@ static void report_finding(unsigned int port, const char *type, const char *ifc)
 	printf(" %s %s%s\n", n->capabilities, n->ambient, n->bounds);
 }
 
-static void read_tcp(const char *proc, const char *type)
+static void read_net(const char *proc, const char *type, int use_local_port)
 {
 	int line = 0;
 	FILE *f;
@@ -318,77 +318,8 @@ static void read_tcp(const char *proc, const char *type)
 			&state, &txq, &rxq, &timer_run, &time_len, &retr,
 			&uid, &timeout, &inode, more);
 		if (list_find_inode(&l, inode))
-			report_finding(local_port, type, NULL);
-	}
-	fclose(f);
-}
-
-static void read_udp(const char *proc, const char *type)
-{
-	int line = 0;
-	FILE *f;
-	char buf[256];
-	unsigned long rxq, txq, time_len, retr, inode;
-	unsigned int local_port, rem_port, state, timer_run;
-	int d, uid, timeout;
-	char rem_addr[128], local_addr[128], more[512];
-
-	f = fopen(proc, "rte");
-	if (f == NULL) {
-		if (errno != ENOENT)
-			fprintf(stderr, "Can't open %s: %s\n",
-					proc, strerror(errno));
-		return;
-	}
-	__fsetlocking(f, FSETLOCKING_BYCALLER);
-	while (fgets(buf, sizeof(buf), f)) {
-		if (line == 0) {
-			line++;
-			continue;
-		}
-		more[0] = 0;
-		sscanf(buf, "%d: %64[0-9A-Fa-f]:%X %64[0-9A-Fa-f]:%X %X "
-			"%lX:%lX %X:%lX %lX %d %d %lu %511s\n",
-			&d, local_addr, &local_port, rem_addr, &rem_port,
-			&state, &txq, &rxq, &timer_run, &time_len, &retr,
-			&uid, &timeout, &inode, more);
-		if (list_find_inode(&l, inode))
-			report_finding(local_port, type, NULL);
-	}
-	fclose(f);
-}
-
-static void read_raw(const char *proc, const char *type)
-{
-	int line = 0;
-	FILE *f;
-	char buf[256];
-	unsigned long rxq, txq, time_len, retr, inode;
-	unsigned int local_port, rem_port, state, timer_run;
-	int d, uid, timeout;
-	char rem_addr[128], local_addr[128], more[512];
-
-	f = fopen(proc, "rte");
-	if (f == NULL) {
-		if (errno != ENOENT)
-			fprintf(stderr, "Can't open %s: %s\n",
-					proc, strerror(errno));
-		return;
-	}
-	__fsetlocking(f, FSETLOCKING_BYCALLER);
-	while (fgets(buf, sizeof(buf), f)) {
-		if (line == 0) {
-			line++;
-			continue;
-		}
-		more[0] = 0;
-		sscanf(buf, "%d: %64[0-9A-Fa-f]:%X %64[0-9A-Fa-f]:%X %X "
-			"%lX:%lX %X:%lX %lX %d %d %lu %511s\n",
-			&d, local_addr, &local_port, rem_addr, &rem_port,
-			&state, &txq, &rxq, &timer_run, &time_len, &retr,
-			&uid, &timeout, &inode, more);
-		if (list_find_inode(&l, inode))
-			report_finding(0, type, NULL);
+			report_finding(use_local_port ? local_port : 0,
+					type, NULL);
 	}
 	fclose(f);
 }
@@ -473,18 +404,18 @@ int main(int argc, char __attribute__((unused)) *argv[])
 	collect_process_info();
 
 	// Now we check the tcp socket list...
-	read_tcp("/proc/net/tcp", "tcp");
-	read_tcp("/proc/net/tcp6", "tcp6");
+	read_net("/proc/net/tcp", "tcp", 1);
+	read_net("/proc/net/tcp6", "tcp6", 1);
 
 	// Next udp sockets...
-	read_udp("/proc/net/udp", "udp");
-	read_udp("/proc/net/udp6", "udp6");
-	read_udp("/proc/net/udplite", "udplite");
-	read_udp("/proc/net/udplite6", "udplite6");
+	read_net("/proc/net/udp", "udp", 1);
+	read_net("/proc/net/udp6", "udp6", 1);
+	read_net("/proc/net/udplite", "udplite", 1);
+	read_net("/proc/net/udplite6", "udplite6", 1);
 
 	// Next, raw sockets...
-	read_raw("/proc/net/raw", "raw");
-	read_raw("/proc/net/raw6", "raw6");
+	read_net("/proc/net/raw", "raw", 0);
+	read_net("/proc/net/raw6", "raw6", 0);
 
 	// And last, read packet sockets
 	read_packet();
