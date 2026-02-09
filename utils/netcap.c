@@ -142,6 +142,8 @@ static int collect_process_info(void)
 				}
 			}
 			fclose(sf);
+			if (euid == -1)
+				euid = 0;
 		}
 
 		caps = capng_have_capabilities(CAPNG_SELECT_AMBIENT);
