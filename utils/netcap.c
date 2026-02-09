@@ -325,7 +325,7 @@ static void read_net(const char *proc, const char *type, int use_local_port)
 	fclose(f);
 }
 
-// Caller must have buffer > 16 bytes
+// Caller must have buffer >= 17 bytes
 static void get_interface(unsigned int iface, char *ifc)
 {
 	unsigned int line = 0;
