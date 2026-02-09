@@ -88,8 +88,10 @@ static int collect_process_info(void)
 		else
 			continue;
 		memset(cmd, 0, sizeof(cmd));
-		sscanf(buf, "%d (%15c", &ppid, cmd);
-		sscanf(tmp+2, "%c %d", &state, &ppid);
+		if (sscanf(buf, "%d (%15c", &ppid, cmd) != 2)
+			continue;
+		if (sscanf(tmp+2, "%c %d", &state, &ppid) != 2)
+			continue;
 
 		// Skip kthreads
 		if (pid == 2 || ppid == 2)
@@ -134,9 +136,9 @@ static int collect_process_info(void)
 				}
 				if (memcmp(buf, "Uid:", 4) == 0) {
 					int id;
-					sscanf(buf, "Uid: %d %d",
-						&id, &euid);
-					break;
+					if (sscanf(buf, "Uid: %d %d",
+						&id, &euid) == 2)
+						break;
 				}
 			}
 			fclose(sf);
