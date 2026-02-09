@@ -364,15 +364,15 @@ int main(int argc, char *argv[])
 			if (proc_count == proc_capacity) {
 				size_t new_capacity = proc_capacity ?
 					proc_capacity * 2 : 256;
-				struct proc_info *tmp;
+				struct proc_info *pi_tmp;
 
-				tmp = realloc(procs, new_capacity *
+				pi_tmp = realloc(procs, new_capacity *
 					      sizeof(*procs));
-				if (!tmp) {
+				if (!pi_tmp) {
 					free(caps_text);
 					continue;
 				}
-				procs = tmp;
+				procs = pi_tmp;
 				proc_capacity = new_capacity;
 			}
 
