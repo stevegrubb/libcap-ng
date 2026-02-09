@@ -312,11 +312,12 @@ static void read_net(const char *proc, const char *type, int use_local_port)
 			continue;
 		}
 		more[0] = 0;
-		sscanf(buf, "%d: %64[0-9A-Fa-f]:%X %64[0-9A-Fa-f]:%X %X "
+		if (sscanf(buf, "%d: %64[0-9A-Fa-f]:%X %64[0-9A-Fa-f]:%X %X "
 			"%lX:%lX %X:%lX %lX %d %d %lu %511s\n",
 			&d, local_addr, &local_port, rem_addr, &rem_port,
 			&state, &txq, &rxq, &timer_run, &time_len, &retr,
-			&uid, &timeout, &inode, more);
+			&uid, &timeout, &inode, more) < 14)
+			continue;
 		if (list_find_inode(&l, inode))
 			report_finding(use_local_port ? local_port : 0,
 					type, NULL);
@@ -383,9 +384,10 @@ static void read_packet(void)
 			continue;
 		}
 		more[0] = 0;
-		sscanf(buf, "%lX %u %u %X %u %u %u %u %lu %255s\n",
+		if (sscanf(buf, "%lX %u %u %X %u %u %u %u %lu %255s\n",
 			&sk, &ref_cnt, &type, &proto, &iface,
-			&r, &rmem, &uid, &inode, more);
+			&r, &rmem, &uid, &inode, more) < 9)
+			continue;
 		get_interface(iface, ifc);
 		if (list_find_inode(&l, inode))
 			report_finding(0, "pkt", ifc);
