@@ -186,15 +186,16 @@ static int collect_process_info(void)
 			continue;
 		}
 		// For each file in the fd dir...
-		while (( ent = readdir(f) )) {
+		struct dirent *fd_ent;
+		while (( fd_ent = readdir(f) )) {
 			char line[256], ln[256], *s, *e;
 			unsigned long inode;
 			lnode node;
 			int llen;
 
-			if (ent->d_name[0] == '.')
+			if (fd_ent->d_name[0] == '.')
 				continue;
-			snprintf(ln, 256, "%s/%s", buf, ent->d_name);
+			snprintf(ln, 256, "%s/%s", buf, fd_ent->d_name);
 			if ((llen = readlink(ln, line, sizeof(line)-1)) < 0)
 				continue;
 			line[llen] = 0;
