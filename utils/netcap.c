@@ -73,7 +73,7 @@ static int collect_process_info(void)
 			continue;
 
 		// Parse up the stat file for the proc
-		snprintf(buf, 32, "/proc/%d/stat", pid);
+		snprintf(buf, sizeof(buf), "/proc/%d/stat", pid);
 		fd = open(buf, O_RDONLY|O_CLOEXEC, 0);
 		if (fd < 0)
 			continue;
@@ -120,7 +120,7 @@ static int collect_process_info(void)
 		}
 
 		// Get the effective uid
-		snprintf(buf, 32, "/proc/%d/status", pid);
+		snprintf(buf, sizeof(buf), "/proc/%d/status", pid);
 		sf = fopen(buf, "rte");
 		if (sf == NULL)
 			euid = 0;
@@ -167,7 +167,7 @@ static int collect_process_info(void)
 		}
 
 		// Now lets get the inodes each process has open
-		snprintf(buf, 32, "/proc/%d/fd", pid);
+		snprintf(buf, sizeof(buf), "/proc/%d/fd", pid);
 		f = opendir(buf);
 		if (f == NULL) {
 			if (errno == EACCES) {
