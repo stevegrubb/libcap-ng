@@ -231,7 +231,7 @@ static bool in_child_userns(int pid)
 	own_ns_inode = statbuf.st_ino;
 	own_ns_dev = statbuf.st_dev;
 
-	snprintf(ns_file_path, 32, "/proc/%d/ns/user", pid);
+	snprintf(ns_file_path, sizeof(ns_file_path), "/proc/%d/ns/user", pid);
 	if (stat(ns_file_path, &statbuf) < 0)
 		return false;
 
@@ -246,6 +246,8 @@ int main(int argc, char *argv[])
 	int header = 0, show_all = 0, caps;
 	pid_t our_pid = getpid();
 	pid_t target_pid = 0;
+	int uid = -1;
+	char *name = NULL;
 	int tree_mode = 0;
 	struct proc_info *procs = NULL;
 	size_t proc_count = 0;
@@ -290,9 +292,9 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 	while (( ent = readdir(d) )) {
-		int pid, ppid, uid = -1, euid = -1;
+		int pid, ppid, euid = -1;
 		char buf[100];
-		char *tmp, cmd[CMD_LEN + USERNS_MARK_LEN], state, *name = NULL;
+		char *tmp, cmd[CMD_LEN + USERNS_MARK_LEN], state;
 		int fd, len;
 		struct passwd *p;
 
@@ -312,11 +314,11 @@ int main(int argc, char *argv[])
 			continue;
 
 		// Parse up the stat file for the proc
-		snprintf(buf, 32, "/proc/%d/stat", pid);
+		snprintf(buf, sizeof(buf), "/proc/%d/stat", pid);
 		fd = open(buf, O_RDONLY|O_CLOEXEC, 0);
 		if (fd < 0)
 			continue;
-		len = read(fd, buf, sizeof buf - 1);
+		len = read(fd, buf, sizeof(buf) - 1);
 		close(fd);
 		if (len < 40)
 			continue;
@@ -388,7 +390,7 @@ int main(int argc, char *argv[])
 			// Get the effective uid
 			FILE *f;
 			int line;
-			snprintf(buf, 32, "/proc/%d/status", pid);
+			snprintf(buf, sizeof(buf), "/proc/%d/status", pid);
 			f = fopen(buf, "rte");
 			if (f == NULL)
 				euid = 0;
