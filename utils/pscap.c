@@ -37,7 +37,7 @@
 #include "cap-ng.h"
 
 #define CMD_LEN 16
-#define USERNS_MARK_LEN 2
+#define USERNS_MARK_LEN 3	// two characters plus '\0'.
 
 static void usage(void)
 {
