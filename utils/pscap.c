@@ -129,10 +129,10 @@ static char *format_caps(int caps, bool ambient, bool bounds)
 
 	if (!text)
 		return NULL;
-	if (ambient && append_marker(&text, " @"))
-		return text;
-	if (bounds && append_marker(&text, " +"))
-		return text;
+	if (ambient)
+		append_marker(&text, " @");
+	if (bounds)
+		append_marker(&text, " +");
 	return text;
 }
 
