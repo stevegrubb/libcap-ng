@@ -37,7 +37,7 @@ bin_PROGRAMS = pscap netcap filecap
 man_MANS = pscap.8 netcap.8 filecap.8
 
 pscap_SOURCES = pscap.c
-netcap_SOURCES = netcap.c proc-llist.c proc-llist.h
+netcap_SOURCES = netcap.c netcap-advanced.c netcap-advanced.h proc-llist.c proc-llist.h
 filecap_SOURCES = filecap.c
 
 if BUILD_DEPRECATED
