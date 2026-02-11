@@ -1,60 +1,108 @@
 #include "config.h"
+#include <arpa/inet.h>
+#include <dirent.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <ifaddrs.h>
+#include <linux/capability.h>
+#include <net/if.h>
+#include <netinet/in.h>
 #include <stdio.h>
+#include <stdio_ext.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 #include <sys/ioctl.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
+#include "cap-ng.h"
 #include "netcap-advanced.h"
 
-struct defense_kv {
-	const char *key;
-	const char *value;
+#define MAX_BARS 64
+
+enum plane_kind {
+	PLANE_INET_EXTERNAL,
+	PLANE_INET_LOOPBACK,
+	PLANE_PACKET,
 };
 
-struct process {
-	const char *comm;
+struct strvec {
+	char **v;
+	size_t n;
+	size_t cap;
+};
+
+struct iface_addr {
+	int af;
+	char *addr;
+};
+
+struct iface_info {
+	char *name;
+	struct iface_addr *addrs;
+	size_t addrs_n;
+	size_t addrs_cap;
+};
+
+struct defense_info {
+	char *runs_as_root;
+	char *no_new_privs;
+	char *seccomp;
+	char *lsm_label;
+	char *securebits;
+	char *securebits_locked;
+};
+
+struct process_info {
 	int pid;
 	int uid;
-	const char *unit;
-	const char *caps_summary;
-	const struct defense_kv *defenses;
-	size_t defenses_count;
-	const char **flags;
-	size_t flags_count;
+	char *comm;
+	char *unit;
+	char *caps;
+	int has_privileged_caps;
+	int securebits_locked;
+	struct defense_info defenses;
+};
+
+struct inode_proc {
+	unsigned long inode;
+	struct process_info **procs;
+	size_t n;
+	size_t cap;
 };
 
 struct endpoint {
-	const char *label;
-	const struct process *processes;
-	size_t processes_count;
-};
-
-struct addr {
-	const char *value;
-	const struct endpoint *endpoints;
-	size_t endpoints_count;
-};
-
-struct iface {
-	const char *name;
-	const struct addr *addrs;
-	size_t addrs_count;
-};
-
-struct plane {
-	const char *name;
-	const char *scope;
-	const struct iface *ifaces;
-	size_t ifaces_count;
-	const struct endpoint *endpoints;
-	size_t endpoints_count;
+	char *proto;
+	char *bind;
+	char *label;
+	unsigned int port;
+	enum plane_kind plane;
+	char *ifname;
+	char *ifaddr;
+	struct process_info **procs;
+	size_t procs_n;
+	size_t procs_cap;
+	int wildcard_bind;
+	int loopback_only;
 };
 
 struct model {
-	int schema_version;
-	const struct plane *planes;
-	size_t planes_count;
+	struct iface_info *ifaces;
+	size_t ifaces_n;
+	size_t ifaces_cap;
+	struct process_info **procs;
+	size_t procs_n;
+	size_t procs_cap;
+	struct inode_proc *inode_map;
+	size_t inode_n;
+	size_t inode_cap;
+	struct endpoint *eps;
+	size_t eps_n;
+	size_t eps_cap;
 };
+
+static void free_process(struct process_info *p);
+static void free_model(struct model *m);
 
 static int get_width(void)
 {
@@ -74,12 +122,675 @@ static int get_width(void)
 	return 80;
 }
 
-static void print_indent(int depth, const int *bars)
+static char *xstrdup(const char *s)
 {
-	int i;
+	char *p;
 
-	for (i = 0; i < depth; i++)
-		fputs(bars[i] ? "│  " : "   ", stdout);
+	if (!s)
+		return NULL;
+	p = strdup(s);
+	if (!p)
+		fprintf(stderr, "Out of memory\n");
+	return p;
+}
+
+static int vec_grow(void **v, size_t *cap, size_t item)
+{
+	void *p;
+	size_t ncap;
+
+	if (*cap)
+		ncap = *cap * 2;
+	else
+		ncap = 8;
+	p = realloc(*v, ncap * item);
+	if (!p) {
+		fprintf(stderr, "Out of memory\n");
+		return -1;
+	}
+	*v = p;
+	*cap = ncap;
+	return 0;
+}
+
+static int push_str_unique(struct strvec *sv, const char *s)
+{
+	size_t i;
+
+	for (i = 0; i < sv->n; i++)
+		if (strcmp(sv->v[i], s) == 0)
+			return 0;
+	if (sv->n == sv->cap && vec_grow((void **)&sv->v, &sv->cap,
+		sizeof(char *)))
+		return -1;
+	sv->v[sv->n++] = xstrdup(s);
+	return sv->v[sv->n - 1] ? 0 : -1;
+}
+
+static int str_is_loopback(int af, const char *addr)
+{
+	struct in_addr a4;
+	struct in6_addr a6;
+
+	if (af == AF_INET) {
+		if (inet_pton(AF_INET, addr, &a4) != 1)
+			return 0;
+		return (ntohl(a4.s_addr) & 0xff000000U) == 0x7f000000U;
+	}
+	if (af == AF_INET6) {
+		if (inet_pton(AF_INET6, addr, &a6) != 1)
+			return 0;
+		return IN6_IS_ADDR_LOOPBACK(&a6);
+	}
+	return 0;
+}
+
+static int str_is_wildcard(int af, const char *addr)
+{
+	if (af == AF_INET)
+		return strcmp(addr, "0.0.0.0") == 0;
+	if (af == AF_INET6)
+		return strcmp(addr, "::") == 0;
+	return 0;
+}
+
+static struct iface_info *find_iface(struct model *m, const char *name)
+{
+	size_t i;
+
+	for (i = 0; i < m->ifaces_n; i++)
+		if (strcmp(m->ifaces[i].name, name) == 0)
+			return &m->ifaces[i];
+	return NULL;
+}
+
+static int add_iface_addr(struct iface_info *ifc, int af, const char *addr)
+{
+	size_t i;
+
+	for (i = 0; i < ifc->addrs_n; i++) {
+		if (ifc->addrs[i].af == af && strcmp(ifc->addrs[i].addr, addr) == 0)
+			return 0;
+	}
+	if (ifc->addrs_n == ifc->addrs_cap && vec_grow((void **)&ifc->addrs,
+		&ifc->addrs_cap, sizeof(struct iface_addr)))
+		return -1;
+	ifc->addrs[ifc->addrs_n].af = af;
+	ifc->addrs[ifc->addrs_n].addr = xstrdup(addr);
+	if (!ifc->addrs[ifc->addrs_n].addr)
+		return -1;
+	ifc->addrs_n++;
+	return 0;
+}
+
+static int collect_interfaces(struct model *m)
+{
+	struct ifaddrs *ifa, *cur;
+	char buf[INET6_ADDRSTRLEN];
+	struct iface_info *ifc;
+
+	if (getifaddrs(&ifa) != 0)
+		return -1;
+	for (cur = ifa; cur; cur = cur->ifa_next) {
+		if (!cur->ifa_name || !cur->ifa_addr)
+			continue;
+		if (cur->ifa_addr->sa_family != AF_INET &&
+		    cur->ifa_addr->sa_family != AF_INET6)
+			continue;
+		ifc = find_iface(m, cur->ifa_name);
+		if (!ifc) {
+			if (m->ifaces_n == m->ifaces_cap &&
+			    vec_grow((void **)&m->ifaces, &m->ifaces_cap,
+			    sizeof(struct iface_info)))
+				goto fail;
+			ifc = &m->ifaces[m->ifaces_n++];
+			memset(ifc, 0, sizeof(*ifc));
+			ifc->name = xstrdup(cur->ifa_name);
+			if (!ifc->name)
+				goto fail;
+		}
+		if (cur->ifa_addr->sa_family == AF_INET) {
+			if (!inet_ntop(AF_INET,
+				&((struct sockaddr_in *)cur->ifa_addr)->sin_addr,
+				buf, sizeof(buf)))
+				continue;
+		} else {
+			if (!inet_ntop(AF_INET6,
+				&((struct sockaddr_in6 *)cur->ifa_addr)->sin6_addr,
+				buf, sizeof(buf)))
+				continue;
+		}
+		if (add_iface_addr(ifc, cur->ifa_addr->sa_family, buf))
+			goto fail;
+	}
+	freeifaddrs(ifa);
+	return 0;
+fail:
+	freeifaddrs(ifa);
+	return -1;
+}
+
+static char *read_first_line(const char *path)
+{
+	int fd;
+	char *buf;
+	ssize_t len;
+
+	fd = open(path, O_RDONLY | O_CLOEXEC);
+	if (fd < 0)
+		return NULL;
+	buf = malloc(1024);
+	if (!buf) {
+		close(fd);
+		return NULL;
+	}
+	len = read(fd, buf, 1023);
+	close(fd);
+	if (len <= 0) {
+		free(buf);
+		return NULL;
+	}
+	buf[len] = 0;
+	while (len > 0 && (buf[len - 1] == '\n' || buf[len - 1] == '\r'))
+		buf[--len] = 0;
+	return buf;
+}
+
+static char *extract_unit_from_cgroup(int pid)
+{
+	char path[64], line[512];
+	FILE *f;
+
+	snprintf(path, sizeof(path), "/proc/%d/cgroup", pid);
+	f = fopen(path, "rte");
+	if (!f)
+		return NULL;
+	__fsetlocking(f, FSETLOCKING_BYCALLER);
+	while (fgets(line, sizeof(line), f)) {
+		char *s;
+		s = strstr(line, ".service");
+		if (!s)
+			s = strstr(line, ".scope");
+		if (s) {
+			while (s > line && *s != '/')
+				s--;
+			if (*s == '/')
+				s++;
+			char *e = s;
+			while (*e && *e != '\n' && *e != '/')
+				e++;
+			*e = 0;
+			fclose(f);
+			return xstrdup(s);
+		}
+	}
+	fclose(f);
+	return NULL;
+}
+
+static char *caps_summary_for_pid(int pid, int *privileged, int *has_amb,
+	int *has_bnd)
+{
+	char out[4096];
+	int i, first = 1;
+	capng_results_t c;
+
+	*privileged = 0;
+	*has_amb = 0;
+	*has_bnd = 0;
+
+	capng_clear(CAPNG_SELECT_ALL);
+	capng_setpid(pid);
+	if (capng_get_caps_process())
+		return xstrdup("(none)");
+
+	if (capng_have_capability(CAPNG_EFFECTIVE, CAP_SYS_ADMIN) ||
+	    capng_have_capability(CAPNG_EFFECTIVE, CAP_SYS_PTRACE) ||
+	    capng_have_capability(CAPNG_EFFECTIVE, CAP_DAC_READ_SEARCH) ||
+	    capng_have_capability(CAPNG_EFFECTIVE, CAP_NET_ADMIN) ||
+	    capng_have_capability(CAPNG_EFFECTIVE, CAP_NET_RAW))
+		*privileged = 1;
+
+	c = capng_have_capabilities(CAPNG_SELECT_CAPS);
+	if (c == CAPNG_FULL)
+		strcpy(out, "(full)");
+	else if (c <= CAPNG_NONE)
+		strcpy(out, "(none)");
+	else {
+		out[0] = 0;
+		for (i = 0; i <= CAP_LAST_CAP; i++) {
+			if (!capng_have_capability(CAPNG_PERMITTED, i))
+				continue;
+			const char *name = capng_capability_to_name(i);
+			if (!name)
+				continue;
+			if (!first)
+				strcat(out, ", ");
+			if (strncmp(name, "cap_", 4) == 0)
+				name += 4;
+			strcat(out, name);
+			first = 0;
+		}
+		if (out[0] == 0)
+			strcpy(out, "(none)");
+	}
+	if (capng_have_capabilities(CAPNG_SELECT_AMBIENT) > CAPNG_NONE)
+		*has_amb = 1;
+	if (capng_have_capabilities(CAPNG_SELECT_BOUNDS) > CAPNG_NONE)
+		*has_bnd = 1;
+	if (*has_amb)
+		strcat(out, " [ambient-present]");
+	if (*has_bnd)
+		strcat(out, " [open-ended-bounding]");
+	return xstrdup(out);
+}
+
+static void parse_status_defenses(int pid, int uid, struct defense_info *d,
+	int *securebits_nondefault, unsigned long *secbits_raw)
+{
+	char path[64], line[512];
+	FILE *f;
+	unsigned long secbits = 0;
+	int seen_secbits = 0;
+
+	d->runs_as_root = xstrdup(uid == 0 ? "yes" : "no");
+	d->no_new_privs = xstrdup("unknown");
+	d->seccomp = xstrdup("disabled");
+	d->lsm_label = NULL;
+	d->securebits = NULL;
+	d->securebits_locked = NULL;
+	*securebits_nondefault = 0;
+	*secbits_raw = 0;
+
+	snprintf(path, sizeof(path), "/proc/%d/status", pid);
+	f = fopen(path, "rte");
+	if (!f)
+		return;
+	__fsetlocking(f, FSETLOCKING_BYCALLER);
+	while (fgets(line, sizeof(line), f)) {
+		unsigned long val;
+		if (sscanf(line, "NoNewPrivs:\t%lu", &val) == 1) {
+			free(d->no_new_privs);
+			d->no_new_privs = xstrdup(val ? "yes" : "no");
+		} else if (sscanf(line, "Seccomp:\t%lu", &val) == 1) {
+			free(d->seccomp);
+			if (val == 0)
+				d->seccomp = xstrdup("disabled");
+			else if (val == 1)
+				d->seccomp = xstrdup("strict");
+			else
+				d->seccomp = xstrdup("filter");
+		} else if (sscanf(line, "Secbits:\t%lx", &secbits) == 1) {
+			seen_secbits = 1;
+		}
+	}
+	fclose(f);
+
+	snprintf(path, sizeof(path), "/proc/%d/attr/current", pid);
+	d->lsm_label = read_first_line(path);
+
+	if (seen_secbits)
+		*secbits_raw = secbits;
+	if (uid == 0 || (seen_secbits && secbits != 0)) {
+		char buf[256];
+		int keep = !!(secbits & 0x10);
+		int nofix = !!(secbits & 0x04);
+		int noroot = !!(secbits & 0x01);
+		int locked = !!(secbits & (0x20 | 0x08 | 0x02));
+		snprintf(buf, sizeof(buf),
+			"keep_caps=%s no_setuid_fixup=%s noroot=%s",
+			keep ? "yes" : "no",
+			nofix ? "yes" : "no",
+			noroot ? "yes" : "no");
+		d->securebits = xstrdup(buf);
+		d->securebits_locked = xstrdup(locked ? "yes" : "no");
+		*securebits_nondefault = 1;
+	}
+}
+
+static struct process_info *add_process(struct model *m, int pid)
+{
+	char path[64], line[256], comm[64] = "";
+	FILE *f;
+	int uid = -1;
+	int has_amb = 0, has_bnd = 0;
+	int secure_nondefault = 0;
+	unsigned long secbits_raw = 0;
+	struct process_info *p;
+
+	snprintf(path, sizeof(path), "/proc/%d/status", pid);
+	f = fopen(path, "rte");
+	if (!f)
+		return NULL;
+	__fsetlocking(f, FSETLOCKING_BYCALLER);
+	while (fgets(line, sizeof(line), f)) {
+		if (sscanf(line, "Name:\t%63s", comm) == 1)
+			continue;
+		if (sscanf(line, "Uid:\t%d", &uid) == 1)
+			continue;
+	}
+	fclose(f);
+	if (uid < 0)
+		return NULL;
+
+	p = calloc(1, sizeof(*p));
+	if (!p) {
+		fprintf(stderr, "Out of memory\n");
+		return NULL;
+	}
+	p->pid = pid;
+	p->uid = uid;
+	p->comm = xstrdup(comm[0] ? comm : "?");
+	p->unit = extract_unit_from_cgroup(pid);
+	p->caps = caps_summary_for_pid(pid, &p->has_privileged_caps,
+		&has_amb, &has_bnd);
+	parse_status_defenses(pid, uid, &p->defenses, &secure_nondefault,
+		&secbits_raw);
+	p->securebits_locked = p->defenses.securebits_locked &&
+		strcmp(p->defenses.securebits_locked, "yes") == 0;
+	if (!p->comm || !p->caps || !p->defenses.runs_as_root ||
+	    !p->defenses.no_new_privs || !p->defenses.seccomp)
+		goto fail;
+
+	if (m->procs_n == m->procs_cap && vec_grow((void **)&m->procs,
+	    &m->procs_cap, sizeof(struct process_info *)))
+		goto fail;
+	m->procs[m->procs_n++] = p;
+	return p;
+
+fail:
+	free_process(p);
+	return NULL;
+}
+
+static int add_inode_proc(struct model *m, unsigned long inode,
+	struct process_info *p)
+{
+	size_t i, j;
+	struct inode_proc *ip = NULL;
+
+	for (i = 0; i < m->inode_n; i++) {
+		if (m->inode_map[i].inode == inode) {
+			ip = &m->inode_map[i];
+			break;
+		}
+	}
+	if (!ip) {
+		if (m->inode_n == m->inode_cap && vec_grow((void **)&m->inode_map,
+		    &m->inode_cap, sizeof(struct inode_proc)))
+			return -1;
+		ip = &m->inode_map[m->inode_n++];
+		memset(ip, 0, sizeof(*ip));
+		ip->inode = inode;
+	}
+	for (j = 0; j < ip->n; j++)
+		if (ip->procs[j]->pid == p->pid)
+			return 0;
+	if (ip->n == ip->cap && vec_grow((void **)&ip->procs, &ip->cap,
+	    sizeof(struct process_info *)))
+		return -1;
+	ip->procs[ip->n++] = p;
+	return 0;
+}
+
+static void collect_proc_inodes(struct model *m)
+{
+	DIR *d;
+	struct dirent *ent;
+
+	d = opendir("/proc");
+	if (!d)
+		return;
+	while ((ent = readdir(d))) {
+		int pid;
+		DIR *fds;
+		struct dirent *fdent;
+		char fdpath[64];
+		struct process_info *p;
+
+		if (ent->d_name[0] < '0' || ent->d_name[0] > '9')
+			continue;
+		pid = atoi(ent->d_name);
+		if (pid <= 0)
+			continue;
+		p = add_process(m, pid);
+		if (!p)
+			continue;
+		snprintf(fdpath, sizeof(fdpath), "/proc/%d/fd", pid);
+		fds = opendir(fdpath);
+		if (!fds)
+			continue;
+		while ((fdent = readdir(fds))) {
+			char lpath[128], link[256], *s;
+			ssize_t l;
+			unsigned long inode;
+
+			if (fdent->d_name[0] == '.')
+				continue;
+			snprintf(lpath, sizeof(lpath), "%s/%s", fdpath, fdent->d_name);
+			l = readlink(lpath, link, sizeof(link) - 1);
+			if (l < 0)
+				continue;
+			link[l] = 0;
+			if (strncmp(link, "socket:[", 8) == 0) {
+				s = link + 8;
+			} else if (strncmp(link, "[0000]:", 7) == 0) {
+				s = link + 7;
+			} else {
+				continue;
+			}
+			inode = strtoul(s, NULL, 10);
+			if (inode)
+				add_inode_proc(m, inode, p);
+		}
+		closedir(fds);
+	}
+	closedir(d);
+}
+
+static struct inode_proc *lookup_inode(struct model *m, unsigned long inode)
+{
+	size_t i;
+
+	for (i = 0; i < m->inode_n; i++)
+		if (m->inode_map[i].inode == inode)
+			return &m->inode_map[i];
+	return NULL;
+}
+
+static int add_endpoint(struct model *m, const char *proto, const char *bind,
+	unsigned int port, enum plane_kind plane, const char *ifname,
+	const char *ifaddr, int wildcard, int loopback, struct inode_proc *ip)
+{
+	size_t i, j;
+	struct endpoint *e;
+	char label[256];
+
+	if (strchr(bind, ':'))
+		snprintf(label, sizeof(label), "%s:[%s]:%u", proto, bind, port);
+	else
+		snprintf(label, sizeof(label), "%s:%s:%u", proto, bind, port);
+
+	for (i = 0; i < m->eps_n; i++) {
+		e = &m->eps[i];
+		if (strcmp(e->label, label) == 0 && strcmp(e->ifname, ifname) == 0 &&
+		    strcmp(e->ifaddr, ifaddr) == 0)
+			goto add_procs;
+	}
+	if (m->eps_n == m->eps_cap && vec_grow((void **)&m->eps, &m->eps_cap,
+	    sizeof(struct endpoint)))
+		return -1;
+	e = &m->eps[m->eps_n++];
+	memset(e, 0, sizeof(*e));
+	e->proto = xstrdup(proto);
+	e->bind = xstrdup(bind);
+	e->label = xstrdup(label);
+	e->port = port;
+	e->plane = plane;
+	e->ifname = xstrdup(ifname);
+	e->ifaddr = xstrdup(ifaddr);
+	e->wildcard_bind = wildcard;
+	e->loopback_only = loopback;
+	if (!e->proto || !e->bind || !e->label || !e->ifname || !e->ifaddr)
+		return -1;
+add_procs:
+	for (j = 0; j < ip->n; j++) {
+		size_t k;
+		for (k = 0; k < e->procs_n; k++)
+			if (e->procs[k]->pid == ip->procs[j]->pid)
+				goto next;
+		if (e->procs_n == e->procs_cap && vec_grow((void **)&e->procs,
+		    &e->procs_cap, sizeof(struct process_info *)))
+			return -1;
+		e->procs[e->procs_n++] = ip->procs[j];
+next:
+		;
+	}
+	return 0;
+}
+
+static void endpoint_to_ifaces(struct model *m, const char *proto, int af,
+	const char *bind, unsigned int port, struct inode_proc *ip)
+{
+	size_t i, j;
+	int wildcard = str_is_wildcard(af, bind);
+	int loopback = str_is_loopback(af, bind);
+	int matched = 0;
+
+	for (i = 0; i < m->ifaces_n; i++) {
+		struct iface_info *ifc = &m->ifaces[i];
+		for (j = 0; j < ifc->addrs_n; j++) {
+			if (ifc->addrs[j].af != af)
+				continue;
+			if (wildcard) {
+				if (strcmp(ifc->name, "lo") == 0)
+					continue;
+				add_endpoint(m, proto, bind, port, PLANE_INET_EXTERNAL,
+					ifc->name, ifc->addrs[j].addr, 1, 0, ip);
+				matched = 1;
+			} else if (strcmp(ifc->addrs[j].addr, bind) == 0) {
+				enum plane_kind plane = loopback ?
+					PLANE_INET_LOOPBACK : PLANE_INET_EXTERNAL;
+				add_endpoint(m, proto, bind, port, plane, ifc->name,
+					ifc->addrs[j].addr, 0, loopback, ip);
+				matched = 1;
+			}
+		}
+	}
+	if (!matched)
+		add_endpoint(m, proto, bind, port,
+			loopback ? PLANE_INET_LOOPBACK : PLANE_INET_EXTERNAL,
+			loopback ? "lo" : "unknown", bind, wildcard, loopback, ip);
+}
+
+static void parse_inet_file(struct model *m, const char *path,
+	const char *proto, int af)
+{
+	FILE *f;
+	char line[512];
+	int row = 0;
+
+	f = fopen(path, "rte");
+	if (!f)
+		return;
+	__fsetlocking(f, FSETLOCKING_BYCALLER);
+	while (fgets(line, sizeof(line), f)) {
+		unsigned int lport, rport, state;
+		unsigned long txq, rxq, tmr, when, retr, inode;
+		int d, uid, timeout;
+		char laddrh[96], raddrh[96], more[128];
+		char addr[INET6_ADDRSTRLEN];
+		struct inode_proc *ip;
+		more[0] = 0;
+		if (!row++)
+			continue;
+		if (sscanf(line, "%d: %95[0-9A-Fa-f]:%X %95[0-9A-Fa-f]:%X %X "
+			"%lX:%lX %lX:%lX %lX %d %d %lu %127s",
+			&d, laddrh, &lport, raddrh, &rport, &state, &txq, &rxq,
+			&tmr, &when, &retr, &uid, &timeout, &inode, more) < 14)
+			continue;
+		if ((strcmp(proto, "tcp") == 0 ||
+		     strcmp(proto, "tcp6") == 0) && state != 0x0A)
+			continue;
+		if ((strcmp(proto, "udp") == 0 ||
+		     strcmp(proto, "udp6") == 0 ||
+		     strcmp(proto, "udplite") == 0 ||
+		     strcmp(proto, "udplite6") == 0) && lport == 0)
+			continue;
+		ip = lookup_inode(m, inode);
+		if (!ip)
+			continue;
+		if (af == AF_INET) {
+			unsigned int b0, b1, b2, b3;
+			if (sscanf(laddrh, "%2x%2x%2x%2x", &b3, &b2, &b1, &b0) != 4)
+				continue;
+			snprintf(addr, sizeof(addr), "%u.%u.%u.%u", b0, b1, b2, b3);
+		} else {
+			unsigned char bytes[16];
+			int i;
+			if (strlen(laddrh) != 32)
+				continue;
+			for (i = 0; i < 16; i++) {
+				unsigned int v;
+				if (sscanf(laddrh + (i * 2), "%2x", &v) != 1)
+					v = 0;
+				bytes[15 - i] = v;
+			}
+			if (!inet_ntop(AF_INET6, bytes, addr, sizeof(addr)))
+				continue;
+		}
+		endpoint_to_ifaces(m, proto, af, addr, lport, ip);
+	}
+	fclose(f);
+}
+
+static void parse_packet_file(struct model *m)
+{
+	FILE *f;
+	char line[512], ifn[IF_NAMESIZE];
+	int row = 0;
+
+	f = fopen("/proc/net/packet", "rte");
+	if (!f)
+		return;
+	__fsetlocking(f, FSETLOCKING_BYCALLER);
+	while (fgets(line, sizeof(line), f)) {
+		unsigned long sk, inode;
+		unsigned int ref, type, proto, iface, r, rmem, uid;
+		struct inode_proc *ip;
+		char bind[64], addr[64], name[64];
+
+		if (!row++)
+			continue;
+		if (sscanf(line, "%lX %u %u %X %u %u %u %u %lu",
+			&sk, &ref, &type, &proto, &iface, &r, &rmem, &uid,
+			&inode) < 9)
+			continue;
+		ip = lookup_inode(m, inode);
+		if (!ip)
+			continue;
+		if (!if_indextoname(iface, ifn))
+			strcpy(ifn, "unknown");
+		snprintf(bind, sizeof(bind), "%s", ifn);
+		snprintf(addr, sizeof(addr), "ifindex:%u", iface);
+		snprintf(name, sizeof(name), "packet");
+		add_endpoint(m, name, bind, proto, PLANE_PACKET, ifn, addr,
+			0, 0, ip);
+	}
+	fclose(f);
+}
+
+static void collect_endpoints(struct model *m)
+{
+	parse_inet_file(m, "/proc/net/tcp", "tcp", AF_INET);
+	parse_inet_file(m, "/proc/net/tcp6", "tcp6", AF_INET6);
+	parse_inet_file(m, "/proc/net/udp", "udp", AF_INET);
+	parse_inet_file(m, "/proc/net/udp6", "udp6", AF_INET6);
+	parse_inet_file(m, "/proc/net/udplite", "udplite", AF_INET);
+	parse_inet_file(m, "/proc/net/udplite6", "udplite6", AF_INET6);
+	parse_inet_file(m, "/proc/net/raw", "raw", AF_INET);
+	parse_inet_file(m, "/proc/net/raw6", "raw6", AF_INET6);
+	parse_packet_file(m);
 }
 
 static int wrap_to(const char *text, int from, int limit)
@@ -99,575 +810,466 @@ static int wrap_to(const char *text, int from, int limit)
 	return i;
 }
 
-static void print_wrapped_with_prefix(int depth, const int *bars,
-				      int last, const char *text,
-				      int width, int with_branch)
+static void print_tree_node(const char *prefix, int is_last, const char *txt,
+	int width)
 {
+	char head[512];
+	char cont[512];
 	int pos = 0;
 	int first = 1;
-	int avail;
-	int to;
 
+	snprintf(head, sizeof(head), "%s%s", prefix,
+		is_last ? "└─ " : "├─ ");
+	snprintf(cont, sizeof(cont), "%s%s", prefix,
+		is_last ? "   " : "│  ");
 	while (1) {
-		print_indent(depth, bars);
-		if (with_branch)
-			fputs(first ? (last ? "└─ " : "├─ ") : "   ", stdout);
-		avail = width - (depth * 3) - (with_branch ? 3 : 0);
+		const char *lead = first ? head : cont;
+		int lead_len = strlen(lead);
+		int avail = width - lead_len;
+		int to;
+
 		if (avail < 10)
 			avail = 10;
-		if (!text[pos]) {
-			fputc('\n', stdout);
+		if (!txt[pos]) {
+			printf("%s\n", lead);
 			return;
 		}
-		to = wrap_to(text, pos, avail);
-		printf("%.*s\n", to - pos, text + pos);
-		while (text[to] == ' ')
+		to = wrap_to(txt, pos, avail);
+		printf("%s%.*s\n", lead, to - pos, txt + pos);
+		while (txt[to] == ' ')
 			to++;
 		pos = to;
 		first = 0;
-		if (!text[pos])
+		if (!txt[pos])
 			return;
 	}
 }
 
-static void print_node(int depth, const int *bars, int last, const char *label,
-		       int width)
+static void build_child_prefix(char *dst, size_t dst_sz, const char *prefix,
+	int parent_is_last)
 {
-	print_wrapped_with_prefix(depth, bars, last, label, width, 1);
+	snprintf(dst, dst_sz, "%s%s", prefix,
+		parent_is_last ? "   " : "│  ");
 }
 
-static void print_root_line(const char *label, int width)
+static int endpoint_cmp(const void *a, const void *b)
 {
-	const int bars[1] = { 0 };
-
-	print_wrapped_with_prefix(0, bars, 1, label, width, 0);
+	const struct endpoint *ea = a, *eb = b;
+	if (ea->plane != eb->plane)
+		return ea->plane - eb->plane;
+	if (strcmp(ea->ifname, eb->ifname) != 0)
+		return strcmp(ea->ifname, eb->ifname);
+	if (strcmp(ea->ifaddr, eb->ifaddr) != 0)
+		return strcmp(ea->ifaddr, eb->ifaddr);
+	return strcmp(ea->label, eb->label);
 }
 
-static void json_indent(int n)
-{
-	while (n--)
-		fputs("  ", stdout);
-}
-
-static void json_str(const char *s)
-{
-	const unsigned char *p = (const unsigned char *)s;
-
-	fputc('"', stdout);
-	for (; *p; p++) {
-		switch (*p) {
-		case '"':
-			fputs("\\\"", stdout);
-			break;
-		case '\\':
-			fputs("\\\\", stdout);
-			break;
-		case '\n':
-			fputs("\\n", stdout);
-			break;
-		default:
-			if (*p < 0x20)
-				printf("\\u%04x", *p);
-			else
-				fputc(*p, stdout);
-		}
-	}
-	fputc('"', stdout);
-}
-
-static void print_defenses_json(const struct defense_kv *d, size_t n, int ind)
+static void render_tree(struct model *m)
 {
 	size_t i;
-
-	fputs("{\n", stdout);
-	for (i = 0; i < n; i++) {
-		json_indent(ind + 1);
-		json_str(d[i].key);
-		fputs(": ", stdout);
-		json_str(d[i].value);
-		if (i + 1 != n)
-			fputc(',', stdout);
-		fputc('\n', stdout);
-	}
-	json_indent(ind);
-	fputc('}', stdout);
-}
-
-static void print_flags_json(const char **flags, size_t n, int ind)
-{
-	size_t i;
-
-	fputs("[\n", stdout);
-	for (i = 0; i < n; i++) {
-		json_indent(ind + 1);
-		json_str(flags[i]);
-		if (i + 1 != n)
-			fputc(',', stdout);
-		fputc('\n', stdout);
-	}
-	json_indent(ind);
-	fputc(']', stdout);
-}
-
-static void print_process_json(const struct process *p, int ind, int last)
-{
-	json_indent(ind);
-	fputs("{\n", stdout);
-	json_indent(ind + 1);
-	fputs("\"comm\": ", stdout);
-	json_str(p->comm);
-	fputs(",\n", stdout);
-	json_indent(ind + 1);
-	fputs("\"pid\": ", stdout);
-	printf("%d,\n", p->pid);
-	json_indent(ind + 1);
-	fputs("\"uid\": ", stdout);
-	printf("%d,\n", p->uid);
-	if (p->unit) {
-		json_indent(ind + 1);
-		fputs("\"unit\": ", stdout);
-		json_str(p->unit);
-		fputs(",\n", stdout);
-	}
-	json_indent(ind + 1);
-	fputs("\"caps\": {\n", stdout);
-	json_indent(ind + 2);
-	fputs("\"summary\": ", stdout);
-	json_str(p->caps_summary);
-	fputc('\n', stdout);
-	json_indent(ind + 1);
-	fputs("},\n", stdout);
-	json_indent(ind + 1);
-	fputs("\"defenses\": ", stdout);
-	print_defenses_json(p->defenses, p->defenses_count, ind + 1);
-	fputs(",\n", stdout);
-	json_indent(ind + 1);
-	fputs("\"flags\": ", stdout);
-	print_flags_json(p->flags, p->flags_count, ind + 1);
-	fputc('\n', stdout);
-	json_indent(ind);
-	fputc('}', stdout);
-	if (!last)
-		fputc(',', stdout);
-	fputc('\n', stdout);
-}
-
-static void print_endpoints_json(const struct endpoint *e, size_t n, int ind)
-{
-	size_t i;
-	size_t j;
-
-	fputs("[\n", stdout);
-	for (i = 0; i < n; i++) {
-		json_indent(ind + 1);
-		fputs("{\n", stdout);
-		json_indent(ind + 2);
-		fputs("\"label\": ", stdout);
-		json_str(e[i].label);
-		fputs(",\n", stdout);
-		json_indent(ind + 2);
-		fputs("\"processes\": [\n", stdout);
-		for (j = 0; j < e[i].processes_count; j++)
-			print_process_json(&e[i].processes[j], ind + 3,
-					 j + 1 == e[i].processes_count);
-		json_indent(ind + 2);
-		fputs("]\n", stdout);
-		json_indent(ind + 1);
-		fputc('}', stdout);
-		if (i + 1 != n)
-			fputc(',', stdout);
-		fputc('\n', stdout);
-	}
-	json_indent(ind);
-	fputc(']', stdout);
-}
-
-static void print_addrs_json(const struct addr *a, size_t n, int ind)
-{
-	size_t i;
-
-	fputs("[\n", stdout);
-	for (i = 0; i < n; i++) {
-		json_indent(ind + 1);
-		fputs("{\n", stdout);
-		json_indent(ind + 2);
-		fputs("\"addr\": ", stdout);
-		json_str(a[i].value);
-		fputs(",\n", stdout);
-		json_indent(ind + 2);
-		fputs("\"endpoints\": ", stdout);
-		print_endpoints_json(a[i].endpoints, a[i].endpoints_count, ind + 2);
-		fputc('\n', stdout);
-		json_indent(ind + 1);
-		fputc('}', stdout);
-		if (i + 1 != n)
-			fputc(',', stdout);
-		fputc('\n', stdout);
-	}
-	json_indent(ind);
-	fputc(']', stdout);
-}
-
-static void print_ifaces_json(const struct iface *ifc, size_t n, int ind)
-{
-	size_t i;
-
-	fputs("[\n", stdout);
-	for (i = 0; i < n; i++) {
-		json_indent(ind + 1);
-		fputs("{\n", stdout);
-		json_indent(ind + 2);
-		fputs("\"name\": ", stdout);
-		json_str(ifc[i].name);
-		fputs(",\n", stdout);
-		json_indent(ind + 2);
-		fputs("\"addr\": ", stdout);
-		print_addrs_json(ifc[i].addrs, ifc[i].addrs_count, ind + 2);
-		fputc('\n', stdout);
-		json_indent(ind + 1);
-		fputc('}', stdout);
-		if (i + 1 != n)
-			fputc(',', stdout);
-		fputc('\n', stdout);
-	}
-	json_indent(ind);
-	fputc(']', stdout);
-}
-
-static void render_json(const struct model *m)
-{
-	size_t i;
-
-	fputs("{\n", stdout);
-	json_indent(1);
-	fputs("\"schema_version\": ", stdout);
-	printf("%d,\n", m->schema_version);
-	json_indent(1);
-	fputs("\"planes\": [\n", stdout);
-	for (i = 0; i < m->planes_count; i++) {
-		json_indent(2);
-		fputs("{\n", stdout);
-		json_indent(3);
-		fputs("\"name\": ", stdout);
-		json_str(m->planes[i].name);
-		if (m->planes[i].scope) {
-			fputs(",\n", stdout);
-			json_indent(3);
-			fputs("\"scope\": ", stdout);
-			json_str(m->planes[i].scope);
-		}
-		if (m->planes[i].ifaces_count) {
-			fputs(",\n", stdout);
-			json_indent(3);
-			fputs("\"interfaces\": ", stdout);
-			print_ifaces_json(m->planes[i].ifaces,
-					m->planes[i].ifaces_count, 3);
-			fputc('\n', stdout);
-		} else {
-			fputs(",\n", stdout);
-			json_indent(3);
-			fputs("\"endpoints\": ", stdout);
-			print_endpoints_json(m->planes[i].endpoints,
-					     m->planes[i].endpoints_count,
-					     3);
-			fputc('\n', stdout);
-		}
-		json_indent(2);
-		fputc('}', stdout);
-		if (i + 1 != m->planes_count)
-			fputc(',', stdout);
-		fputc('\n', stdout);
-	}
-	json_indent(1);
-	fputs("]\n", stdout);
-	fputs("}\n", stdout);
-}
-
-static void render_process_tree(const struct process *p, int depth, int *bars,
-				int last, int width)
-{
-	char label[768];
-	size_t i;
-
-	if (p->unit)
-		snprintf(label, sizeof(label), "%s (pid=%d uid=%d unit=%s)",
-			 p->comm, p->pid, p->uid, p->unit);
-	else
-		snprintf(label, sizeof(label), "%s (pid=%d uid=%d)",
-			 p->comm, p->pid, p->uid);
-	print_node(depth, bars, last, label, width);
-	bars[depth] = !last;
-
-	snprintf(label, sizeof(label), "caps: %s", p->caps_summary);
-	print_node(depth + 1, bars, 0, label, width);
-	print_node(depth + 1, bars, 0, "defenses", width);
-	bars[depth + 1] = 1;
-	for (i = 0; i < p->defenses_count; i++) {
-		snprintf(label, sizeof(label), "%s: %s",
-			 p->defenses[i].key, p->defenses[i].value);
-		print_node(depth + 2, bars, i + 1 == p->defenses_count,
-			   label, width);
-	}
-	print_node(depth + 1, bars, 1, "flags", width);
-	bars[depth + 1] = 0;
-	for (i = 0; i < p->flags_count; i++)
-		print_node(depth + 2, bars, i + 1 == p->flags_count,
-			   p->flags[i], width);
-}
-
-static void render_endpoint_tree(const struct endpoint *e, int depth, int *bars,
-				 int last, int width)
-{
-	size_t i;
-
-	print_node(depth, bars, last, e->label, width);
-	bars[depth] = !last;
-	for (i = 0; i < e->processes_count; i++)
-		render_process_tree(&e->processes[i], depth + 1, bars,
-				    i + 1 == e->processes_count, width);
-}
-
-static void render_addr_tree(const struct addr *a, int depth, int *bars,
-			     int last, int width)
-{
-	size_t i;
-	char label[256];
-
-	snprintf(label, sizeof(label), "addr: %s", a->value);
-	print_node(depth, bars, last, label, width);
-	bars[depth] = !last;
-	for (i = 0; i < a->endpoints_count; i++)
-		render_endpoint_tree(&a->endpoints[i], depth + 1, bars,
-				     i + 1 == a->endpoints_count, width);
-}
-
-static void render_iface_tree(const struct iface *ifc, int depth, int *bars,
-			      int last, int width)
-{
-	size_t i;
-
-	print_node(depth, bars, last, ifc->name, width);
-	bars[depth] = !last;
-	for (i = 0; i < ifc->addrs_count; i++)
-		render_addr_tree(&ifc->addrs[i], depth + 1, bars,
-				 i + 1 == ifc->addrs_count, width);
-}
-
-static void render_plane_tree(const struct plane *p, int depth, int *bars,
-			      int last, int width)
-{
-	size_t i;
-	char label[128];
-
-	if (p->scope)
-		snprintf(label, sizeof(label), "%s (%s)", p->name, p->scope);
-	else
-		snprintf(label, sizeof(label), "%s", p->name);
-	print_node(depth, bars, last, label, width);
-	bars[depth] = !last;
-	if (p->ifaces_count) {
-		for (i = 0; i < p->ifaces_count; i++)
-			render_iface_tree(&p->ifaces[i], depth + 1, bars,
-				  i + 1 == p->ifaces_count, width);
-	} else {
-		for (i = 0; i < p->endpoints_count; i++)
-			render_endpoint_tree(&p->endpoints[i], depth + 1, bars,
-				     i + 1 == p->endpoints_count, width);
-	}
-}
-
-static void render_tree(const struct model *m)
-{
-	int bars[16] = { 0 };
-	size_t i;
+	int planes[3];
+	size_t plane_n = 0;
 	int width = get_width();
 
-	print_root_line("netcap --advanced", width);
-	bars[0] = 0;
-	for (i = 0; i < m->planes_count; i++)
-		render_plane_tree(&m->planes[i], 0, bars,
-				  i + 1 == m->planes_count, width);
+	qsort(m->eps, m->eps_n, sizeof(struct endpoint), endpoint_cmp);
+	puts("netcap --advanced");
+
+	for (i = 0; i < 3; i++) {
+		size_t j;
+		for (j = 0; j < m->eps_n; j++) {
+			if (m->eps[j].plane == (enum plane_kind)i) {
+				planes[plane_n++] = i;
+				break;
+			}
+		}
+	}
+
+	for (i = 0; i < plane_n; i++) {
+		int plane = planes[i];
+		int plane_last = (i + 1 == plane_n);
+		char pfx_plane[256] = "";
+		char pfx_iface[256];
+		const char *plane_name = plane == PLANE_INET_EXTERNAL ?
+			"INET (external)" :
+			plane == PLANE_INET_LOOPBACK ? "INET (loopback)" :
+			"PACKET";
+		size_t j = 0;
+
+		print_tree_node(pfx_plane, plane_last, plane_name, width);
+		build_child_prefix(pfx_iface, sizeof(pfx_iface), pfx_plane,
+			plane_last);
+
+		while (j < m->eps_n) {
+			size_t iface_start, iface_end;
+			char pfx_addr[256];
+			char iface_line[160];
+			int iface_last;
+
+			if (m->eps[j].plane != (enum plane_kind)plane) {
+				j++;
+				continue;
+			}
+			iface_start = j;
+			iface_end = j + 1;
+			while (iface_end < m->eps_n &&
+			       m->eps[iface_end].plane == (enum plane_kind)plane &&
+			       strcmp(m->eps[iface_end].ifname,
+				m->eps[iface_start].ifname) == 0)
+				iface_end++;
+			iface_last = 1;
+			if (iface_end < m->eps_n &&
+			    m->eps[iface_end].plane == (enum plane_kind)plane)
+				iface_last = 0;
+
+			snprintf(iface_line, sizeof(iface_line), "%s",
+				m->eps[iface_start].ifname);
+			print_tree_node(pfx_iface, iface_last, iface_line, width);
+			build_child_prefix(pfx_addr, sizeof(pfx_addr), pfx_iface,
+				iface_last);
+
+			for (j = iface_start; j < iface_end; ) {
+				size_t addr_start = j, addr_end;
+				char pfx_ep[256];
+				char addr_line[192];
+				int addr_last;
+
+				addr_end = j + 1;
+				while (addr_end < iface_end &&
+				       strcmp(m->eps[addr_end].ifaddr,
+					m->eps[addr_start].ifaddr) == 0)
+					addr_end++;
+				addr_last = (addr_end == iface_end);
+
+				snprintf(addr_line, sizeof(addr_line), "addr: %s",
+					m->eps[addr_start].ifaddr);
+				print_tree_node(pfx_addr, addr_last, addr_line, width);
+				build_child_prefix(pfx_ep, sizeof(pfx_ep), pfx_addr,
+					addr_last);
+
+				for (j = addr_start; j < addr_end; j++) {
+					struct endpoint *e = &m->eps[j];
+					char pfx_proc[256];
+					int ep_last = (j + 1 == addr_end);
+					size_t k;
+
+					print_tree_node(pfx_ep, ep_last, e->label, width);
+					build_child_prefix(pfx_proc, sizeof(pfx_proc), pfx_ep,
+						ep_last);
+
+					for (k = 0; k < e->procs_n; k++) {
+						struct process_info *p = e->procs[k];
+						char pfx_child[256], pfx_def[256], pfx_flags[256];
+						char line[512];
+						struct strvec flags = { 0 };
+						const char *def_nodes[8];
+						char def_buf[8][512];
+						size_t def_n = 0;
+						size_t ai;
+						int proc_last = (k + 1 == e->procs_n);
+
+						snprintf(line, sizeof(line),
+							"%s (pid=%d uid=%d%s%s)",
+							p->comm, p->pid, p->uid,
+							p->unit ? " unit=" : "",
+							p->unit ? p->unit : "");
+						print_tree_node(pfx_proc, proc_last, line, width);
+						build_child_prefix(pfx_child, sizeof(pfx_child), pfx_proc,
+							proc_last);
+
+						snprintf(line, sizeof(line), "caps: %s", p->caps);
+						print_tree_node(pfx_child, 0, line, width);
+
+						snprintf(def_buf[def_n], sizeof(def_buf[def_n]),
+							"runs_as_root: %s", p->defenses.runs_as_root);
+						def_nodes[def_n] = def_buf[def_n];
+						def_n++;
+						snprintf(def_buf[def_n], sizeof(def_buf[def_n]),
+							"no_new_privs: %s", p->defenses.no_new_privs);
+						def_nodes[def_n] = def_buf[def_n];
+						def_n++;
+						snprintf(def_buf[def_n], sizeof(def_buf[def_n]),
+							"seccomp: %s", p->defenses.seccomp);
+						def_nodes[def_n] = def_buf[def_n];
+						def_n++;
+						if (p->defenses.lsm_label) {
+							snprintf(def_buf[def_n], sizeof(def_buf[def_n]),
+								"lsm: %s", p->defenses.lsm_label);
+							def_nodes[def_n] = def_buf[def_n];
+						def_n++;
+						}
+						if (p->defenses.securebits) {
+							snprintf(def_buf[def_n], sizeof(def_buf[def_n]),
+								"securebits: %s", p->defenses.securebits);
+							def_nodes[def_n] = def_buf[def_n];
+						def_n++;
+							snprintf(def_buf[def_n], sizeof(def_buf[def_n]),
+								"securebits_locked: %s",
+								p->defenses.securebits_locked);
+							def_nodes[def_n] = def_buf[def_n];
+						def_n++;
+						}
+
+						print_tree_node(pfx_child, 0, "defenses", width);
+						build_child_prefix(pfx_def, sizeof(pfx_def), pfx_child, 0);
+						for (ai = 0; ai < def_n; ai++)
+							print_tree_node(pfx_def, ai + 1 == def_n,
+								def_nodes[ai], width);
+
+						if (e->wildcard_bind)
+							push_str_unique(&flags, "wildcard-bind");
+						if (e->loopback_only)
+							push_str_unique(&flags, "loopback-only");
+						if (p->has_privileged_caps)
+							push_str_unique(&flags, "privileged-caps");
+						if (p->securebits_locked)
+							push_str_unique(&flags, "securebits-locked");
+
+						print_tree_node(pfx_child, 1, "flags", width);
+						build_child_prefix(pfx_flags, sizeof(pfx_flags),
+							pfx_child, 1);
+						if (flags.n == 0)
+							print_tree_node(pfx_flags, 1, "(none)", width);
+						else {
+							for (ai = 0; ai < flags.n; ai++)
+								print_tree_node(pfx_flags,
+									ai + 1 == flags.n,
+									flags.v[ai], width);
+						}
+						for (ai = 0; ai < flags.n; ai++)
+							free(flags.v[ai]);
+						free(flags.v);
+					}
+				}
+			}
+			j = iface_end;
+		}
+	}
 }
 
-static const struct model *sample_model(void)
+static void json_escape(const char *s)
 {
-	static const struct defense_kv d_external[] = {
-		{ "runs_as_root", "no" },
-		{ "seccomp", "filter" },
-		{ "no_new_privs", "yes" },
-	};
-	static const struct defense_kv d_loopback[] = {
-		{ "runs_as_root", "no" },
-		{ "seccomp", "strict" },
-		{ "no_new_privs", "yes" },
-	};
-	static const struct defense_kv d_vsock[] = {
-		{ "runs_as_root", "yes" },
-		{ "seccomp", "disabled" },
-		{ "no_new_privs", "no" },
-	};
-	static const char *f_external[] = {
-		"wildcard-bind",
-	};
-	static const char *f_loopback[] = {
-		"loopback-only",
-	};
-	static const char *f_vsock[] = {
-		"hypervisor-plane",
-	};
-	static const char *f_ll[] = {
-		"link-layer-capture",
-	};
-	static const struct process p_external[] = {
-		{
-			.comm = "sampled",
-			.pid = 1234,
-			.uid = 1001,
-			.unit = NULL,
-			.caps_summary = "cap_net_bind_service, cap_net_admin, "
-				       "cap_net_raw [ambient-present] "
-				       "[open-ended-bounding]",
-			.defenses = d_external,
-			.defenses_count = sizeof(d_external) / sizeof(d_external[0]),
-			.flags = f_external,
-			.flags_count = sizeof(f_external) / sizeof(f_external[0]),
-		},
-	};
-	static const struct process p_loopback[] = {
-		{
-			.comm = "loopd",
-			.pid = 2234,
-			.uid = 1002,
-			.unit = NULL,
-			.caps_summary = "cap_net_bind_service",
-			.defenses = d_loopback,
-			.defenses_count = sizeof(d_loopback) / sizeof(d_loopback[0]),
-			.flags = f_loopback,
-			.flags_count = sizeof(f_loopback) / sizeof(f_loopback[0]),
-		},
-	};
-	static const struct process p_vsock[] = {
-		{
-			.comm = "vsockd",
-			.pid = 3234,
-			.uid = 0,
-			.unit = "vm-guest@3.service",
-			.caps_summary = "cap_sys_admin, cap_net_admin "
-				       "[open-ended-bounding]",
-			.defenses = d_vsock,
-			.defenses_count = sizeof(d_vsock) / sizeof(d_vsock[0]),
-			.flags = f_vsock,
-			.flags_count = sizeof(f_vsock) / sizeof(f_vsock[0]),
-		},
-	};
-	static const struct process p_ll[] = {
-		{
-			.comm = "pktmon",
-			.pid = 4234,
-			.uid = 0,
-			.unit = NULL,
-			.caps_summary = "cap_net_raw [ambient-present]",
-			.defenses = d_external,
-			.defenses_count = sizeof(d_external) / sizeof(d_external[0]),
-			.flags = f_ll,
-			.flags_count = sizeof(f_ll) / sizeof(f_ll[0]),
-		},
-	};
-	static const struct endpoint e_external[] = {
-		{ .label = "tcp:0.0.0.0:443", .processes = p_external,
-		  .processes_count = sizeof(p_external) / sizeof(p_external[0]) },
-	};
-	static const struct endpoint e_loopback[] = {
-		{ .label = "tcp:[::1]:8080", .processes = p_loopback,
-		  .processes_count = sizeof(p_loopback) / sizeof(p_loopback[0]) },
-	};
-	static const struct endpoint e_vsock[] = {
-		{ .label = "stream:cid=3:1024", .processes = p_vsock,
-		  .processes_count = sizeof(p_vsock) / sizeof(p_vsock[0]) },
-	};
-	static const struct endpoint e_ll[] = {
-		{ .label = "packet:02:42:ac:11:00:02:0x0800", .processes = p_ll,
-		  .processes_count = sizeof(p_ll) / sizeof(p_ll[0]) },
-	};
-	static const struct addr a_external[] = {
-		{ .value = "0.0.0.0", .endpoints = e_external,
-		  .endpoints_count = sizeof(e_external) / sizeof(e_external[0]) },
-	};
-	static const struct addr a_loopback[] = {
-		{ .value = "::1", .endpoints = e_loopback,
-		  .endpoints_count = sizeof(e_loopback) / sizeof(e_loopback[0]) },
-	};
-	static const struct addr a_ll[] = {
-		{ .value = "02:42:ac:11:00:02", .endpoints = e_ll,
-		  .endpoints_count = sizeof(e_ll) / sizeof(e_ll[0]) },
-	};
-	static const struct iface i_external[] = {
-		{ .name = "eth0", .addrs = a_external,
-		  .addrs_count = sizeof(a_external) / sizeof(a_external[0]) },
-	};
-	static const struct iface i_loopback[] = {
-		{ .name = "lo", .addrs = a_loopback,
-		  .addrs_count = sizeof(a_loopback) / sizeof(a_loopback[0]) },
-	};
-	static const struct iface i_ll[] = {
-		{ .name = "eth0", .addrs = a_ll,
-		  .addrs_count = sizeof(a_ll) / sizeof(a_ll[0]) },
-	};
-	static const struct plane planes[] = {
-		{
-			.name = "INET",
-			.scope = "external",
-			.ifaces = i_external,
-			.ifaces_count = sizeof(i_external) / sizeof(i_external[0]),
-			.endpoints = NULL,
-			.endpoints_count = 0,
-		},
-		{
-			.name = "INET",
-			.scope = "loopback",
-			.ifaces = i_loopback,
-			.ifaces_count = sizeof(i_loopback) / sizeof(i_loopback[0]),
-			.endpoints = NULL,
-			.endpoints_count = 0,
-		},
-		{
-			.name = "VSOCK",
-			.scope = NULL,
-			.ifaces = NULL,
-			.ifaces_count = 0,
-			.endpoints = e_vsock,
-			.endpoints_count = sizeof(e_vsock) / sizeof(e_vsock[0]),
-		},
-		{
-			.name = "LINK-LAYER",
-			.scope = NULL,
-			.ifaces = i_ll,
-			.ifaces_count = sizeof(i_ll) / sizeof(i_ll[0]),
-			.endpoints = NULL,
-			.endpoints_count = 0,
-		},
-	};
-	static const struct model m = {
-		.schema_version = 1,
-		.planes = planes,
-		.planes_count = sizeof(planes) / sizeof(planes[0]),
-	};
+	const unsigned char *p = (const unsigned char *)s;
+	putchar('"');
+	for (; *p; p++) {
+		if (*p == '"')
+			fputs("\\\"", stdout);
+		else if (*p == '\\')
+			fputs("\\\\", stdout);
+		else if (*p < 0x20)
+			printf("\\u%04x", *p);
+		else
+			putchar(*p);
+	}
+	putchar('"');
+}
 
-	return &m;
+static void render_json(struct model *m)
+{
+	size_t i, j, k, l;
+
+	qsort(m->eps, m->eps_n, sizeof(struct endpoint), endpoint_cmp);
+	puts("{");
+	puts("  \"schema_version\": 1,");
+	puts("  \"planes\": [");
+	for (i = 0; i < 3; i++) {
+		const char *pname = i == PLANE_INET_EXTERNAL ? "INET" :
+			i == PLANE_INET_LOOPBACK ? "INET" : "PACKET";
+		const char *scope = i == PLANE_INET_EXTERNAL ? "external" :
+			i == PLANE_INET_LOOPBACK ? "loopback" : NULL;
+		int first_if = 1;
+
+		printf("    {\"name\": ");
+		json_escape(pname);
+		if (scope) {
+			printf(", \"scope\": ");
+			json_escape(scope);
+		}
+		puts(", \"ifaces\": [");
+
+		for (j = 0; j < m->eps_n; j++) {
+			const char *ifn = m->eps[j].ifname;
+			int first_addr = 1;
+
+			if (m->eps[j].plane != (enum plane_kind)i)
+				continue;
+			for (l = 0; l < j; l++) {
+				if (m->eps[l].plane == (enum plane_kind)i &&
+				    strcmp(m->eps[l].ifname, ifn) == 0)
+					break;
+			}
+			if (l != j)
+				continue;
+			if (!first_if)
+				puts(",");
+			first_if = 0;
+			printf("      {\"name\": ");
+			json_escape(ifn);
+			puts(", \"addrs\": [");
+
+			for (k = 0; k < m->eps_n; k++) {
+				const char *ifa = m->eps[k].ifaddr;
+				int first_ep = 1;
+				if (m->eps[k].plane != (enum plane_kind)i ||
+				    strcmp(m->eps[k].ifname, ifn) != 0)
+					continue;
+				for (l = 0; l < k; l++) {
+					if (m->eps[l].plane == (enum plane_kind)i &&
+					    strcmp(m->eps[l].ifname, ifn) == 0 &&
+					    strcmp(m->eps[l].ifaddr, ifa) == 0)
+						break;
+				}
+				if (l != k)
+					continue;
+				if (!first_addr)
+					puts(",");
+				first_addr = 0;
+				printf("        {\"addr\": ");
+				json_escape(ifa);
+				puts(", \"endpoints\": [");
+				for (l = 0; l < m->eps_n; l++) {
+					struct endpoint *ep = &m->eps[l];
+					if (ep->plane != (enum plane_kind)i ||
+					    strcmp(ep->ifname, ifn) != 0 ||
+					    strcmp(ep->ifaddr, ifa) != 0)
+						continue;
+					if (!first_ep)
+						puts(",");
+					first_ep = 0;
+					printf("          {\"label\": ");
+					json_escape(ep->label);
+					puts(", \"processes\": [");
+					for (size_t pi = 0; pi < ep->procs_n; pi++) {
+						struct process_info *p = ep->procs[pi];
+						printf("            {\"comm\": ");
+						json_escape(p->comm);
+						printf(", \"pid\": %d, \"uid\": %d", p->pid,
+							p->uid);
+						if (p->unit) {
+							printf(", \"unit\": ");
+							json_escape(p->unit);
+						}
+						printf(", \"caps\": ");
+						json_escape(p->caps);
+						printf(", \"defenses\": {\"runs_as_root\": ");
+						json_escape(p->defenses.runs_as_root);
+						printf(", \"no_new_privs\": ");
+						json_escape(p->defenses.no_new_privs);
+						printf(", \"seccomp\": ");
+						json_escape(p->defenses.seccomp);
+						if (p->defenses.lsm_label) {
+							printf(", \"lsm\": ");
+							json_escape(p->defenses.lsm_label);
+						}
+						if (p->defenses.securebits) {
+							printf(", \"securebits\": ");
+							json_escape(p->defenses.securebits);
+							printf(", \"securebits_locked\": ");
+							json_escape(p->defenses.securebits_locked);
+						}
+						printf("}, \"flags\": [");
+						int firstf = 1;
+						if (ep->wildcard_bind) {
+							if (!firstf)
+								printf(", ");
+							json_escape("wildcard-bind");
+							firstf = 0;
+						}
+						if (ep->loopback_only) {
+							if (!firstf)
+								printf(", ");
+							json_escape("loopback-only");
+							firstf = 0;
+						}
+						if (p->has_privileged_caps) {
+							if (!firstf)
+								printf(", ");
+							json_escape("privileged-caps");
+							firstf = 0;
+						}
+						if (p->securebits_locked) {
+							if (!firstf)
+								printf(", ");
+							json_escape("securebits-locked");
+						}
+						printf("]}");
+						if (pi + 1 != ep->procs_n)
+							puts(",");
+						else
+							putchar('\n');
+					}
+					puts("          ]}");
+				}
+				puts("        ]}");
+			}
+			puts("      ]}");
+		}
+		puts("    ]}");
+		if (i != 2)
+			puts(",");
+	}
+	puts("  ]");
+	puts("}");
+}
+
+static void free_process(struct process_info *p)
+{
+	if (!p)
+		return;
+	free(p->comm);
+	free(p->unit);
+	free(p->caps);
+	free(p->defenses.runs_as_root);
+	free(p->defenses.no_new_privs);
+	free(p->defenses.seccomp);
+	free(p->defenses.lsm_label);
+	free(p->defenses.securebits);
+	free(p->defenses.securebits_locked);
+	free(p);
+}
+
+static void free_model(struct model *m)
+{
+	size_t i, j;
+	for (i = 0; i < m->ifaces_n; i++) {
+		free(m->ifaces[i].name);
+		for (j = 0; j < m->ifaces[i].addrs_n; j++)
+			free(m->ifaces[i].addrs[j].addr);
+		free(m->ifaces[i].addrs);
+	}
+	free(m->ifaces);
+	for (i = 0; i < m->procs_n; i++)
+		free_process(m->procs[i]);
+	free(m->procs);
+	for (i = 0; i < m->inode_n; i++)
+		free(m->inode_map[i].procs);
+	free(m->inode_map);
+	for (i = 0; i < m->eps_n; i++) {
+		free(m->eps[i].proto);
+		free(m->eps[i].bind);
+		free(m->eps[i].label);
+		free(m->eps[i].ifname);
+		free(m->eps[i].ifaddr);
+		free(m->eps[i].procs);
+	}
+	free(m->eps);
 }
 
 int netcap_advanced_main(const struct netcap_opts *opts)
 {
-	const struct model *m;
+	struct model m;
 
 	if (!opts || !opts->advanced)
 		return 1;
-
-	m = sample_model();
+	memset(&m, 0, sizeof(m));
+	if (collect_interfaces(&m) != 0) {
+		fprintf(stderr, "warning: failed to enumerate interfaces\n");
+	}
+	collect_proc_inodes(&m);
+	collect_endpoints(&m);
 	if (opts->json)
-		render_json(m);
+		render_json(&m);
 	else
-		render_tree(m);
-
+		render_tree(&m);
+	free_model(&m);
 	return 0;
 }
