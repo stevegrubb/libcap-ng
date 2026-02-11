@@ -35,6 +35,7 @@
 #include <pwd.h>
 #include "cap-ng.h"
 #include "proc-llist.h"
+#include "netcap-advanced.h"
 
 static llist l;
 static int perm_warn = 0, header = 0, last_uid = -1;
@@ -42,7 +43,7 @@ static char *tacct = NULL;
 
 static void usage(void)
 {
-	fprintf(stderr, "usage: netcap\n");
+	fprintf(stderr, "usage: netcap [--advanced [--json]]\n");
 	exit(1);
 }
 
@@ -395,8 +396,30 @@ static void read_packet(void)
 	fclose(f);
 }
 
-int main(int argc, char __attribute__((unused)) *argv[])
+int main(int argc, char **argv)
 {
+	struct netcap_opts opts = { 0, 0 };
+	int i;
+
+	for (i = 1; i < argc; i++) {
+		if (strcmp(argv[i], "--advanced") == 0)
+			opts.advanced = 1;
+		else if (strcmp(argv[i], "--json") == 0)
+			opts.json = 1;
+		else {
+			fprintf(stderr, "Unknown option: %s\n", argv[i]);
+			usage();
+		}
+	}
+
+	if (opts.json && !opts.advanced) {
+		fputs("--json is only valid with --advanced\n", stderr);
+		usage();
+	}
+
+	if (opts.advanced)
+		return netcap_advanced_main(&opts);
+
 	if (argc > 1) {
 		fputs("Too many arguments\n", stderr);
 		usage();
@@ -427,4 +450,3 @@ int main(int argc, char __attribute__((unused)) *argv[])
 	list_clear(&l);
 	return 0;
 }
-
