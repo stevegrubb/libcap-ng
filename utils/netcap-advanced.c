@@ -5,6 +5,7 @@
 #include <fcntl.h>
 #include <ifaddrs.h>
 #include <linux/capability.h>
+#include <linux/vm_sockets.h>
 #include <net/if.h>
 #include <netinet/in.h>
 #include <stdio.h>
@@ -24,6 +25,7 @@ enum plane_kind {
 	PLANE_INET_EXTERNAL,
 	PLANE_INET_LOOPBACK,
 	PLANE_PACKET,
+	PLANE_VSOCK,
 };
 
 struct strvec {
@@ -76,6 +78,8 @@ struct endpoint {
 	char *bind;
 	char *label;
 	unsigned int port;
+	unsigned int vsock_cid;
+	int has_vsock;
 	enum plane_kind plane;
 	char *ifname;
 	char *ifaddr;
@@ -626,6 +630,8 @@ static int add_endpoint(struct model *m, const char *proto, const char *bind,
 	e->bind = xstrdup(bind);
 	e->label = xstrdup(label);
 	e->port = port;
+	e->vsock_cid = 0;
+	e->has_vsock = 0;
 	e->plane = plane;
 	e->ifname = xstrdup(ifname);
 	e->ifaddr = xstrdup(ifaddr);
@@ -636,6 +642,59 @@ static int add_endpoint(struct model *m, const char *proto, const char *bind,
 add_procs:
 	for (j = 0; j < ip->n; j++) {
 		size_t k;
+		for (k = 0; k < e->procs_n; k++)
+			if (e->procs[k]->pid == ip->procs[j]->pid)
+				goto next;
+		if (e->procs_n == e->procs_cap && vec_grow((void **)&e->procs,
+		    &e->procs_cap, sizeof(struct process_info *)))
+			return -1;
+		e->procs[e->procs_n++] = ip->procs[j];
+next:
+		;
+	}
+	return 0;
+}
+
+static int add_vsock_endpoint(struct model *m, const char *type,
+	unsigned int cid, unsigned int port, struct inode_proc *ip)
+{
+	size_t i, j;
+	struct endpoint *e;
+	char label[128];
+	char cidbuf[32];
+
+	if (cid == VMADDR_CID_ANY)
+		strcpy(cidbuf, "ANY");
+	else
+		snprintf(cidbuf, sizeof(cidbuf), "%u", cid);
+	snprintf(label, sizeof(label), "%s:cid=%s:%u", type, cidbuf, port);
+
+	for (i = 0; i < m->eps_n; i++) {
+		e = &m->eps[i];
+		if (e->plane == PLANE_VSOCK && strcmp(e->label, label) == 0)
+			goto add_procs;
+	}
+	if (m->eps_n == m->eps_cap && vec_grow((void **)&m->eps, &m->eps_cap,
+	    sizeof(struct endpoint)))
+		return -1;
+	e = &m->eps[m->eps_n++];
+	memset(e, 0, sizeof(*e));
+	e->proto = xstrdup(type);
+	e->bind = xstrdup(cidbuf);
+	e->label = xstrdup(label);
+	e->port = port;
+	e->vsock_cid = cid;
+	e->has_vsock = 1;
+	e->plane = PLANE_VSOCK;
+	e->ifname = xstrdup("");
+	e->ifaddr = xstrdup("");
+	if (!e->proto || !e->bind || !e->label || !e->ifname || !e->ifaddr)
+		return -1;
+
+add_procs:
+	for (j = 0; j < ip->n; j++) {
+		size_t k;
+
 		for (k = 0; k < e->procs_n; k++)
 			if (e->procs[k]->pid == ip->procs[j]->pid)
 				goto next;
@@ -780,6 +839,106 @@ static void parse_packet_file(struct model *m)
 	fclose(f);
 }
 
+static int parse_u32_hex_or_dec(const char *s, unsigned int *out)
+{
+	char *end;
+	unsigned long v;
+	int base = 10;
+	const char *p;
+
+	for (p = s; *p; p++) {
+		if ((*p >= 'a' && *p <= 'f') || (*p >= 'A' && *p <= 'F')) {
+			base = 16;
+			break;
+		}
+	}
+	if (strncmp(s, "0x", 2) == 0 || strncmp(s, "0X", 2) == 0)
+		base = 16;
+	if (base == 10 && strlen(s) > 3 && s[0] == '0')
+		base = 16;
+	v = strtoul(s, &end, base);
+	if (end == s || *end)
+		return -1;
+	*out = (unsigned int)v;
+	return 0;
+}
+
+static void parse_vsock_file(struct model *m)
+{
+	FILE *f;
+	char line[512];
+
+	f = fopen("/proc/net/vsock", "rte");
+	if (!f)
+		return;
+	__fsetlocking(f, FSETLOCKING_BYCALLER);
+	while (fgets(line, sizeof(line), f)) {
+		char work[512];
+		char *tok[24];
+		char *save = NULL;
+		char *local, *s, *sep;
+		int tcnt = 0;
+		unsigned long inode;
+		unsigned int st, type, cid, port;
+		struct inode_proc *ip;
+		const char *kind;
+
+		if (strstr(line, "Local") || strstr(line, "local") ||
+		    strstr(line, "Num"))
+			continue;
+		snprintf(work, sizeof(work), "%s", line);
+		s = strtok_r(work, " \t\n", &save);
+		while (s && tcnt < (int)(sizeof(tok) / sizeof(tok[0]))) {
+			tok[tcnt++] = s;
+			s = strtok_r(NULL, " \t\n", &save);
+		}
+		if (tcnt < 5)
+			continue;
+		local = NULL;
+		for (int i = 0; i < tcnt; i++) {
+			if (strchr(tok[i], ':')) {
+				local = tok[i];
+				break;
+			}
+		}
+		if (!local)
+			continue;
+		sep = strchr(local, ':');
+		if (!sep)
+			continue;
+		*sep = '\0';
+		if (parse_u32_hex_or_dec(local, &cid) ||
+		    parse_u32_hex_or_dec(sep + 1, &port))
+			continue;
+
+		if (parse_u32_hex_or_dec(tok[tcnt - 2], &st))
+			continue;
+		if (parse_u32_hex_or_dec(tok[tcnt - 3], &type))
+			continue;
+		inode = strtoul(tok[tcnt - 1], NULL, 10);
+		if (!inode)
+			continue;
+
+		if (type == SOCK_STREAM) {
+			if (st != 0x0A)
+				continue;
+			kind = "stream";
+		} else if (type == SOCK_DGRAM) {
+			if (port == 0)
+				continue;
+			kind = "dgram";
+		} else {
+			continue;
+		}
+
+		ip = lookup_inode(m, inode);
+		if (!ip)
+			continue;
+		add_vsock_endpoint(m, kind, cid, port, ip);
+	}
+	fclose(f);
+}
+
 static void collect_endpoints(struct model *m)
 {
 	parse_inet_file(m, "/proc/net/tcp", "tcp", AF_INET);
@@ -791,6 +950,7 @@ static void collect_endpoints(struct model *m)
 	parse_inet_file(m, "/proc/net/raw", "raw", AF_INET);
 	parse_inet_file(m, "/proc/net/raw6", "raw6", AF_INET6);
 	parse_packet_file(m);
+	parse_vsock_file(m);
 }
 
 static int wrap_to(const char *text, int from, int limit)
@@ -867,14 +1027,14 @@ static int endpoint_cmp(const void *a, const void *b)
 static void render_tree(struct model *m)
 {
 	size_t i;
-	int planes[3];
+	int planes[4];
 	size_t plane_n = 0;
 	int width = get_width();
 
 	qsort(m->eps, m->eps_n, sizeof(struct endpoint), endpoint_cmp);
 	puts("netcap --advanced");
 
-	for (i = 0; i < 3; i++) {
+	for (i = 0; i < 4; i++) {
 		size_t j;
 		for (j = 0; j < m->eps_n; j++) {
 			if (m->eps[j].plane == (enum plane_kind)i) {
@@ -892,12 +1052,123 @@ static void render_tree(struct model *m)
 		const char *plane_name = plane == PLANE_INET_EXTERNAL ?
 			"INET (external)" :
 			plane == PLANE_INET_LOOPBACK ? "INET (loopback)" :
-			"PACKET";
+			plane == PLANE_PACKET ? "PACKET" : "VSOCK";
 		size_t j = 0;
 
 		print_tree_node(pfx_plane, plane_last, plane_name, width);
 		build_child_prefix(pfx_iface, sizeof(pfx_iface), pfx_plane,
 			plane_last);
+		if (plane == PLANE_VSOCK) {
+			for (j = 0; j < m->eps_n; j++) {
+				struct endpoint *e = &m->eps[j];
+				char pfx_proc[256];
+				int ep_last;
+				size_t k;
+
+				if (e->plane != PLANE_VSOCK)
+					continue;
+				ep_last = 1;
+				for (size_t n = j + 1; n < m->eps_n; n++) {
+					if (m->eps[n].plane == PLANE_VSOCK) {
+						ep_last = 0;
+						break;
+					}
+				}
+				print_tree_node(pfx_iface, ep_last, e->label, width);
+				build_child_prefix(pfx_proc, sizeof(pfx_proc), pfx_iface,
+					ep_last);
+				for (k = 0; k < e->procs_n; k++) {
+					struct process_info *p = e->procs[k];
+					char pfx_child[256], pfx_def[256], pfx_flags[256];
+					char line[512];
+					struct strvec flags = { 0 };
+					const char *def_nodes[8];
+					char def_buf[8][512];
+					size_t def_n = 0;
+					size_t ai;
+					int proc_last = (k + 1 == e->procs_n);
+
+					snprintf(line, sizeof(line),
+						"%s (pid=%d uid=%d%s%s)",
+						p->comm, p->pid, p->uid,
+						p->unit ? " unit=" : "",
+						p->unit ? p->unit : "");
+					print_tree_node(pfx_proc, proc_last, line, width);
+					build_child_prefix(pfx_child, sizeof(pfx_child), pfx_proc,
+						proc_last);
+
+					snprintf(line, sizeof(line), "caps: %s", p->caps);
+					print_tree_node(pfx_child, 0, line, width);
+
+					snprintf(def_buf[def_n], sizeof(def_buf[def_n]),
+						"runs_as_root: %s",
+						p->defenses.runs_as_root);
+					def_nodes[def_n] = def_buf[def_n];
+					def_n++;
+					snprintf(def_buf[def_n], sizeof(def_buf[def_n]),
+						"no_new_privs: %s",
+						p->defenses.no_new_privs);
+					def_nodes[def_n] = def_buf[def_n];
+					def_n++;
+					snprintf(def_buf[def_n], sizeof(def_buf[def_n]),
+						"seccomp: %s", p->defenses.seccomp);
+					def_nodes[def_n] = def_buf[def_n];
+					def_n++;
+					if (p->defenses.lsm_label) {
+						snprintf(def_buf[def_n], sizeof(def_buf[def_n]),
+							"lsm: %s",
+							p->defenses.lsm_label);
+						def_nodes[def_n] = def_buf[def_n];
+					def_n++;
+					}
+					if (p->defenses.securebits) {
+						snprintf(def_buf[def_n], sizeof(def_buf[def_n]),
+							"securebits: %s",
+							p->defenses.securebits);
+						def_nodes[def_n] = def_buf[def_n];
+					def_n++;
+						snprintf(def_buf[def_n], sizeof(def_buf[def_n]),
+							"securebits_locked: %s",
+							p->defenses.securebits_locked);
+						def_nodes[def_n] = def_buf[def_n];
+					def_n++;
+					}
+
+					print_tree_node(pfx_child, 0, "defenses", width);
+					build_child_prefix(pfx_def, sizeof(pfx_def), pfx_child, 0);
+					for (ai = 0; ai < def_n; ai++)
+						print_tree_node(pfx_def, ai + 1 == def_n,
+							def_nodes[ai], width);
+
+					push_str_unique(&flags, "hypervisor-plane");
+					if (e->port == 22)
+						push_str_unique(&flags,
+							"ssh-on-vsock-port-22");
+					if (p->has_privileged_caps)
+						push_str_unique(&flags,
+							"privileged-caps");
+					if (p->securebits_locked)
+						push_str_unique(&flags,
+							"securebits-locked");
+
+					print_tree_node(pfx_child, 1, "flags", width);
+					build_child_prefix(pfx_flags, sizeof(pfx_flags),
+						pfx_child, 1);
+					if (flags.n == 0)
+						print_tree_node(pfx_flags, 1, "(none)", width);
+					else {
+						for (ai = 0; ai < flags.n; ai++)
+							print_tree_node(pfx_flags,
+								ai + 1 == flags.n,
+								flags.v[ai], width);
+					}
+					for (ai = 0; ai < flags.n; ai++)
+						free(flags.v[ai]);
+					free(flags.v);
+				}
+			}
+			continue;
+		}
 
 		while (j < m->eps_n) {
 			size_t iface_start, iface_end;
@@ -1071,11 +1342,13 @@ static void render_json(struct model *m)
 	puts("{");
 	puts("  \"schema_version\": 1,");
 	puts("  \"planes\": [");
-	for (i = 0; i < 3; i++) {
+	for (i = 0; i < 4; i++) {
 		const char *pname = i == PLANE_INET_EXTERNAL ? "INET" :
-			i == PLANE_INET_LOOPBACK ? "INET" : "PACKET";
+			i == PLANE_INET_LOOPBACK ? "INET" :
+			i == PLANE_PACKET ? "PACKET" : "VSOCK";
 		const char *scope = i == PLANE_INET_EXTERNAL ? "external" :
 			i == PLANE_INET_LOOPBACK ? "loopback" : NULL;
+		int first_vsock = 1;
 		int first_if = 1;
 
 		printf("    {\"name\": ");
@@ -1084,7 +1357,86 @@ static void render_json(struct model *m)
 			printf(", \"scope\": ");
 			json_escape(scope);
 		}
-		puts(", \"ifaces\": [");
+		if (i == PLANE_VSOCK)
+			puts(", \"endpoints\": [");
+		else
+			puts(", \"ifaces\": [");
+
+		if (i == PLANE_VSOCK) {
+			for (j = 0; j < m->eps_n; j++) {
+				struct endpoint *ep = &m->eps[j];
+
+				if (ep->plane != PLANE_VSOCK)
+					continue;
+				if (!first_vsock)
+					puts(",");
+				first_vsock = 0;
+				printf("      {\"label\": ");
+				json_escape(ep->label);
+				printf(", \"vsock_type\": ");
+				json_escape(ep->proto);
+				printf(", \"cid\": ");
+				if (ep->vsock_cid == VMADDR_CID_ANY)
+					json_escape("ANY");
+				else
+					printf("%u", ep->vsock_cid);
+				printf(", \"port\": %u", ep->port);
+				puts(", \"processes\": [");
+				for (size_t pi = 0; pi < ep->procs_n; pi++) {
+					struct process_info *p = ep->procs[pi];
+					printf("        {\"comm\": ");
+					json_escape(p->comm);
+					printf(", \"pid\": %d, \"uid\": %d", p->pid,
+						p->uid);
+					if (p->unit) {
+						printf(", \"unit\": ");
+						json_escape(p->unit);
+					}
+					printf(", \"caps\": ");
+					json_escape(p->caps);
+					printf(", \"defenses\": {\"runs_as_root\": ");
+					json_escape(p->defenses.runs_as_root);
+					printf(", \"no_new_privs\": ");
+					json_escape(p->defenses.no_new_privs);
+					printf(", \"seccomp\": ");
+					json_escape(p->defenses.seccomp);
+					if (p->defenses.lsm_label) {
+						printf(", \"lsm\": ");
+						json_escape(p->defenses.lsm_label);
+					}
+					if (p->defenses.securebits) {
+						printf(", \"securebits\": ");
+						json_escape(p->defenses.securebits);
+						printf(", \"securebits_locked\": ");
+						json_escape(p->defenses.securebits_locked);
+					}
+					printf("}, \"flags\": [");
+					json_escape("hypervisor-plane");
+					if (ep->port == 22) {
+						printf(", ");
+						json_escape("ssh-on-vsock-port-22");
+					}
+					if (p->has_privileged_caps) {
+						printf(", ");
+						json_escape("privileged-caps");
+					}
+					if (p->securebits_locked) {
+						printf(", ");
+						json_escape("securebits-locked");
+					}
+					printf("]}");
+					if (pi + 1 != ep->procs_n)
+						puts(",");
+					else
+						putchar('\n');
+				}
+				puts("      ]}");
+			}
+			puts("    ]}");
+			if (i != 3)
+				puts(",");
+			continue;
+		}
 
 		for (j = 0; j < m->eps_n; j++) {
 			const char *ifn = m->eps[j].ifname;
@@ -1204,7 +1556,7 @@ static void render_json(struct model *m)
 			puts("      ]}");
 		}
 		puts("    ]}");
-		if (i != 2)
+		if (i != 3)
 			puts(",");
 	}
 	puts("  ]");
