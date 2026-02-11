@@ -9,6 +9,9 @@
 #include <linux/netlink.h>
 #include <linux/sock_diag.h>
 #include <linux/vm_sockets.h>
+#ifdef HAVE_LINUX_VM_SOCKETS_DIAG_H
+#include <linux/vm_sockets_diag.h>
+#endif
 #include <net/if.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -951,6 +954,131 @@ static void parse_vsock_file(struct model *m)
 	fclose(f);
 }
 
+static const char *vsock_type_to_name(unsigned int type)
+{
+	if (type == SOCK_STREAM)
+		return "stream";
+	if (type == SOCK_DGRAM)
+		return "dgram";
+	if (type == SOCK_SEQPACKET)
+		return "seqpacket";
+	return NULL;
+}
+
+#ifdef HAVE_LINUX_VM_SOCKETS_DIAG_H
+static int parse_vsock_diag_messages(struct model *m, int fd)
+{
+	char buf[8192];
+	ssize_t len;
+
+	while (1) {
+		len = recv(fd, buf, sizeof(buf), 0);
+		if (len < 0) {
+			if (errno == EINTR)
+				continue;
+			return -1;
+		}
+		if (len == 0)
+			return -1;
+
+		struct nlmsghdr *nlh;
+		ssize_t rem = len;
+
+		for (nlh = (struct nlmsghdr *)buf;
+		     NLMSG_OK(nlh, rem);
+		     nlh = NLMSG_NEXT(nlh, rem)) {
+			struct vsock_diag_msg *r;
+			struct inode_proc *ip;
+			const char *kind;
+
+			if (nlh->nlmsg_type == NLMSG_DONE)
+				return 0;
+			if (nlh->nlmsg_type == NLMSG_ERROR) {
+				struct nlmsgerr *e;
+
+				if (nlh->nlmsg_len < NLMSG_LENGTH(sizeof(*e)))
+					return -1;
+				e = NLMSG_DATA(nlh);
+				if (e->error == 0)
+					continue;
+				errno = -e->error;
+				return -1;
+			}
+			if (nlh->nlmsg_len < NLMSG_LENGTH(sizeof(*r)))
+				continue;
+
+			r = NLMSG_DATA(nlh);
+			if (r->vdiag_family != AF_VSOCK)
+				continue;
+			kind = vsock_type_to_name(r->vdiag_type);
+			if (!kind)
+				continue;
+
+			if (r->vdiag_type == SOCK_STREAM &&
+			    r->vdiag_state != TCP_LISTEN)
+				continue;
+			if ((r->vdiag_type == SOCK_DGRAM ||
+			     r->vdiag_type == SOCK_SEQPACKET) &&
+			    r->vdiag_src_port == 0)
+				continue;
+
+			ip = lookup_inode(m, r->vdiag_ino);
+			if (!ip)
+				continue;
+
+			diag_dbg("vsock type=%u state=%u src=%u:%u dst=%u:%u ino=%u",
+				r->vdiag_type, r->vdiag_state, r->vdiag_src_cid,
+				r->vdiag_src_port, r->vdiag_dst_cid, r->vdiag_dst_port,
+				r->vdiag_ino);
+			add_vsock_endpoint(m, kind, r->vdiag_src_cid,
+				r->vdiag_src_port, ip);
+		}
+	}
+}
+
+static int parse_vsock_diag(struct model *m)
+{
+	struct {
+		struct nlmsghdr nlh;
+		struct vsock_diag_req req;
+	} req;
+	struct sockaddr_nl sa;
+	int fd;
+	int rc = -1;
+
+	fd = socket(AF_NETLINK, SOCK_RAW, NETLINK_SOCK_DIAG);
+	if (fd < 0)
+		return -1;
+
+	memset(&req, 0, sizeof(req));
+	req.nlh.nlmsg_len = NLMSG_LENGTH(sizeof(req.req));
+	req.nlh.nlmsg_type = SOCK_DIAG_BY_FAMILY;
+	req.nlh.nlmsg_flags = NLM_F_REQUEST | NLM_F_DUMP;
+	req.req.sdiag_family = AF_VSOCK;
+	req.req.sdiag_protocol = 0;
+	req.req.vdiag_states = ~0U;
+
+	memset(&sa, 0, sizeof(sa));
+	sa.nl_family = AF_NETLINK;
+	sa.nl_pid = 0;
+
+	if (sendto(fd, &req, req.nlh.nlmsg_len, 0,
+		   (struct sockaddr *)&sa, sizeof(sa)) < 0)
+		goto out;
+	rc = parse_vsock_diag_messages(m, fd);
+out:
+	close(fd);
+	return rc;
+}
+#else
+static int parse_vsock_diag(struct model *m)
+{
+	(void)m;
+	errno = EOPNOTSUPP;
+	return -1;
+}
+#endif
+
 static int parse_diag_messages(struct model *m, int fd, int proto, int af)
 {
 	char buf[8192];
@@ -1076,7 +1204,11 @@ static void collect_endpoints(struct model *m)
 	parse_inet_file(m, "/proc/net/raw6", "raw6", AF_INET6);
 	parse_diag_listeners(m);
 	parse_packet_file(m);
-	parse_vsock_file(m);
+	if (parse_vsock_diag(m) < 0) {
+		diag_dbg("vsock diag unavailable (%s), falling back to /proc",
+			strerror(errno));
+		parse_vsock_file(m);
+	}
 }
 
 static int wrap_to(const char *text, int from, int limit)
