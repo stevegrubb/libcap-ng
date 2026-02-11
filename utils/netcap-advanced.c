@@ -5,14 +5,19 @@
 #include <fcntl.h>
 #include <ifaddrs.h>
 #include <linux/capability.h>
+#include <linux/inet_diag.h>
+#include <linux/netlink.h>
+#include <linux/sock_diag.h>
 #include <linux/vm_sockets.h>
 #include <net/if.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <stdio.h>
 #include <stdio_ext.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -939,6 +944,92 @@ static void parse_vsock_file(struct model *m)
 	fclose(f);
 }
 
+static int parse_diag_messages(struct model *m, int fd, int proto, int af)
+{
+	char buf[8192];
+	ssize_t len;
+
+	while ((len = recv(fd, buf, sizeof(buf), 0)) > 0) {
+		struct nlmsghdr *nlh;
+
+		for (nlh = (struct nlmsghdr *)buf;
+		     NLMSG_OK(nlh, (unsigned int)len);
+		     nlh = NLMSG_NEXT(nlh, len)) {
+			struct inet_diag_msg *r;
+			char addr[INET6_ADDRSTRLEN];
+			unsigned int port;
+			struct inode_proc *ip;
+
+			if (nlh->nlmsg_type == NLMSG_DONE)
+				return 0;
+			if (nlh->nlmsg_type == NLMSG_ERROR)
+				return -1;
+			if (nlh->nlmsg_len < NLMSG_LENGTH(sizeof(*r)))
+				continue;
+
+			r = NLMSG_DATA(nlh);
+			ip = lookup_inode(m, r->idiag_inode);
+			if (!ip)
+				continue;
+			port = ntohs(r->id.idiag_sport);
+			if (!port)
+				continue;
+
+			if (af == AF_INET) {
+				if (!inet_ntop(AF_INET, r->id.idiag_src, addr,
+				    sizeof(addr)))
+					continue;
+			} else {
+				if (!inet_ntop(AF_INET6, r->id.idiag_src, addr,
+				    sizeof(addr)))
+					continue;
+			}
+			endpoint_to_ifaces(m,
+				proto == IPPROTO_SCTP ? "sctp" : "dccp",
+				af, addr, port, ip);
+		}
+	}
+
+	if (len < 0 && errno == EINTR)
+		return 0;
+	return -1;
+}
+
+static void parse_diag_for_proto_af(struct model *m, int proto, int af)
+{
+	struct {
+		struct nlmsghdr nlh;
+		struct inet_diag_req_v2 req;
+	} req;
+	int fd;
+
+	fd = socket(AF_NETLINK, SOCK_RAW, NETLINK_SOCK_DIAG);
+	if (fd < 0)
+		return;
+
+	memset(&req, 0, sizeof(req));
+	req.nlh.nlmsg_len = NLMSG_LENGTH(sizeof(req.req));
+	req.nlh.nlmsg_type = SOCK_DIAG_BY_FAMILY;
+	req.nlh.nlmsg_flags = NLM_F_REQUEST | NLM_F_DUMP;
+	req.req.sdiag_family = af;
+	req.req.sdiag_protocol = proto;
+	req.req.idiag_states = 1U << TCP_LISTEN;
+
+	if (send(fd, &req, req.nlh.nlmsg_len, 0) < 0)
+		goto out;
+	parse_diag_messages(m, fd, proto, af);
+out:
+	close(fd);
+}
+
+static void parse_diag_listeners(struct model *m)
+{
+	parse_diag_for_proto_af(m, IPPROTO_SCTP, AF_INET);
+	parse_diag_for_proto_af(m, IPPROTO_SCTP, AF_INET6);
+	parse_diag_for_proto_af(m, IPPROTO_DCCP, AF_INET);
+	parse_diag_for_proto_af(m, IPPROTO_DCCP, AF_INET6);
+}
+
 static void collect_endpoints(struct model *m)
 {
 	parse_inet_file(m, "/proc/net/tcp", "tcp", AF_INET);
@@ -949,6 +1040,7 @@ static void collect_endpoints(struct model *m)
 	parse_inet_file(m, "/proc/net/udplite6", "udplite6", AF_INET6);
 	parse_inet_file(m, "/proc/net/raw", "raw", AF_INET);
 	parse_inet_file(m, "/proc/net/raw6", "raw6", AF_INET6);
+	parse_diag_listeners(m);
 	parse_packet_file(m);
 	parse_vsock_file(m);
 }
@@ -1489,6 +1581,11 @@ static void render_json(struct model *m)
 					first_ep = 0;
 					printf("          {\"label\": ");
 					json_escape(ep->label);
+					printf(", \"proto\": ");
+					json_escape(ep->proto);
+					printf(", \"bind\": ");
+					json_escape(ep->bind);
+					printf(", \"port\": %u", ep->port);
 					puts(", \"processes\": [");
 					for (size_t pi = 0; pi < ep->procs_n; pi++) {
 						struct process_info *p = ep->procs[pi];
