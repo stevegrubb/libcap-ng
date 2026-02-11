@@ -26,6 +26,13 @@
 
 #define MAX_BARS 64
 
+#ifdef NETCAP_DIAG_DEBUG
+#define diag_dbg(fmt, ...) \
+	fprintf(stderr, "netcap-diag: " fmt "\n", ##__VA_ARGS__)
+#else
+#define diag_dbg(fmt, ...) do { } while (0)
+#endif
+
 enum plane_kind {
 	PLANE_INET_EXTERNAL,
 	PLANE_INET_LOOPBACK,
@@ -949,12 +956,24 @@ static int parse_diag_messages(struct model *m, int fd, int proto, int af)
 	char buf[8192];
 	ssize_t len;
 
-	while ((len = recv(fd, buf, sizeof(buf), 0)) > 0) {
+	while (1) {
+		len = recv(fd, buf, sizeof(buf), 0);
+		if (len < 0) {
+			if (errno == EINTR)
+				continue;
+			return -1;
+		}
+		if (len == 0)
+			return -1;
+
+		diag_dbg("recv proto=%d af=%d len=%zd", proto, af, len);
+
 		struct nlmsghdr *nlh;
+		ssize_t rem = len;
 
 		for (nlh = (struct nlmsghdr *)buf;
-		     NLMSG_OK(nlh, (unsigned int)len);
-		     nlh = NLMSG_NEXT(nlh, len)) {
+		     NLMSG_OK(nlh, rem);
+		     nlh = NLMSG_NEXT(nlh, rem)) {
 			struct inet_diag_msg *r;
 			char addr[INET6_ADDRSTRLEN];
 			unsigned int port;
@@ -962,8 +981,19 @@ static int parse_diag_messages(struct model *m, int fd, int proto, int af)
 
 			if (nlh->nlmsg_type == NLMSG_DONE)
 				return 0;
-			if (nlh->nlmsg_type == NLMSG_ERROR)
+			if (nlh->nlmsg_type == NLMSG_ERROR) {
+				struct nlmsgerr *e;
+
+				if (nlh->nlmsg_len < NLMSG_LENGTH(sizeof(*e)))
+					return -1;
+				e = NLMSG_DATA(nlh);
+				if (e->error == 0)
+					continue;
+				errno = -e->error;
+				diag_dbg("error proto=%d af=%d err=%d", proto, af,
+					-e->error);
 				return -1;
+			}
 			if (nlh->nlmsg_len < NLMSG_LENGTH(sizeof(*r)))
 				continue;
 
@@ -989,10 +1019,6 @@ static int parse_diag_messages(struct model *m, int fd, int proto, int af)
 				af, addr, port, ip);
 		}
 	}
-
-	if (len < 0 && errno == EINTR)
-		return 0;
-	return -1;
 }
 
 static void parse_diag_for_proto_af(struct model *m, int proto, int af)
@@ -1001,6 +1027,7 @@ static void parse_diag_for_proto_af(struct model *m, int proto, int af)
 		struct nlmsghdr nlh;
 		struct inet_diag_req_v2 req;
 	} req;
+	struct sockaddr_nl sa;
 	int fd;
 
 	fd = socket(AF_NETLINK, SOCK_RAW, NETLINK_SOCK_DIAG);
@@ -1015,7 +1042,14 @@ static void parse_diag_for_proto_af(struct model *m, int proto, int af)
 	req.req.sdiag_protocol = proto;
 	req.req.idiag_states = 1U << TCP_LISTEN;
 
-	if (send(fd, &req, req.nlh.nlmsg_len, 0) < 0)
+	memset(&sa, 0, sizeof(sa));
+	sa.nl_family = AF_NETLINK;
+	sa.nl_pid = 0;
+
+	diag_dbg("send proto=%d af=%d len=%u", proto, af,
+		req.nlh.nlmsg_len);
+	if (sendto(fd, &req, req.nlh.nlmsg_len, 0,
+		   (struct sockaddr *)&sa, sizeof(sa)) < 0)
 		goto out;
 	parse_diag_messages(m, fd, proto, af);
 out:
