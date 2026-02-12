@@ -1687,23 +1687,45 @@ static const struct iface_info *lookup_iface(const struct model *m,
 	return NULL;
 }
 
-static void format_port_node(char *dst, size_t dst_sz, const struct endpoint *e)
+struct ep_group_ref {
+	struct endpoint *e;
+	size_t idx;
+};
+
+static void format_bind_node(char *dst, size_t dst_sz, const char *bind)
 {
-	char bind[128];
-
-	if (strcmp(e->bind, "0.0.0.0") == 0 || strcmp(e->bind, "::") == 0)
-		snprintf(bind, sizeof(bind), "*");
-	else if (strchr(e->bind, ':'))
-		snprintf(bind, sizeof(bind), "[%s]", e->bind);
+	if (strcmp(bind, "0.0.0.0") == 0 || strcmp(bind, "::") == 0)
+		snprintf(dst, dst_sz, "*");
+	else if (strchr(bind, ':'))
+		snprintf(dst, dst_sz, "[%s]", bind);
 	else
-		snprintf(bind, sizeof(bind), "%s", e->bind);
+		snprintf(dst, dst_sz, "%s", bind);
+}
 
-	if (strcmp(e->proto, "packet") == 0)
-		snprintf(dst, dst_sz, "proto=0x%04x (bind: %s)", e->port, bind);
-	else if (strcmp(e->proto, "raw") == 0 || strcmp(e->proto, "raw6") == 0)
-		snprintf(dst, dst_sz, "proto=%u (bind: %s)", e->port, bind);
-	else
-		snprintf(dst, dst_sz, "%u (bind: %s)", e->port, bind);
+static int bind_sort_cmp(const char *a, const char *b)
+{
+	int a_star = strcmp(a, "0.0.0.0") == 0 || strcmp(a, "::") == 0;
+	int b_star = strcmp(b, "0.0.0.0") == 0 || strcmp(b, "::") == 0;
+
+	if (a_star != b_star)
+		return a_star ? -1 : 1;
+	return strcmp(a, b);
+}
+
+static int ep_group_ref_cmp(const void *a, const void *b)
+{
+	const struct ep_group_ref *ea = a;
+	const struct ep_group_ref *eb = b;
+	int c;
+
+	c = bind_sort_cmp(ea->e->bind, eb->e->bind);
+	if (c != 0)
+		return c;
+	if (ea->e->port != eb->e->port)
+		return ea->e->port < eb->e->port ? -1 : 1;
+	if (ea->idx != eb->idx)
+		return ea->idx < eb->idx ? -1 : 1;
+	return 0;
 }
 
 /*
@@ -1914,7 +1936,7 @@ static void render_tree(struct model *m)
 
 				for (j = iface_start; j < iface_end; ) {
 					size_t proto_start = j, proto_end;
-					char pfx_port[256];
+					char pfx_bind[256];
 					int proto_last;
 
 					proto_end = j + 1;
@@ -1926,145 +1948,186 @@ static void render_tree(struct model *m)
 
 					print_tree_node(pfx_proto_root, proto_last,
 						m->eps[proto_start].proto, width);
-					build_child_prefix(pfx_port, sizeof(pfx_port),
+					build_child_prefix(pfx_bind, sizeof(pfx_bind),
 						pfx_proto_root, proto_last);
 
-					for (j = proto_start; j < proto_end; ) {
-						size_t port_start = j, port_end;
-						char pfx_proc[256];
-						char port_line[256];
-						int port_last;
-						size_t k;
+					{
+						size_t ref_n = proto_end - proto_start;
+						size_t bi;
+						struct ep_group_ref *refs =
+							calloc(ref_n, sizeof(*refs));
 
-						port_end = j + 1;
-						while (port_end < proto_end &&
-						       m->eps[port_end].port ==
-							m->eps[port_start].port &&
-						       strcmp(m->eps[port_end].bind,
-							m->eps[port_start].bind) == 0)
-							port_end++;
-						port_last = (port_end == proto_end);
+						if (!refs) {
+							j = proto_end;
+							continue;
+						}
 
-						format_port_node(port_line, sizeof(port_line),
-							&m->eps[port_start]);
-						print_tree_node(pfx_port, port_last, port_line, width);
-						build_child_prefix(pfx_proc, sizeof(pfx_proc),
-							pfx_port, port_last);
+						for (bi = 0; bi < ref_n; bi++) {
+							refs[bi].e = &m->eps[proto_start + bi];
+							refs[bi].idx = proto_start + bi;
+						}
+						qsort(refs, ref_n, sizeof(*refs), ep_group_ref_cmp);
 
-						for (k = port_start; k < port_end; k++) {
-							struct endpoint *e = &m->eps[k];
-							size_t pi;
+						for (bi = 0; bi < ref_n; ) {
+							size_t bind_start = bi, bind_end;
+							char bind_line[128], pfx_port[256];
+							int bind_last;
 
-							for (pi = 0; pi < e->procs_n; pi++) {
-								size_t kk, kpi;
-								struct process_info *p = e->procs[pi];
-								char pfx_child[256], pfx_def[256], pfx_flags[256];
-								char line[512];
-								struct strvec flags = { 0 };
-								const char *def_nodes[8];
-								char def_buf[8][512];
-								size_t def_n = 0;
-								size_t ai;
-								int proc_last = (k + 1 == port_end) &&
-									(pi + 1 == e->procs_n);
+							bind_end = bi + 1;
+							while (bind_end < ref_n &&
+							       strcmp(refs[bind_end].e->bind,
+								refs[bind_start].e->bind) == 0)
+								bind_end++;
+							bind_last = (bind_end == ref_n);
 
-								for (kk = port_start; kk <= k; kk++) {
-									struct endpoint *prev = &m->eps[kk];
+							format_bind_node(bind_line, sizeof(bind_line),
+								refs[bind_start].e->bind);
+							print_tree_node(pfx_bind, bind_last,
+								bind_line, width);
+							build_child_prefix(pfx_port,
+								sizeof(pfx_port),
+								pfx_bind, bind_last);
 
-									for (kpi = 0; kpi < prev->procs_n; kpi++) {
-										if (kk == k && kpi >= pi)
-											break;
-										if (prev->procs[kpi]->pid == p->pid)
-											goto next_proc;
+							for (bi = bind_start; bi < bind_end; ) {
+								size_t port_start = bi, port_end;
+								char pfx_proc[256], port_line[64];
+								int port_last;
+								size_t k;
+
+								port_end = bi + 1;
+								while (port_end < bind_end &&
+								       refs[port_end].e->port ==
+									refs[port_start].e->port)
+									port_end++;
+								port_last = (port_end == bind_end);
+
+								snprintf(port_line, sizeof(port_line), "%u",
+									refs[port_start].e->port);
+								print_tree_node(pfx_port, port_last,
+									port_line, width);
+								build_child_prefix(pfx_proc,
+									sizeof(pfx_proc),
+									pfx_port, port_last);
+
+								for (k = port_start; k < port_end; k++) {
+									struct endpoint *e = refs[k].e;
+									size_t pi;
+
+									for (pi = 0; pi < e->procs_n; pi++) {
+										size_t kk, kpi;
+										struct process_info *p = e->procs[pi];
+										char pfx_child[256], pfx_def[256], pfx_flags[256];
+										char line[512];
+										struct strvec flags = { 0 };
+										const char *def_nodes[8];
+										char def_buf[8][512];
+										size_t def_n = 0;
+										size_t ai;
+										int proc_last = (k + 1 == port_end) &&
+											(pi + 1 == e->procs_n);
+
+										for (kk = port_start; kk <= k; kk++) {
+											struct endpoint *prev = refs[kk].e;
+
+											for (kpi = 0; kpi < prev->procs_n; kpi++) {
+												if (kk == k && kpi >= pi)
+													break;
+												if (prev->procs[kpi]->pid == p->pid)
+													goto next_proc;
+											}
+										}
+
+										snprintf(line, sizeof(line),
+											"%s (pid=%d uid=%d%s%s)",
+											p->comm, p->pid, p->uid,
+											p->unit ? " unit=" : "",
+											p->unit ? p->unit : "");
+										print_tree_node(pfx_proc, proc_last, line, width);
+										build_child_prefix(pfx_child, sizeof(pfx_child),
+											pfx_proc, proc_last);
+
+										snprintf(line, sizeof(line), "caps: %s", p->caps);
+										print_tree_node(pfx_child, 0, line, width);
+
+										snprintf(def_buf[def_n], sizeof(def_buf[def_n]),
+											DEFENSES_RUNS_AS_KEY ": %s",
+											p->defenses.runs_as_nonroot);
+										def_nodes[def_n] = def_buf[def_n];
+										def_n++;
+										snprintf(def_buf[def_n], sizeof(def_buf[def_n]),
+											"no_new_privs: %s",
+											p->defenses.no_new_privs);
+										def_nodes[def_n] = def_buf[def_n];
+										def_n++;
+										snprintf(def_buf[def_n], sizeof(def_buf[def_n]),
+											"seccomp: %s", p->defenses.seccomp);
+										def_nodes[def_n] = def_buf[def_n];
+										def_n++;
+										if (p->defenses.lsm_label) {
+											snprintf(def_buf[def_n],
+												sizeof(def_buf[def_n]),
+												"lsm: %s", p->defenses.lsm_label);
+											def_nodes[def_n] = def_buf[def_n];
+											def_n++;
+										}
+										if (p->defenses.securebits) {
+											snprintf(def_buf[def_n],
+												sizeof(def_buf[def_n]),
+												"securebits: %s",
+												p->defenses.securebits);
+											def_nodes[def_n] = def_buf[def_n];
+											def_n++;
+											snprintf(def_buf[def_n],
+												sizeof(def_buf[def_n]),
+												"securebits_locked: %s",
+												p->defenses.securebits_locked);
+											def_nodes[def_n] = def_buf[def_n];
+											def_n++;
+										}
+
+										print_tree_node(pfx_child, 0, "defenses", width);
+										build_child_prefix(pfx_def, sizeof(pfx_def),
+											pfx_child, 0);
+										for (ai = 0; ai < def_n; ai++)
+											print_tree_node(pfx_def, ai + 1 == def_n,
+												def_nodes[ai], width);
+
+										if (e->wildcard_bind)
+											push_str_unique(&flags, "wildcard-bind");
+										if (e->loopback_only)
+											push_str_unique(&flags, "loopback-only");
+										if (p->has_privileged_caps)
+											push_str_unique(&flags, "privileged-caps");
+										if (p->securebits_locked)
+											push_str_unique(&flags,
+												"securebits-locked");
+
+										print_tree_node(pfx_child, 1, "flags", width);
+										build_child_prefix(pfx_flags, sizeof(pfx_flags),
+											pfx_child, 1);
+										if (flags.n == 0)
+											print_tree_node(pfx_flags, 1,
+												"(none)", width);
+										else {
+											for (ai = 0; ai < flags.n; ai++)
+												print_tree_node(pfx_flags,
+													ai + 1 == flags.n,
+													flags.v[ai], width);
+										}
+										for (ai = 0; ai < flags.n; ai++)
+											free(flags.v[ai]);
+										free(flags.v);
+	next_proc:
+										;
 									}
 								}
-
-								snprintf(line, sizeof(line),
-									"%s (pid=%d uid=%d%s%s)",
-									p->comm, p->pid, p->uid,
-									p->unit ? " unit=" : "",
-									p->unit ? p->unit : "");
-								print_tree_node(pfx_proc, proc_last, line, width);
-								build_child_prefix(pfx_child, sizeof(pfx_child),
-									pfx_proc, proc_last);
-
-								snprintf(line, sizeof(line), "caps: %s", p->caps);
-								print_tree_node(pfx_child, 0, line, width);
-
-								snprintf(def_buf[def_n], sizeof(def_buf[def_n]),
-									DEFENSES_RUNS_AS_KEY ": %s",
-									p->defenses.runs_as_nonroot);
-								def_nodes[def_n] = def_buf[def_n];
-								def_n++;
-								snprintf(def_buf[def_n], sizeof(def_buf[def_n]),
-									"no_new_privs: %s",
-									p->defenses.no_new_privs);
-								def_nodes[def_n] = def_buf[def_n];
-								def_n++;
-								snprintf(def_buf[def_n], sizeof(def_buf[def_n]),
-									"seccomp: %s", p->defenses.seccomp);
-								def_nodes[def_n] = def_buf[def_n];
-								def_n++;
-								if (p->defenses.lsm_label) {
-									snprintf(def_buf[def_n],
-										sizeof(def_buf[def_n]),
-										"lsm: %s", p->defenses.lsm_label);
-									def_nodes[def_n] = def_buf[def_n];
-									def_n++;
-								}
-								if (p->defenses.securebits) {
-									snprintf(def_buf[def_n],
-										sizeof(def_buf[def_n]),
-										"securebits: %s",
-										p->defenses.securebits);
-									def_nodes[def_n] = def_buf[def_n];
-									def_n++;
-									snprintf(def_buf[def_n],
-										sizeof(def_buf[def_n]),
-										"securebits_locked: %s",
-										p->defenses.securebits_locked);
-									def_nodes[def_n] = def_buf[def_n];
-									def_n++;
-								}
-
-								print_tree_node(pfx_child, 0, "defenses", width);
-								build_child_prefix(pfx_def, sizeof(pfx_def),
-									pfx_child, 0);
-								for (ai = 0; ai < def_n; ai++)
-									print_tree_node(pfx_def, ai + 1 == def_n,
-										def_nodes[ai], width);
-
-								if (e->wildcard_bind)
-									push_str_unique(&flags, "wildcard-bind");
-								if (e->loopback_only)
-									push_str_unique(&flags, "loopback-only");
-								if (p->has_privileged_caps)
-									push_str_unique(&flags, "privileged-caps");
-								if (p->securebits_locked)
-									push_str_unique(&flags,
-										"securebits-locked");
-
-								print_tree_node(pfx_child, 1, "flags", width);
-								build_child_prefix(pfx_flags, sizeof(pfx_flags),
-									pfx_child, 1);
-								if (flags.n == 0)
-									print_tree_node(pfx_flags, 1,
-										"(none)", width);
-								else {
-									for (ai = 0; ai < flags.n; ai++)
-										print_tree_node(pfx_flags,
-											ai + 1 == flags.n,
-											flags.v[ai], width);
-								}
-								for (ai = 0; ai < flags.n; ai++)
-									free(flags.v[ai]);
-								free(flags.v);
-	next_proc:
-								;
+								bi = port_end;
 							}
 						}
-						j = port_end;
+
+						free(refs);
 					}
+					j = proto_end;
 				}
 			}
 			j = iface_end;
