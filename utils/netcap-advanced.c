@@ -289,6 +289,33 @@ static int str_is_wildcard(int af, const char *addr)
 }
 
 /*
+ * str_is_multicast - check whether textual @addr is multicast for @af.
+ * @af: address family used to interpret @addr.
+ * @addr: textual IPv4/IPv6 bind address to classify.
+ *
+ * Returns non-zero for multicast addresses, else 0.
+ * Side effects/assumptions: Operates on in-memory data and may read
+ * procfs/netns state; it does not change kernel configuration.
+ */
+static int str_is_multicast(int af, const char *addr)
+{
+	struct in_addr a4;
+	struct in6_addr a6;
+
+	if (af == AF_INET) {
+		if (inet_pton(AF_INET, addr, &a4) != 1)
+			return 0;
+		return IN_MULTICAST(ntohl(a4.s_addr));
+	}
+	if (af == AF_INET6) {
+		if (inet_pton(AF_INET6, addr, &a6) != 1)
+			return 0;
+		return IN6_IS_ADDR_MULTICAST(&a6);
+	}
+	return 0;
+}
+
+/*
  * find_iface - locate interface record by name in @m.
  * @m: model containing interface inventory.
  * @name: interface name key (borrowed, not owned).
@@ -949,6 +976,7 @@ static void endpoint_to_ifaces(struct model *m, const char *proto, int af,
 	size_t i, j;
 	int wildcard = str_is_wildcard(af, bind);
 	int loopback = str_is_loopback(af, bind);
+	int multicast = str_is_multicast(af, bind);
 	int matched = 0;
 
 	for (i = 0; i < m->ifaces_n; i++) {
@@ -978,7 +1006,9 @@ static void endpoint_to_ifaces(struct model *m, const char *proto, int af,
 	if (!matched)
 		add_endpoint(m, proto, bind, port,
 			loopback ? PLANE_INET_LOOPBACK : PLANE_INET_EXTERNAL,
-			loopback ? "lo" : "unknown", bind, wildcard, loopback, ip);
+			loopback ? "lo" :
+			(multicast ? "multicast/group" : "unknown"),
+			bind, wildcard, loopback, ip);
 }
 
 /*
