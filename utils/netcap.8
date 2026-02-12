@@ -14,17 +14,16 @@ examined to see if it has an open-ended bounding set. If this is found to be
 true, a '+' symbol is added. If the process has ambient capabilities, a '@'
 symbol is added.
 
-With \fB\-\-advanced\fP, \fBnetcap\fP switches to endpoint/listener inventory
-mode for the current network namespace. In this mode, reachable
-endpoints/listeners are reported regardless of whether the owning process has
-capabilities.
+With \fB\-\-advanced\fP, \fBnetcap\fP switches to bind/listener inventory
+mode for the current network namespace. In this mode, reachable binds/listeners
+are reported regardless of whether the owning process has capabilities.
 
 Some directories in the /proc file system are readonly by root. The program will try to access and report what it can. But if nothing comes out, try changing to the root user and re-run this program. 
 
 .SH OPTIONS
 .TP
 .B \-\-advanced
-Enable the posture/tree view. This mode inventories reachable endpoints in
+Enable the posture/tree view. This mode inventories reachable binds in
 the current network namespace and shows per-process capabilities, defenses,
 and flags.
 .TP
@@ -35,7 +34,7 @@ view.
 .SH "ADVANCED MODE"
 Advanced mode is an attack-surface and posture inventory for the current
 network namespace. It is intended for administrators who need a structured
-view of listener ownership and process hardening state.
+view of bind ownership and process hardening state.
 
 The tree layout is:
 
@@ -54,7 +53,7 @@ interpretation.
 Under each protocol, \fBbind\fP nodes are socket bind addresses
 (exposure), and \fBport\fP nodes are children of binds.
 
-Listener/endpoint selection is protocol-specific:
+Socket selection is protocol-specific:
 .IP \[bu] 2
 TCP: LISTEN sockets only.
 .IP \[bu] 2
@@ -64,7 +63,7 @@ SCTP/DCCP: listener sockets only; established flows are not shown.
 .IP \[bu] 2
 VSOCK: stream LISTEN sockets, plus bound datagram/seqpacket sockets.
 .IP \[bu] 2
-RAW/PACKET: shown as endpoints; semantics differ from port listeners.
+RAW/PACKET: shown as binds; semantics differ from port listeners.
 
 The defenses section is best-effort: \fBno_new_privs\fP and
 \fBseccomp\fP mode are read from \fB/proc/<pid>/status\fP when
@@ -76,14 +75,14 @@ omitted otherwise. \fBruns_as_nonroot\fP is always reported.
 
 Flags annotate notable conditions:
 .IP \[bu] 2
-\fBwildcard-bind\fP: endpoint is bound to a wildcard address
+\fBwildcard-bind\fP: bind is bound to a wildcard address
 (for example 0.0.0.0 or ::).
 .IP \[bu] 2
-\fBloopback-only\fP: endpoint is reachable only via loopback scope.
+\fBloopback-only\fP: bind is reachable only via loopback scope.
 .IP \[bu] 2
-\fBhypervisor-plane\fP: endpoint is in the VSOCK communication plane.
+\fBhypervisor-plane\fP: bind is in the VSOCK communication plane.
 .IP \[bu] 2
-\fBssh-on-vsock-port-22\fP: VSOCK endpoint uses port 22.
+\fBssh-on-vsock-port-22\fP: VSOCK bind uses port 22.
 .IP \[bu] 2
 \fBprivileged-caps\fP: process has capabilities considered privileged for
 attack-surface review.
@@ -100,20 +99,20 @@ When \fB\-\-advanced --json\fP is used, output contains:
 INET and LINK-LAYER plane objects contain:
 
 .RS
-\fBifaces\fP \-> addrs \-> endpoints \-> processes
+\fBifaces\fP \-> addrs \-> protocols \-> binds \-> ports \-> processes
 .RE
 
 VSOCK plane objects contain:
 
 .RS
-endpoints \-> processes
+protocols \-> binds \-> ports \-> processes
 .RE
 
-Fields under endpoints/processes/defenses may be omitted when unavailable.
+Fields under binds/ports/processes/defenses may be omitted when unavailable.
 When process defenses are present, they include \fBruns_as_nonroot\fP (yes
 when uid != 0, no when uid == 0).
 
-If a plane has no discovered endpoints, it appears with an empty list. If a
+If a plane has no discovered binds, it appears with an empty list. If a
 consumer does not receive a given plane, treat it as none found or omitted by
 the producer.
 
