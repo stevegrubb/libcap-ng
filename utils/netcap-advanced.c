@@ -62,6 +62,8 @@ enum plane_kind {
 };
 
 #define PLANE_PACKET_NAME	"LINK-LAYER"
+/* Keep user-facing key name centralized to avoid legacy regressions. */
+#define DEFENSES_RUNS_AS_KEY	"runs_as_nonroot"
 
 struct strvec {
 	char **v;
@@ -1661,7 +1663,7 @@ static void render_tree(struct model *m)
 					print_tree_node(pfx_child, 0, line, width);
 
 					snprintf(def_buf[def_n], sizeof(def_buf[def_n]),
-						"runs_as_nonroot: %s",
+						DEFENSES_RUNS_AS_KEY ": %s",
 						p->defenses.runs_as_nonroot);
 					def_nodes[def_n] = def_buf[def_n];
 					def_n++;
@@ -1811,7 +1813,8 @@ static void render_tree(struct model *m)
 						print_tree_node(pfx_child, 0, line, width);
 
 						snprintf(def_buf[def_n], sizeof(def_buf[def_n]),
-							"runs_as_nonroot: %s", p->defenses.runs_as_nonroot);
+							DEFENSES_RUNS_AS_KEY ": %s",
+							p->defenses.runs_as_nonroot);
 						def_nodes[def_n] = def_buf[def_n];
 						def_n++;
 						snprintf(def_buf[def_n], sizeof(def_buf[def_n]),
@@ -1966,7 +1969,8 @@ static void render_json(struct model *m)
 					}
 					printf(", \"caps\": ");
 					json_escape(p->caps);
-					printf(", \"defenses\": {\"runs_as_nonroot\": ");
+					printf(", \"defenses\": {\"" DEFENSES_RUNS_AS_KEY
+						"\": ");
 					json_escape(p->defenses.runs_as_nonroot);
 					printf(", \"no_new_privs\": ");
 					json_escape(p->defenses.no_new_privs);
@@ -2079,7 +2083,8 @@ static void render_json(struct model *m)
 						}
 						printf(", \"caps\": ");
 						json_escape(p->caps);
-						printf(", \"defenses\": {\"runs_as_nonroot\": ");
+						printf(", \"defenses\": {\""
+							DEFENSES_RUNS_AS_KEY "\": ");
 						json_escape(p->defenses.runs_as_nonroot);
 						printf(", \"no_new_privs\": ");
 						json_escape(p->defenses.no_new_privs);
