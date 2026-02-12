@@ -147,8 +147,11 @@ static void free_model(struct model *m);
 
 /*
  * get_width - choose terminal width for wrapped tree output.
+ * @none: function takes no parameters.
  *
  * Returns terminal columns from TIOCGWINSZ or $COLUMNS, else 80.
+ * Side effects/assumptions: Operates on in-memory data and may read
+ * procfs/netns state; it does not change kernel configuration.
  */
 static int get_width(void)
 {
@@ -173,6 +176,8 @@ static int get_width(void)
  * @s: source string, or NULL.
  *
  * Returns caller-owned copy, or NULL for NULL input or allocation failure.
+ * Side effects/assumptions: Operates on in-memory data and may read
+ * procfs/netns state; it does not change kernel configuration.
  */
 static char *xstrdup(const char *s)
 {
@@ -193,6 +198,8 @@ static char *xstrdup(const char *s)
  * @item: size in bytes of each element.
  *
  * Returns 0 on success, -1 on allocation failure.
+ * Side effects/assumptions: Operates on in-memory data and may read
+ * procfs/netns state; it does not change kernel configuration.
  */
 static int vec_grow(void **v, size_t *cap, size_t item)
 {
@@ -219,6 +226,8 @@ static int vec_grow(void **v, size_t *cap, size_t item)
  * @s: string to deduplicate and append.
  *
  * Returns 0 on success, -1 on allocation failure.
+ * Side effects/assumptions: Operates on in-memory data and may read
+ * procfs/netns state; it does not change kernel configuration.
  */
 static int push_str_unique(struct strvec *sv, const char *s)
 {
@@ -236,8 +245,12 @@ static int push_str_unique(struct strvec *sv, const char *s)
 
 /*
  * str_is_loopback - check whether textual @addr is loopback for @af.
+ * @af: address family used to interpret @addr.
+ * @addr: textual IPv4/IPv6 address to classify.
  *
  * Returns non-zero for loopback addresses, else 0.
+ * Side effects/assumptions: Operates on in-memory data and may read
+ * procfs/netns state; it does not change kernel configuration.
  */
 static int str_is_loopback(int af, const char *addr)
 {
@@ -259,8 +272,12 @@ static int str_is_loopback(int af, const char *addr)
 
 /*
  * str_is_wildcard - check whether textual @addr is wildcard-any for @af.
+ * @af: address family used to interpret @addr.
+ * @addr: textual IPv4/IPv6 bind address to classify.
  *
  * Returns non-zero for 0.0.0.0/:: wildcard binds, else 0.
+ * Side effects/assumptions: Operates on in-memory data and may read
+ * procfs/netns state; it does not change kernel configuration.
  */
 static int str_is_wildcard(int af, const char *addr)
 {
@@ -273,8 +290,12 @@ static int str_is_wildcard(int af, const char *addr)
 
 /*
  * find_iface - locate interface record by name in @m.
+ * @m: model containing interface inventory.
+ * @name: interface name key (borrowed, not owned).
  *
  * Returns a mutable iface pointer on match, or NULL if not found.
+ * Side effects/assumptions: Operates on in-memory data and may read
+ * procfs/netns state; it does not change kernel configuration.
  */
 static struct iface_info *find_iface(struct model *m, const char *name)
 {
@@ -293,6 +314,8 @@ static struct iface_info *find_iface(struct model *m, const char *name)
  * @addr: textual address to copy into @ifc.
  *
  * Returns 0 on success, -1 on allocation failure.
+ * Side effects/assumptions: Operates on in-memory data and may read
+ * procfs/netns state; it does not change kernel configuration.
  */
 static int add_iface_addr(struct iface_info *ifc, int af, const char *addr)
 {
@@ -318,6 +341,8 @@ static int add_iface_addr(struct iface_info *ifc, int af, const char *addr)
  * @m: model populated from getifaddrs() in the current network namespace.
  *
  * Returns 0 on success, -1 on getifaddrs/allocation failure.
+ * Side effects/assumptions: Operates on in-memory data and may read
+ * procfs/netns state; it does not change kernel configuration.
  */
 static int collect_interfaces(struct model *m)
 {
@@ -371,6 +396,8 @@ fail:
  * @path: procfs/sysfs-style file path to read.
  *
  * Returns a caller-owned string, or NULL on open/read/allocation failure.
+ * Side effects/assumptions: Operates on in-memory data and may read
+ * procfs/netns state; it does not change kernel configuration.
  */
 static char *read_first_line(const char *path)
 {
@@ -403,6 +430,8 @@ static char *read_first_line(const char *path)
  * @pid: process ID whose /proc/<pid>/cgroup is inspected.
  *
  * Returns a caller-owned unit/scope name, or NULL if not found/readable.
+ * Side effects/assumptions: Operates on in-memory data and may read
+ * procfs/netns state; it does not change kernel configuration.
  */
 static char *extract_unit_from_cgroup(int pid)
 {
@@ -444,6 +473,8 @@ static char *extract_unit_from_cgroup(int pid)
  * @has_bnd: out flag set when bounding set entries are present.
  *
  * Returns caller-owned summary text; errors degrade to "(none)" style text.
+ * Side effects/assumptions: Operates on in-memory data and may read
+ * procfs/netns state; it does not change kernel configuration.
  */
 static char *caps_summary_for_pid(int pid, int *privileged, int *has_amb,
 	int *has_bnd)
@@ -512,6 +543,8 @@ static char *caps_summary_for_pid(int pid, int *privileged, int *has_amb,
  *
  * Missing fields are tolerated; function leaves best-effort defaults.
  * Returns no value.
+ * Side effects/assumptions: Operates on in-memory data and may read
+ * procfs/netns state; it does not change kernel configuration.
  */
 static void parse_status_defenses(int pid, int uid, struct defense_info *d,
 	int *securebits_nondefault, unsigned long *secbits_raw)
@@ -586,6 +619,8 @@ static void parse_status_defenses(int pid, int uid, struct defense_info *d,
  * @pid: numeric process ID to read from /proc.
  *
  * Returns stored process pointer on success, or NULL on parse/allocation error.
+ * Side effects/assumptions: Operates on in-memory data and may read
+ * procfs/netns state; it does not change kernel configuration.
  */
 static struct process_info *add_process(struct model *m, int pid)
 {
@@ -649,6 +684,8 @@ fail:
  * @p: process entry pointer that must remain valid for @m lifetime.
  *
  * Returns 0 on success, -1 on allocation failure.
+ * Side effects/assumptions: Operates on in-memory data and may read
+ * procfs/netns state; it does not change kernel configuration.
  */
 static int add_inode_proc(struct model *m, unsigned long inode,
 	struct process_info *p)
@@ -686,6 +723,8 @@ static int add_inode_proc(struct model *m, unsigned long inode,
  *
  * This is best-effort and skips tasks/fds hidden by permissions or races.
  * Returns no value.
+ * Side effects/assumptions: Operates on in-memory data and may read
+ * procfs/netns state; it does not change kernel configuration.
  */
 static void collect_proc_inodes(struct model *m)
 {
@@ -748,8 +787,12 @@ static void collect_proc_inodes(struct model *m)
 
 /*
  * lookup_inode - locate inode ownership entry in @m.
+ * @m: model containing inode ownership map.
+ * @inode: socket inode key to resolve.
  *
  * Returns mutable map entry pointer, or NULL if inode is unknown.
+ * Side effects/assumptions: Operates on in-memory data and may read
+ * procfs/netns state; it does not change kernel configuration.
  */
 static struct inode_proc *lookup_inode(struct model *m, unsigned long inode)
 {
@@ -769,6 +812,8 @@ static struct inode_proc *lookup_inode(struct model *m, unsigned long inode)
  * @ip: inode-owner mapping whose process pointers are attached to endpoint.
  *
  * Returns 0 on success, -1 on allocation failure.
+ * Side effects/assumptions: Operates on in-memory data and may read
+ * procfs/netns state; it does not change kernel configuration.
  */
 static int add_endpoint(struct model *m, const char *proto, const char *bind,
 	unsigned int port, enum plane_kind plane, const char *ifname,
@@ -831,6 +876,8 @@ next:
  * @ip: inode-owner mapping whose process pointers are attached to endpoint.
  *
  * Returns 0 on success, -1 on allocation failure.
+ * Side effects/assumptions: Operates on in-memory data and may read
+ * procfs/netns state; it does not change kernel configuration.
  */
 static int add_vsock_endpoint(struct model *m, const char *type,
 	unsigned int cid, unsigned int port, struct inode_proc *ip)
@@ -893,6 +940,8 @@ next:
  *
  * Wildcard binds expand across non-loopback ifaces in current netns.
  * Returns no value.
+ * Side effects/assumptions: Operates on in-memory data and may read
+ * procfs/netns state; it does not change kernel configuration.
  */
 static void endpoint_to_ifaces(struct model *m, const char *proto, int af,
 	const char *bind, unsigned int port, struct inode_proc *ip)
@@ -941,6 +990,8 @@ static void endpoint_to_ifaces(struct model *m, const char *proto, int af,
  *
  * Non-listeners/unowned sockets are skipped; output is best-effort.
  * Returns no value.
+ * Side effects/assumptions: Operates on in-memory data and may read
+ * procfs/netns state; it does not change kernel configuration.
  */
 static void parse_inet_file(struct model *m, const char *path,
 	const char *proto, int af)
@@ -1013,6 +1064,8 @@ static void parse_inet_file(struct model *m, const char *path,
  *
  * Visibility depends on current netns and procfs access permissions.
  * Returns no value.
+ * Side effects/assumptions: Operates on in-memory data and may read
+ * procfs/netns state; it does not change kernel configuration.
  */
 static void parse_packet_file(struct model *m)
 {
@@ -1056,6 +1109,8 @@ static void parse_packet_file(struct model *m)
  * @out: destination value on successful parse.
  *
  * Returns 0 on success, -1 if @s is not a valid integer token.
+ * Side effects/assumptions: Operates on in-memory data and may read
+ * procfs/netns state; it does not change kernel configuration.
  */
 static int parse_u32_hex_or_dec(const char *s, unsigned int *out)
 {
@@ -1087,6 +1142,8 @@ static int parse_u32_hex_or_dec(const char *s, unsigned int *out)
  *
  * Used when sock_diag support is unavailable or denied.
  * Returns no value.
+ * Side effects/assumptions: Operates on in-memory data and may read
+ * procfs/netns state; it does not change kernel configuration.
  */
 static void parse_vsock_file(struct model *m)
 {
@@ -1166,8 +1223,11 @@ static void parse_vsock_file(struct model *m)
 
 /*
  * vsock_type_to_name - map VSOCK socket type to display label.
+ * @type: SOCK_* type value from kernel socket metadata.
  *
  * Returns static string label, or NULL for unknown/unsupported type.
+ * Side effects/assumptions: Operates on in-memory data and may read
+ * procfs/netns state; it does not change kernel configuration.
  */
 static const char *vsock_type_to_name(unsigned int type)
 {
@@ -1187,6 +1247,8 @@ static const char *vsock_type_to_name(unsigned int type)
  * @fd: open NETLINK_SOCK_DIAG socket with pending VSOCK responses.
  *
  * Returns 0 on NLMSG_DONE, or -1 on malformed/error netlink messages.
+ * Side effects/assumptions: Operates on in-memory data and may read
+ * procfs/netns state; it does not change kernel configuration.
  */
 static int parse_vsock_diag_messages(struct model *m, int fd)
 {
@@ -1263,6 +1325,8 @@ static int parse_vsock_diag_messages(struct model *m, int fd)
  * @m: model receiving parsed VSOCK endpoint/process mappings.
  *
  * Returns 0 on success, -1 with errno on permission/support/socket errors.
+ * Side effects/assumptions: Operates on in-memory data and may read
+ * procfs/netns state; it does not change kernel configuration.
  */
 static int parse_vsock_diag(struct model *m)
 {
@@ -1304,6 +1368,8 @@ out:
  * @m: unused model pointer.
  *
  * Returns -1 and sets errno=EOPNOTSUPP.
+ * Side effects/assumptions: Operates on in-memory data and may read
+ * procfs/netns state; it does not change kernel configuration.
  */
 static int parse_vsock_diag(struct model *m)
 {
@@ -1321,6 +1387,8 @@ static int parse_vsock_diag(struct model *m)
  * @af: requested address family (AF_INET/AF_INET6).
  *
  * Returns 0 on NLMSG_DONE, or -1 on malformed/error netlink messages.
+ * Side effects/assumptions: Operates on in-memory data and may read
+ * procfs/netns state; it does not change kernel configuration.
  */
 static int parse_diag_messages(struct model *m, int fd, int proto, int af)
 {
@@ -1400,6 +1468,8 @@ static int parse_diag_messages(struct model *m, int fd, int proto, int af)
  *
  * Best-effort helper; failures are tolerated by callers.
  * Returns no value.
+ * Side effects/assumptions: Operates on in-memory data and may read
+ * procfs/netns state; it does not change kernel configuration.
  */
 static void parse_diag_for_proto_af(struct model *m, int proto, int af)
 {
@@ -1442,6 +1512,8 @@ out:
  * @m: model receiving discovered listener endpoints.
  *
  * Returns no value.
+ * Side effects/assumptions: Operates on in-memory data and may read
+ * procfs/netns state; it does not change kernel configuration.
  */
 static void parse_diag_listeners(struct model *m)
 {
@@ -1457,6 +1529,8 @@ static void parse_diag_listeners(struct model *m)
  *
  * Data source is current netns procfs/netlink visibility.
  * Returns no value.
+ * Side effects/assumptions: Operates on in-memory data and may read
+ * procfs/netns state; it does not change kernel configuration.
  */
 static void collect_endpoints(struct model *m)
 {
@@ -1484,6 +1558,8 @@ static void collect_endpoints(struct model *m)
  * @limit: maximum columns to consume from @from.
  *
  * Returns next index to continue rendering from.
+ * Side effects/assumptions: Operates on in-memory data and may read
+ * procfs/netns state; it does not change kernel configuration.
  */
 static int wrap_to(const char *text, int from, int limit)
 {
@@ -1510,6 +1586,8 @@ static int wrap_to(const char *text, int from, int limit)
  * @width: target display width used for wrapping.
  *
  * Returns no value.
+ * Side effects/assumptions: Operates on in-memory data and may read
+ * procfs/netns state; it does not change kernel configuration.
  */
 static void print_tree_node(const char *prefix, int is_last, const char *txt,
 	int width)
@@ -1554,6 +1632,8 @@ static void print_tree_node(const char *prefix, int is_last, const char *txt,
  * @parent_is_last: non-zero when parent is the last sibling.
  *
  * Returns no value.
+ * Side effects/assumptions: Operates on in-memory data and may read
+ * procfs/netns state; it does not change kernel configuration.
  */
 static void build_child_prefix(char *dst, size_t dst_sz, const char *prefix,
 	int parent_is_last)
@@ -1564,8 +1644,13 @@ static void build_child_prefix(char *dst, size_t dst_sz, const char *prefix,
 
 /*
  * endpoint_cmp - qsort comparator for stable endpoint grouping.
+ * @a: pointer to first endpoint element.
+ * @b: pointer to second endpoint element.
  *
  * Sort order is plane, interface name, interface address, then label.
+ * Returns negative/zero/positive qsort ordering result.
+ * Side effects/assumptions: Operates on in-memory data and may read
+ * procfs/netns state; it does not change kernel configuration.
  */
 static int endpoint_cmp(const void *a, const void *b)
 {
@@ -1584,6 +1669,8 @@ static int endpoint_cmp(const void *a, const void *b)
  * @m: model to render; endpoint array is sorted in place before printing.
  *
  * Returns no value.
+ * Side effects/assumptions: Operates on in-memory data and may read
+ * procfs/netns state; it does not change kernel configuration.
  */
 static void render_tree(struct model *m)
 {
@@ -1882,9 +1969,12 @@ static void render_tree(struct model *m)
 
 /*
  * json_escape - write @s as a quoted JSON string to stdout.
+ * @s: UTF-8/text string to emit as one JSON string literal.
  *
  * Control characters and quotes are escaped; caller handles separators.
  * Returns no value.
+ * Side effects/assumptions: Writes to stdout and may read procfs/netns
+ * state indirectly via caller-supplied model-derived strings.
  */
 static void json_escape(const char *s)
 {
@@ -1908,6 +1998,8 @@ static void json_escape(const char *s)
  * @m: model to render; endpoint array is sorted in place before printing.
  *
  * Returns no value.
+ * Side effects/assumptions: Operates on in-memory data and may read
+ * procfs/netns state; it does not change kernel configuration.
  */
 static void render_json(struct model *m)
 {
@@ -2150,6 +2242,8 @@ static void render_json(struct model *m)
  * @p: process entry pointer, or NULL.
  *
  * Returns no value.
+ * Side effects/assumptions: Operates on in-memory data and may read
+ * procfs/netns state; it does not change kernel configuration.
  */
 static void free_process(struct process_info *p)
 {
@@ -2172,6 +2266,8 @@ static void free_process(struct process_info *p)
  * @m: model container whose internal arrays/strings are released.
  *
  * Returns no value.
+ * Side effects/assumptions: Operates on in-memory data and may read
+ * procfs/netns state; it does not change kernel configuration.
  */
 static void free_model(struct model *m)
 {
@@ -2204,8 +2300,11 @@ static void free_model(struct model *m)
  * netcap_advanced_main - entry point for "netcap --advanced" mode.
  * @opts: parsed options; must be non-NULL and have @advanced set.
  *
- * Collects procfs/netlink data in current netns, prints tree/JSON report,
- * and returns 0 on success or 1 when advanced mode was not requested.
+ * Returns 0 after rendering advanced output, or 1 when advanced mode
+ * is not requested.
+ * Side effects/assumptions: Reads procfs/netlink in the current network
+ * namespace, prints to stdout/stderr, and root is typically needed for a
+ * fuller process-to-socket ownership mapping.
  */
 int netcap_advanced_main(const struct netcap_opts *opts)
 {
