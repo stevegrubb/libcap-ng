@@ -80,7 +80,7 @@ struct iface_info {
 };
 
 struct defense_info {
-	char *runs_as_root;
+	char *runs_as_nonroot;
 	char *no_new_privs;
 	char *seccomp;
 	char *lsm_label;
@@ -517,7 +517,7 @@ static void parse_status_defenses(int pid, int uid, struct defense_info *d,
 	unsigned long secbits = 0;
 	int seen_secbits = 0;
 
-	d->runs_as_root = xstrdup(uid == 0 ? "yes" : "no");
+	d->runs_as_nonroot = xstrdup(uid != 0 ? "yes" : "no");
 	d->no_new_privs = xstrdup("unknown");
 	d->seccomp = xstrdup("disabled");
 	d->lsm_label = NULL;
@@ -623,7 +623,7 @@ static struct process_info *add_process(struct model *m, int pid)
 		&secbits_raw);
 	p->securebits_locked = p->defenses.securebits_locked &&
 		strcmp(p->defenses.securebits_locked, "yes") == 0;
-	if (!p->comm || !p->caps || !p->defenses.runs_as_root ||
+	if (!p->comm || !p->caps || !p->defenses.runs_as_nonroot ||
 	    !p->defenses.no_new_privs || !p->defenses.seccomp)
 		goto fail;
 
@@ -1655,8 +1655,8 @@ static void render_tree(struct model *m)
 					print_tree_node(pfx_child, 0, line, width);
 
 					snprintf(def_buf[def_n], sizeof(def_buf[def_n]),
-						"runs_as_root: %s",
-						p->defenses.runs_as_root);
+						"runs_as_nonroot: %s",
+						p->defenses.runs_as_nonroot);
 					def_nodes[def_n] = def_buf[def_n];
 					def_n++;
 					snprintf(def_buf[def_n], sizeof(def_buf[def_n]),
@@ -1805,7 +1805,7 @@ static void render_tree(struct model *m)
 						print_tree_node(pfx_child, 0, line, width);
 
 						snprintf(def_buf[def_n], sizeof(def_buf[def_n]),
-							"runs_as_root: %s", p->defenses.runs_as_root);
+							"runs_as_nonroot: %s", p->defenses.runs_as_nonroot);
 						def_nodes[def_n] = def_buf[def_n];
 						def_n++;
 						snprintf(def_buf[def_n], sizeof(def_buf[def_n]),
@@ -1960,8 +1960,8 @@ static void render_json(struct model *m)
 					}
 					printf(", \"caps\": ");
 					json_escape(p->caps);
-					printf(", \"defenses\": {\"runs_as_root\": ");
-					json_escape(p->defenses.runs_as_root);
+					printf(", \"defenses\": {\"runs_as_nonroot\": ");
+					json_escape(p->defenses.runs_as_nonroot);
 					printf(", \"no_new_privs\": ");
 					json_escape(p->defenses.no_new_privs);
 					printf(", \"seccomp\": ");
@@ -2073,8 +2073,8 @@ static void render_json(struct model *m)
 						}
 						printf(", \"caps\": ");
 						json_escape(p->caps);
-						printf(", \"defenses\": {\"runs_as_root\": ");
-						json_escape(p->defenses.runs_as_root);
+						printf(", \"defenses\": {\"runs_as_nonroot\": ");
+						json_escape(p->defenses.runs_as_nonroot);
 						printf(", \"no_new_privs\": ");
 						json_escape(p->defenses.no_new_privs);
 						printf(", \"seccomp\": ");
@@ -2147,7 +2147,7 @@ static void free_process(struct process_info *p)
 	free(p->comm);
 	free(p->unit);
 	free(p->caps);
-	free(p->defenses.runs_as_root);
+	free(p->defenses.runs_as_nonroot);
 	free(p->defenses.no_new_privs);
 	free(p->defenses.seccomp);
 	free(p->defenses.lsm_label);
