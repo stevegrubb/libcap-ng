@@ -1423,11 +1423,12 @@ static void parse_diag_for_proto_af(struct model *m, int proto, int af)
 	memset(&sa, 0, sizeof(sa));
 	sa.nl_family = AF_NETLINK;
 	sa.nl_pid = 0;
+	if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) < 0)
+		goto out;
 
 	diag_dbg("send proto=%d af=%d len=%u", proto, af,
 		req.nlh.nlmsg_len);
-	if (sendto(fd, &req, req.nlh.nlmsg_len, 0,
-		   (struct sockaddr *)&sa, sizeof(sa)) < 0)
+	if (send(fd, &req, req.nlh.nlmsg_len, 0) < 0)
 		goto out;
 	parse_diag_messages(m, fd, proto, af);
 out:
