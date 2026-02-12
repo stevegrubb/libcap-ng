@@ -6,7 +6,18 @@ netcap \- a program to see capabilities
 .RI [ --advanced
 .RI [ --json ]]
 .SH DESCRIPTION
-\fBnetcap\fP is a program that prints out a report of process capabilities. If the application is using tcp, udp, raw, or packet family of sockets AND has any capabilities, it will be in the report. If the process has partial capabilities, it is further examined to see if it has an open-ended bounding set. If this is found to be true, a '+' symbol is added.  If the process has ambient capabilities, a '@' symbols is added.
+\fBnetcap\fP is a program that prints out a report of process capabilities.
+By default, it runs in its historical filtered mode: if an application is
+using tcp, udp, raw, or packet family sockets AND has any capabilities, it
+will be in the report. If the process has partial capabilities, it is further
+examined to see if it has an open-ended bounding set. If this is found to be
+true, a '+' symbol is added. If the process has ambient capabilities, a '@'
+symbol is added.
+
+With \fB\-\-advanced\fP, \fBnetcap\fP switches to endpoint/listener inventory
+mode for the current network namespace. In this mode, reachable
+endpoints/listeners are reported regardless of whether the owning process has
+capabilities.
 
 Some directories in the /proc file system are readonly by root. The program will try to access and report what it can. But if nothing comes out, try changing to the root user and re-run this program. 
 
@@ -47,9 +58,11 @@ VSOCK: stream LISTEN sockets (and bound datagram sockets when present).
 .IP \[bu] 2
 RAW/PACKET: shown as endpoints; semantics differ from port listeners.
 
-The defenses section reports at least: \fBno_new_privs\fP,
-\fBseccomp\fP mode, LSM label, securebits with lock status, and whether the
-process runs as non-root.
+The defenses section is best-effort: \fBno_new_privs\fP and \fBseccomp\fP mode
+are read from \fB/proc/<pid>/status\fP when available, and the LSM label is
+read from \fB/proc/<pid>/attr/current\fP when available. \fBsecurebits\fP with
+lock status are reported for \fBuid==0\fP processes, or when non-default/
+available for other processes. \fBruns_as_nonroot\fP is always reported.
 
 Flags annotate notable conditions:
 .IP \[bu] 2
@@ -77,7 +90,7 @@ When \fB\-\-advanced --json\fP is used, output contains:
 INET and LINK-LAYER plane objects contain:
 
 .RS
-ifaces \-> addrs \-> endpoints \-> processes
+\fBifaces\fP \-> addrs \-> endpoints \-> processes
 .RE
 
 VSOCK plane objects contain:
@@ -86,8 +99,9 @@ VSOCK plane objects contain:
 endpoints \-> processes
 .RE
 
-If process defenses are present, they include \fBruns_as_nonroot\fP
-(yes when uid != 0, no when uid == 0).
+Fields under endpoints/processes/defenses may be omitted when unavailable.
+When process defenses are present, they include \fBruns_as_nonroot\fP (yes
+when uid != 0, no when uid == 0).
 
 If a plane has no discovered endpoints, it appears with an empty list. If a
 consumer does not receive a given plane, treat it as none found or omitted by
