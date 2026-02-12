@@ -981,16 +981,19 @@ static void parse_inet_file(struct model *m, const char *path,
 				continue;
 			snprintf(addr, sizeof(addr), "%u.%u.%u.%u", b0, b1, b2, b3);
 		} else {
-			unsigned char bytes[16];
+			unsigned char bytes[16] = { 0 };
 			int i;
 			if (strlen(laddrh) != 32)
 				continue;
-			for (i = 0; i < 16; i++) {
-				unsigned int v;
-				if (sscanf(laddrh + (i * 2), "%2x", &v) != 1)
-					v = 0;
-				/* procfs stores IPv6 nibbles little-endian by 32-bit words. */
-				bytes[15 - i] = v;
+			for (i = 0; i < 4; i++) {
+				unsigned int w;
+				unsigned int be;
+
+				/* procfs stores each 32-bit word in little-endian hex. */
+				if (sscanf(laddrh + (i * 8), "%8x", &w) != 1)
+					continue;
+				be = htonl(w);
+				memcpy(bytes + (i * 4), &be, sizeof(be));
 			}
 			if (!inet_ntop(AF_INET6, bytes, addr, sizeof(addr)))
 				continue;
