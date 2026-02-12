@@ -49,7 +49,7 @@ RAW/PACKET: shown as endpoints; semantics differ from port listeners.
 
 The defenses section reports at least: \fBno_new_privs\fP,
 \fBseccomp\fP mode, LSM label, securebits with lock status, and whether the
-process runs as root or non-root.
+process runs as non-root.
 
 Flags annotate notable conditions:
 .IP \[bu] 2
@@ -85,6 +85,9 @@ VSOCK plane objects contain:
 .RS
 endpoints \-> processes
 .RE
+
+If process defenses are present, they include \fBruns_as_nonroot\fP
+(yes when uid != 0, no when uid == 0).
 
 If a plane has no discovered endpoints, it appears with an empty list. If a
 consumer does not receive a given plane, treat it as none found or omitted by
