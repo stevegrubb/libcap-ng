@@ -60,10 +60,9 @@ RAW/PACKET: shown as endpoints; semantics differ from port listeners.
 
 The defenses section is best-effort: \fBno_new_privs\fP and \fBseccomp\fP mode
 are read from \fB/proc/<pid>/status\fP when available, and the LSM label is
-read from \fB/proc/<pid>/attr/current\fP when available. \fBsecurebits\fP with
-lock status are reported when the needed status data can be read: for
-\fBuid==0\fP processes they are emitted from status data, and for non-root
-processes they are emitted when non-default securebits are observed.
+read from \fB/proc/<pid>/attr/current\fP when available. \fBsecurebits\fP and
+their lock status are reported when available and meaningful (typically for
+\fBuid==0\fP processes), and may be omitted otherwise.
 \fBruns_as_nonroot\fP is always reported.
 
 Flags annotate notable conditions:
