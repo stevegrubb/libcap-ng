@@ -1038,18 +1038,24 @@ static void parse_inet_file(struct model *m, const char *path,
 		} else {
 			unsigned char bytes[16] = { 0 };
 			int i;
+			int ok = 1;
 			if (strlen(laddrh) != 32)
 				continue;
 			for (i = 0; i < 4; i++) {
 				unsigned int w;
-				unsigned int be;
 
 				/* procfs stores each 32-bit word in little-endian hex. */
-				if (sscanf(laddrh + (i * 8), "%8x", &w) != 1)
-					continue;
-				be = htonl(w);
-				memcpy(bytes + (i * 4), &be, sizeof(be));
+				if (sscanf(laddrh + (i * 8), "%8x", &w) != 1) {
+					ok = 0;
+					break;
+				}
+				bytes[(i * 4) + 0] = (w >> 0) & 0xff;
+				bytes[(i * 4) + 1] = (w >> 8) & 0xff;
+				bytes[(i * 4) + 2] = (w >> 16) & 0xff;
+				bytes[(i * 4) + 3] = (w >> 24) & 0xff;
 			}
+			if (!ok)
+				continue;
 			if (!inet_ntop(AF_INET6, bytes, addr, sizeof(addr)))
 				continue;
 		}
