@@ -61,6 +61,8 @@ enum plane_kind {
 	PLANE_VSOCK,
 };
 
+#define PLANE_PACKET_NAME	"LINK-LAYER"
+
 struct strvec {
 	char **v;
 	size_t n;
@@ -1608,7 +1610,7 @@ static void render_tree(struct model *m)
 		const char *plane_name = plane == PLANE_INET_EXTERNAL ?
 			"INET (external)" :
 			plane == PLANE_INET_LOOPBACK ? "INET (loopback)" :
-			plane == PLANE_PACKET ? "LINK-LAYER" : "VSOCK";
+			plane == PLANE_PACKET ? PLANE_PACKET_NAME : "VSOCK";
 		size_t j = 0;
 
 		print_tree_node(pfx_plane, plane_last, plane_name, width);
@@ -1914,7 +1916,7 @@ static void render_json(struct model *m)
 	for (i = 0; i < 4; i++) {
 		const char *pname = i == PLANE_INET_EXTERNAL ? "INET" :
 			i == PLANE_INET_LOOPBACK ? "INET" :
-			i == PLANE_PACKET ? "LINK-LAYER" : "VSOCK";
+			i == PLANE_PACKET ? PLANE_PACKET_NAME : "VSOCK";
 		const char *scope = i == PLANE_INET_EXTERNAL ? "external" :
 			i == PLANE_INET_LOOPBACK ? "loopback" : NULL;
 		int first_vsock = 1;
