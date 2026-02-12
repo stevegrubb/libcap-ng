@@ -40,11 +40,19 @@ view of listener ownership and process hardening state.
 The tree layout is:
 
 .RS
-Planes \-> interface \-> address \-> endpoint \-> process \-> caps/defenses/flags
+Planes \-> interface \-> (optional addrs inventory) \-> protocol \-> bind
+\-> port \-> process \-> caps/defenses/flags
 .RE
 
 Planes are grouped as INET (external), INET (loopback), VSOCK, and
 LINK-LAYER. These names match the tree output exactly.
+
+The \fBaddrs\fP node is interface address inventory from
+\fBgetifaddrs\fP(3), printed once per interface as context for bind
+interpretation.
+
+Under each protocol, \fBbind\fP nodes are socket bind addresses
+(exposure), and \fBport\fP nodes are children of binds.
 
 Listener/endpoint selection is protocol-specific:
 .IP \[bu] 2
@@ -58,12 +66,13 @@ VSOCK: stream LISTEN sockets, plus bound datagram/seqpacket sockets.
 .IP \[bu] 2
 RAW/PACKET: shown as endpoints; semantics differ from port listeners.
 
-The defenses section is best-effort: \fBno_new_privs\fP and \fBseccomp\fP mode
-are read from \fB/proc/<pid>/status\fP when available, and the LSM label is
-read from \fB/proc/<pid>/attr/current\fP when available. \fBsecurebits\fP and
-their lock status are reported when available and meaningful (typically for
-\fBuid==0\fP processes), and may be omitted otherwise.
-\fBruns_as_nonroot\fP is always reported.
+The defenses section is best-effort: \fBno_new_privs\fP and
+\fBseccomp\fP mode are read from \fB/proc/<pid>/status\fP when
+available, and the LSM label is read from
+\fB/proc/<pid>/attr/current\fP when available. \fBsecurebits\fP and
+their lock status are reported when available and meaningful
+(typically for \fBuid==0\fP or non-default state), and may be
+omitted otherwise. \fBruns_as_nonroot\fP is always reported.
 
 Flags annotate notable conditions:
 .IP \[bu] 2
