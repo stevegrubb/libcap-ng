@@ -36,6 +36,11 @@
  * ownership from /proc/<pid>/fd, parse protocol-specific listener tables,
  * and project each endpoint onto interface/plane groupings for reporting.
  *
+ * For internet sockets, wildcard binds are expanded onto concrete interface
+ * addresses so the rendered tree/JSON can be consumed as an exposure map.
+ * VSOCK listeners are collected via sock_diag when available and fall back to
+ * /proc parsing when not, with ownership stitched back through socket inodes.
+ *
  * Results depend on the current network namespace and procfs visibility;
  * restricted privileges can hide processes/sockets and yield partial output.
  */
@@ -502,6 +507,7 @@ static char *caps_summary_for_pid(int pid, int *privileged, int *has_amb,
  * @secbits_raw: out raw securebits value when present.
  *
  * Missing fields are tolerated; function leaves best-effort defaults.
+ * Returns no value.
  */
 static void parse_status_defenses(int pid, int uid, struct defense_info *d,
 	int *securebits_nondefault, unsigned long *secbits_raw)
@@ -551,6 +557,10 @@ static void parse_status_defenses(int pid, int uid, struct defense_info *d,
 		*secbits_raw = secbits;
 	if (uid == 0 || (seen_secbits && secbits != 0)) {
 		char buf[256];
+		/*
+		 * Keep this decode local and explicit so reviewers can audit each
+		 * bit's textual interpretation without cross-referencing helpers.
+		 */
 		int keep = !!(secbits & 0x10);
 		int nofix = !!(secbits & 0x04);
 		int noroot = !!(secbits & 0x01);
@@ -671,6 +681,7 @@ static int add_inode_proc(struct model *m, unsigned long inode,
  * @m: model receiving process entries and inode->process associations.
  *
  * This is best-effort and skips tasks/fds hidden by permissions or races.
+ * Returns no value.
  */
 static void collect_proc_inodes(struct model *m)
 {
@@ -711,6 +722,10 @@ static void collect_proc_inodes(struct model *m)
 			if (l < 0)
 				continue;
 			link[l] = 0;
+			/*
+			 * procfs may expose socket links in kernel-dependent formats.
+			 * Handle both common "socket:[inode]" and "[0000]:inode" forms.
+			 */
 			if (strncmp(link, "socket:[", 8) == 0) {
 				s = link + 8;
 			} else if (strncmp(link, "[0000]:", 7) == 0) {
@@ -873,6 +888,7 @@ next:
  * @ip: inode-owner mapping used to attach owning processes.
  *
  * Wildcard binds expand across non-loopback ifaces in current netns.
+ * Returns no value.
  */
 static void endpoint_to_ifaces(struct model *m, const char *proto, int af,
 	const char *bind, unsigned int port, struct inode_proc *ip)
@@ -888,6 +904,10 @@ static void endpoint_to_ifaces(struct model *m, const char *proto, int af,
 			if (ifc->addrs[j].af != af)
 				continue;
 			if (wildcard) {
+				/*
+				 * 0.0.0.0/:: listeners are treated as externally reachable; keep
+				 * loopback out of this expansion to avoid duplicate exposure rows.
+				 */
 				if (strcmp(ifc->name, "lo") == 0)
 					continue;
 				add_endpoint(m, proto, bind, port, PLANE_INET_EXTERNAL,
@@ -916,6 +936,7 @@ static void endpoint_to_ifaces(struct model *m, const char *proto, int af,
  * @af: address family used to decode local bind addresses.
  *
  * Non-listeners/unowned sockets are skipped; output is best-effort.
+ * Returns no value.
  */
 static void parse_inet_file(struct model *m, const char *path,
 	const char *proto, int af)
@@ -968,6 +989,7 @@ static void parse_inet_file(struct model *m, const char *path,
 				unsigned int v;
 				if (sscanf(laddrh + (i * 2), "%2x", &v) != 1)
 					v = 0;
+				/* procfs stores IPv6 nibbles little-endian by 32-bit words. */
 				bytes[15 - i] = v;
 			}
 			if (!inet_ntop(AF_INET6, bytes, addr, sizeof(addr)))
@@ -983,6 +1005,7 @@ static void parse_inet_file(struct model *m, const char *path,
  * @m: model receiving packet-plane endpoint/process mappings.
  *
  * Visibility depends on current netns and procfs access permissions.
+ * Returns no value.
  */
 static void parse_packet_file(struct model *m)
 {
@@ -1056,6 +1079,7 @@ static int parse_u32_hex_or_dec(const char *s, unsigned int *out)
  * @m: model receiving parsed VSOCK endpoint/process mappings.
  *
  * Used when sock_diag support is unavailable or denied.
+ * Returns no value.
  */
 static void parse_vsock_file(struct model *m)
 {
@@ -1368,6 +1392,7 @@ static int parse_diag_messages(struct model *m, int fd, int proto, int af)
  * @af: address family selector for the request.
  *
  * Best-effort helper; failures are tolerated by callers.
+ * Returns no value.
  */
 static void parse_diag_for_proto_af(struct model *m, int proto, int af)
 {
@@ -1407,6 +1432,8 @@ out:
 /*
  * parse_diag_listeners - collect SCTP/DCCP listeners via sock_diag.
  * @m: model receiving discovered listener endpoints.
+ *
+ * Returns no value.
  */
 static void parse_diag_listeners(struct model *m)
 {
@@ -1421,6 +1448,7 @@ static void parse_diag_listeners(struct model *m)
  * @m: model receiving inet, diag, packet, and vsock endpoint mappings.
  *
  * Data source is current netns procfs/netlink visibility.
+ * Returns no value.
  */
 static void collect_endpoints(struct model *m)
 {
@@ -1472,6 +1500,8 @@ static int wrap_to(const char *text, int from, int limit)
  * @is_last: non-zero when this node is the last child.
  * @txt: node text to render.
  * @width: target display width used for wrapping.
+ *
+ * Returns no value.
  */
 static void print_tree_node(const char *prefix, int is_last, const char *txt,
 	int width)
@@ -1514,6 +1544,8 @@ static void print_tree_node(const char *prefix, int is_last, const char *txt,
  * @dst_sz: size of @dst in bytes.
  * @prefix: parent prefix string.
  * @parent_is_last: non-zero when parent is the last sibling.
+ *
+ * Returns no value.
  */
 static void build_child_prefix(char *dst, size_t dst_sz, const char *prefix,
 	int parent_is_last)
@@ -1542,6 +1574,8 @@ static int endpoint_cmp(const void *a, const void *b)
 /*
  * render_tree - print human-readable advanced report as a tree.
  * @m: model to render; endpoint array is sorted in place before printing.
+ *
+ * Returns no value.
  */
 static void render_tree(struct model *m)
 {
@@ -1578,6 +1612,7 @@ static void render_tree(struct model *m)
 		build_child_prefix(pfx_iface, sizeof(pfx_iface), pfx_plane,
 			plane_last);
 		if (plane == PLANE_VSOCK) {
+			/* VSOCK has no iface/address hierarchy, so print endpoint-first. */
 			for (j = 0; j < m->eps_n; j++) {
 				struct endpoint *e = &m->eps[j];
 				char pfx_proc[256];
@@ -1840,6 +1875,7 @@ static void render_tree(struct model *m)
  * json_escape - write @s as a quoted JSON string to stdout.
  *
  * Control characters and quotes are escaped; caller handles separators.
+ * Returns no value.
  */
 static void json_escape(const char *s)
 {
@@ -1861,6 +1897,8 @@ static void json_escape(const char *s)
 /*
  * render_json - print machine-readable advanced report JSON to stdout.
  * @m: model to render; endpoint array is sorted in place before printing.
+ *
+ * Returns no value.
  */
 static void render_json(struct model *m)
 {
@@ -2099,6 +2137,8 @@ static void render_json(struct model *m)
 /*
  * free_process - free one process_info and all owned dynamic fields.
  * @p: process entry pointer, or NULL.
+ *
+ * Returns no value.
  */
 static void free_process(struct process_info *p)
 {
@@ -2119,6 +2159,8 @@ static void free_process(struct process_info *p)
 /*
  * free_model - free all heap allocations referenced by @m.
  * @m: model container whose internal arrays/strings are released.
+ *
+ * Returns no value.
  */
 static void free_model(struct model *m)
 {
