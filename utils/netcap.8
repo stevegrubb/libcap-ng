@@ -1,12 +1,94 @@
-.TH NETCAP: "8" "Sept 2020" "Red Hat" "System Administration Utilities"
+.TH NETCAP: "8" "Feb 2026" "Red Hat" "System Administration Utilities"
 .SH NAME
 netcap \- a program to see capabilities
 .SH SYNOPSIS
 .B netcap
+.RI [ --advanced
+.RI [ --json ]]
 .SH DESCRIPTION
 \fBnetcap\fP is a program that prints out a report of process capabilities. If the application is using tcp, udp, raw, or packet family of sockets AND has any capabilities, it will be in the report. If the process has partial capabilities, it is further examined to see if it has an open-ended bounding set. If this is found to be true, a '+' symbol is added.  If the process has ambient capabilities, a '@' symbols is added.
 
 Some directories in the /proc file system are readonly by root. The program will try to access and report what it can. But if nothing comes out, try changing to the root user and re-run this program. 
+
+.SH OPTIONS
+.TP
+.B \-\-advanced
+Enable the posture/tree view. This mode inventories reachable endpoints in
+the current network namespace and shows per-process capabilities, defenses,
+and flags.
+.TP
+.B \-\-json
+With \fB\-\-advanced\fP, emit machine-readable JSON instead of the tree
+view.
+
+.SH "ADVANCED MODE"
+Advanced mode is an attack-surface and posture inventory for the current
+network namespace. It is intended for administrators who need a structured
+view of listener ownership and process hardening state.
+
+The tree layout is:
+
+.RS
+Planes \-> interface \-> address \-> endpoint \-> process \-> caps/defenses/flags
+.RE
+
+Planes are grouped as INET (external), INET (loopback), VSOCK, and
+LINK-LAYER.
+
+Listener/endpoint selection is protocol-specific:
+.IP \[bu] 2
+TCP: LISTEN sockets only.
+.IP \[bu] 2
+UDP/UDPLITE: bound sockets.
+.IP \[bu] 2
+SCTP/DCCP: listener-equivalent sockets only; established flows are not shown.
+.IP \[bu] 2
+VSOCK: stream LISTEN sockets (and bound datagram sockets when present).
+.IP \[bu] 2
+RAW/PACKET: shown as endpoints; semantics differ from port listeners.
+
+The defenses section reports at least: \fBno_new_privs\fP,
+\fBseccomp\fP mode, LSM label, securebits with lock status, and whether the
+process runs as root or non-root.
+
+Flags annotate notable conditions:
+.IP \[bu] 2
+\fBwildcard-bind\fP: endpoint is bound to a wildcard address
+(for example 0.0.0.0 or ::).
+.IP \[bu] 2
+\fBloopback-only\fP: endpoint is reachable only via loopback scope.
+.IP \[bu] 2
+\fBhypervisor-plane\fP: endpoint is in the VSOCK communication plane.
+.IP \[bu] 2
+\fBssh-on-vsock-port-22\fP: VSOCK endpoint uses port 22.
+.IP \[bu] 2
+\fBprivileged-caps\fP: process has capabilities considered privileged for
+attack-surface review.
+.IP \[bu] 2
+\fBsecurebits-locked\fP: securebits lock state is asserted for the process.
+
+.SH "JSON OUTPUT"
+When \fB\-\-advanced --json\fP is used, output contains:
+.IP \[bu] 2
+\fBschema_version\fP: top-level schema version.
+.IP \[bu] 2
+\fBplanes\fP: array of plane objects.
+
+INET and LINK-LAYER plane objects contain:
+
+.RS
+ifaces \-> addrs \-> endpoints \-> processes
+.RE
+
+VSOCK plane objects contain:
+
+.RS
+endpoints \-> processes
+.RE
+
+If a plane has no discovered endpoints, it appears with an empty list. If a
+consumer does not receive a given plane, treat it as none found or omitted by
+the producer.
 
 .SH "SEE ALSO"
 .BR pscap (8),
