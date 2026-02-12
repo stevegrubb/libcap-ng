@@ -1893,24 +1893,24 @@ static void render_tree(struct model *m)
 				const struct iface_info *ifc = lookup_iface(m,
 					m->eps[iface_start].ifname);
 				char pfx_proto_root[256];
-				int have_addrs = 0;
+				int have_protos = (iface_end > iface_start);
 
 				if (ifc && ifc->addrs_n > 0) {
 					char pfx_addrs[256];
 					size_t ai;
+					int addrs_last = have_protos ? 0 : 1;
 
-					print_tree_node(pfx_iface_child, 0, "addrs", width);
+					print_tree_node(pfx_iface_child, addrs_last, "addrs", width);
 					build_child_prefix(pfx_addrs, sizeof(pfx_addrs),
-						pfx_iface_child, 0);
+						pfx_iface_child, addrs_last);
 					for (ai = 0; ai < ifc->addrs_n; ai++)
 						print_tree_node(pfx_addrs,
 							ai + 1 == ifc->addrs_n,
 							ifc->addrs[ai].addr, width);
-					have_addrs = 1;
 				}
 
-				build_child_prefix(pfx_proto_root, sizeof(pfx_proto_root),
-					pfx_iface_child, have_addrs ? 0 : 1);
+				snprintf(pfx_proto_root, sizeof(pfx_proto_root), "%s",
+					pfx_iface_child);
 
 				for (j = iface_start; j < iface_end; ) {
 					size_t proto_start = j, proto_end;
