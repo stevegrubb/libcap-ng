@@ -27,6 +27,19 @@
 #include "cap-ng.h"
 #include "netcap-advanced.h"
 
+/*
+ * Overview:
+ * netcap --advanced builds a process/socket ownership model from procfs and
+ * sock_diag, then renders it as a tree or JSON without changing system state.
+ *
+ * The flow is: discover interface addresses, map socket inode->process
+ * ownership from /proc/<pid>/fd, parse protocol-specific listener tables,
+ * and project each endpoint onto interface/plane groupings for reporting.
+ *
+ * Results depend on the current network namespace and procfs visibility;
+ * restricted privileges can hide processes/sockets and yield partial output.
+ */
+
 #define MAX_BARS 64
 
 #ifdef NETCAP_DIAG_DEBUG
@@ -123,6 +136,11 @@ struct model {
 static void free_process(struct process_info *p);
 static void free_model(struct model *m);
 
+/*
+ * get_width - choose terminal width for wrapped tree output.
+ *
+ * Returns terminal columns from TIOCGWINSZ or $COLUMNS, else 80.
+ */
 static int get_width(void)
 {
 	struct winsize ws;
@@ -141,6 +159,12 @@ static int get_width(void)
 	return 80;
 }
 
+/*
+ * xstrdup - duplicate @s into a newly allocated string.
+ * @s: source string, or NULL.
+ *
+ * Returns caller-owned copy, or NULL for NULL input or allocation failure.
+ */
 static char *xstrdup(const char *s)
 {
 	char *p;
@@ -153,6 +177,14 @@ static char *xstrdup(const char *s)
 	return p;
 }
 
+/*
+ * vec_grow - grow vector storage for dynamic arrays.
+ * @v: pointer to heap buffer pointer updated on success.
+ * @cap: current/new capacity element count.
+ * @item: size in bytes of each element.
+ *
+ * Returns 0 on success, -1 on allocation failure.
+ */
 static int vec_grow(void **v, size_t *cap, size_t item)
 {
 	void *p;
@@ -172,6 +204,13 @@ static int vec_grow(void **v, size_t *cap, size_t item)
 	return 0;
 }
 
+/*
+ * push_str_unique - append @s to @sv when not already present.
+ * @sv: destination vector that takes ownership of duplicated strings.
+ * @s: string to deduplicate and append.
+ *
+ * Returns 0 on success, -1 on allocation failure.
+ */
 static int push_str_unique(struct strvec *sv, const char *s)
 {
 	size_t i;
@@ -186,6 +225,11 @@ static int push_str_unique(struct strvec *sv, const char *s)
 	return sv->v[sv->n - 1] ? 0 : -1;
 }
 
+/*
+ * str_is_loopback - check whether textual @addr is loopback for @af.
+ *
+ * Returns non-zero for loopback addresses, else 0.
+ */
 static int str_is_loopback(int af, const char *addr)
 {
 	struct in_addr a4;
@@ -204,6 +248,11 @@ static int str_is_loopback(int af, const char *addr)
 	return 0;
 }
 
+/*
+ * str_is_wildcard - check whether textual @addr is wildcard-any for @af.
+ *
+ * Returns non-zero for 0.0.0.0/:: wildcard binds, else 0.
+ */
 static int str_is_wildcard(int af, const char *addr)
 {
 	if (af == AF_INET)
@@ -213,6 +262,11 @@ static int str_is_wildcard(int af, const char *addr)
 	return 0;
 }
 
+/*
+ * find_iface - locate interface record by name in @m.
+ *
+ * Returns a mutable iface pointer on match, or NULL if not found.
+ */
 static struct iface_info *find_iface(struct model *m, const char *name)
 {
 	size_t i;
@@ -223,6 +277,14 @@ static struct iface_info *find_iface(struct model *m, const char *name)
 	return NULL;
 }
 
+/*
+ * add_iface_addr - append one interface address if not already present.
+ * @ifc: interface record to update (takes ownership of duplicated @addr).
+ * @af: address family for @addr.
+ * @addr: textual address to copy into @ifc.
+ *
+ * Returns 0 on success, -1 on allocation failure.
+ */
 static int add_iface_addr(struct iface_info *ifc, int af, const char *addr)
 {
 	size_t i;
@@ -242,6 +304,12 @@ static int add_iface_addr(struct iface_info *ifc, int af, const char *addr)
 	return 0;
 }
 
+/*
+ * collect_interfaces - snapshot AF_INET/AF_INET6 iface addresses in @m.
+ * @m: model populated from getifaddrs() in the current network namespace.
+ *
+ * Returns 0 on success, -1 on getifaddrs/allocation failure.
+ */
 static int collect_interfaces(struct model *m)
 {
 	struct ifaddrs *ifa, *cur;
@@ -289,6 +357,12 @@ fail:
 	return -1;
 }
 
+/*
+ * read_first_line - read and trim the first line from @path.
+ * @path: procfs/sysfs-style file path to read.
+ *
+ * Returns a caller-owned string, or NULL on open/read/allocation failure.
+ */
 static char *read_first_line(const char *path)
 {
 	int fd;
@@ -315,6 +389,12 @@ static char *read_first_line(const char *path)
 	return buf;
 }
 
+/*
+ * extract_unit_from_cgroup - best-effort unit name lookup for @pid.
+ * @pid: process ID whose /proc/<pid>/cgroup is inspected.
+ *
+ * Returns a caller-owned unit/scope name, or NULL if not found/readable.
+ */
 static char *extract_unit_from_cgroup(int pid)
 {
 	char path[64], line[512];
@@ -347,6 +427,15 @@ static char *extract_unit_from_cgroup(int pid)
 	return NULL;
 }
 
+/*
+ * caps_summary_for_pid - format capability summary for one process.
+ * @pid: process ID inspected through libcap-ng APIs.
+ * @privileged: out flag set when notable privileged effective caps exist.
+ * @has_amb: out flag set when ambient capabilities are present.
+ * @has_bnd: out flag set when bounding set entries are present.
+ *
+ * Returns caller-owned summary text; errors degrade to "(none)" style text.
+ */
 static char *caps_summary_for_pid(int pid, int *privileged, int *has_amb,
 	int *has_bnd)
 {
@@ -404,6 +493,16 @@ static char *caps_summary_for_pid(int pid, int *privileged, int *has_amb,
 	return xstrdup(out);
 }
 
+/*
+ * parse_status_defenses - read process hardening metadata into @d.
+ * @pid: process ID whose procfs status/attr files are parsed.
+ * @uid: process real UID, used for root/non-root interpretation.
+ * @d: destination struct receiving caller-freed string fields.
+ * @securebits_nondefault: out flag indicating meaningful securebits data.
+ * @secbits_raw: out raw securebits value when present.
+ *
+ * Missing fields are tolerated; function leaves best-effort defaults.
+ */
 static void parse_status_defenses(int pid, int uid, struct defense_info *d,
 	int *securebits_nondefault, unsigned long *secbits_raw)
 {
@@ -467,6 +566,13 @@ static void parse_status_defenses(int pid, int uid, struct defense_info *d,
 	}
 }
 
+/*
+ * add_process - collect process metadata and append it to @m.
+ * @m: model taking ownership of the created process_info on success.
+ * @pid: numeric process ID to read from /proc.
+ *
+ * Returns stored process pointer on success, or NULL on parse/allocation error.
+ */
 static struct process_info *add_process(struct model *m, int pid)
 {
 	char path[64], line[256], comm[64] = "";
@@ -522,6 +628,14 @@ fail:
 	return NULL;
 }
 
+/*
+ * add_inode_proc - add inode->process ownership mapping into @m.
+ * @m: model containing inode map storage.
+ * @inode: socket inode key from procfs/netlink tables.
+ * @p: process entry pointer that must remain valid for @m lifetime.
+ *
+ * Returns 0 on success, -1 on allocation failure.
+ */
 static int add_inode_proc(struct model *m, unsigned long inode,
 	struct process_info *p)
 {
@@ -552,6 +666,12 @@ static int add_inode_proc(struct model *m, unsigned long inode,
 	return 0;
 }
 
+/*
+ * collect_proc_inodes - build inode ownership map from /proc/<pid>/fd links.
+ * @m: model receiving process entries and inode->process associations.
+ *
+ * This is best-effort and skips tasks/fds hidden by permissions or races.
+ */
 static void collect_proc_inodes(struct model *m)
 {
 	DIR *d;
@@ -607,6 +727,11 @@ static void collect_proc_inodes(struct model *m)
 	closedir(d);
 }
 
+/*
+ * lookup_inode - locate inode ownership entry in @m.
+ *
+ * Returns mutable map entry pointer, or NULL if inode is unknown.
+ */
 static struct inode_proc *lookup_inode(struct model *m, unsigned long inode)
 {
 	size_t i;
@@ -617,6 +742,15 @@ static struct inode_proc *lookup_inode(struct model *m, unsigned long inode)
 	return NULL;
 }
 
+/*
+ * add_endpoint - add/merge one inet or packet endpoint in @m.
+ * @m: model receiving endpoint data.
+ * @proto/@bind/@ifname/@ifaddr: copied strings for endpoint identity.
+ * @port/@plane/@wildcard/@loopback: endpoint attributes for rendering/flags.
+ * @ip: inode-owner mapping whose process pointers are attached to endpoint.
+ *
+ * Returns 0 on success, -1 on allocation failure.
+ */
 static int add_endpoint(struct model *m, const char *proto, const char *bind,
 	unsigned int port, enum plane_kind plane, const char *ifname,
 	const char *ifaddr, int wildcard, int loopback, struct inode_proc *ip)
@@ -670,6 +804,15 @@ next:
 	return 0;
 }
 
+/*
+ * add_vsock_endpoint - add/merge one VSOCK endpoint in @m.
+ * @m: model receiving endpoint data.
+ * @type: socket type label (stream/dgram/seqpacket) copied into model.
+ * @cid/@port: source CID/port; @cid may be VMADDR_CID_ANY.
+ * @ip: inode-owner mapping whose process pointers are attached to endpoint.
+ *
+ * Returns 0 on success, -1 on allocation failure.
+ */
 static int add_vsock_endpoint(struct model *m, const char *type,
 	unsigned int cid, unsigned int port, struct inode_proc *ip)
 {
@@ -723,6 +866,14 @@ next:
 	return 0;
 }
 
+/*
+ * endpoint_to_ifaces - project one inet bind onto iface/address groupings.
+ * @m: model containing iface inventory and endpoint lists.
+ * @proto/@af/@bind/@port: socket identity from procfs/sock_diag.
+ * @ip: inode-owner mapping used to attach owning processes.
+ *
+ * Wildcard binds expand across non-loopback ifaces in current netns.
+ */
 static void endpoint_to_ifaces(struct model *m, const char *proto, int af,
 	const char *bind, unsigned int port, struct inode_proc *ip)
 {
@@ -757,6 +908,15 @@ static void endpoint_to_ifaces(struct model *m, const char *proto, int af,
 			loopback ? "lo" : "unknown", bind, wildcard, loopback, ip);
 }
 
+/*
+ * parse_inet_file - parse one procfs inet socket table into endpoints.
+ * @m: model receiving endpoint mappings.
+ * @path: procfs table path (tcp/udp/raw variants).
+ * @proto: protocol label used in rendered endpoint names.
+ * @af: address family used to decode local bind addresses.
+ *
+ * Non-listeners/unowned sockets are skipped; output is best-effort.
+ */
 static void parse_inet_file(struct model *m, const char *path,
 	const char *proto, int af)
 {
@@ -818,6 +978,12 @@ static void parse_inet_file(struct model *m, const char *path,
 	fclose(f);
 }
 
+/*
+ * parse_packet_file - parse /proc/net/packet and add packet endpoints.
+ * @m: model receiving packet-plane endpoint/process mappings.
+ *
+ * Visibility depends on current netns and procfs access permissions.
+ */
 static void parse_packet_file(struct model *m)
 {
 	FILE *f;
@@ -854,6 +1020,13 @@ static void parse_packet_file(struct model *m)
 	fclose(f);
 }
 
+/*
+ * parse_u32_hex_or_dec - parse @s as decimal or hexadecimal u32.
+ * @s: numeric token from procfs/netlink text fields.
+ * @out: destination value on successful parse.
+ *
+ * Returns 0 on success, -1 if @s is not a valid integer token.
+ */
 static int parse_u32_hex_or_dec(const char *s, unsigned int *out)
 {
 	char *end;
@@ -878,6 +1051,12 @@ static int parse_u32_hex_or_dec(const char *s, unsigned int *out)
 	return 0;
 }
 
+/*
+ * parse_vsock_file - fallback VSOCK parser using /proc/net/vsock.
+ * @m: model receiving parsed VSOCK endpoint/process mappings.
+ *
+ * Used when sock_diag support is unavailable or denied.
+ */
 static void parse_vsock_file(struct model *m)
 {
 	FILE *f;
@@ -954,6 +1133,11 @@ static void parse_vsock_file(struct model *m)
 	fclose(f);
 }
 
+/*
+ * vsock_type_to_name - map VSOCK socket type to display label.
+ *
+ * Returns static string label, or NULL for unknown/unsupported type.
+ */
 static const char *vsock_type_to_name(unsigned int type)
 {
 	if (type == SOCK_STREAM)
@@ -966,6 +1150,13 @@ static const char *vsock_type_to_name(unsigned int type)
 }
 
 #ifdef HAVE_LINUX_VM_SOCKETS_DIAG_H
+/*
+ * parse_vsock_diag_messages - consume VSOCK sock_diag dump replies.
+ * @m: model receiving VSOCK endpoint/process mappings.
+ * @fd: open NETLINK_SOCK_DIAG socket with pending VSOCK responses.
+ *
+ * Returns 0 on NLMSG_DONE, or -1 on malformed/error netlink messages.
+ */
 static int parse_vsock_diag_messages(struct model *m, int fd)
 {
 	char buf[8192];
@@ -1036,6 +1227,12 @@ static int parse_vsock_diag_messages(struct model *m, int fd)
 	}
 }
 
+/*
+ * parse_vsock_diag - request VSOCK listener dump via sock_diag netlink.
+ * @m: model receiving parsed VSOCK endpoint/process mappings.
+ *
+ * Returns 0 on success, -1 with errno on permission/support/socket errors.
+ */
 static int parse_vsock_diag(struct model *m)
 {
 	struct {
@@ -1071,6 +1268,12 @@ out:
 	return rc;
 }
 #else
+/*
+ * parse_vsock_diag - unsupported-build stub for VSOCK sock_diag path.
+ * @m: unused model pointer.
+ *
+ * Returns -1 and sets errno=EOPNOTSUPP.
+ */
 static int parse_vsock_diag(struct model *m)
 {
 	(void)m;
@@ -1079,6 +1282,15 @@ static int parse_vsock_diag(struct model *m)
 }
 #endif
 
+/*
+ * parse_diag_messages - consume inet sock_diag replies for @proto/@af.
+ * @m: model receiving parsed endpoint mappings.
+ * @fd: open NETLINK_SOCK_DIAG socket with pending responses.
+ * @proto: requested protocol (SCTP/DCCP).
+ * @af: requested address family (AF_INET/AF_INET6).
+ *
+ * Returns 0 on NLMSG_DONE, or -1 on malformed/error netlink messages.
+ */
 static int parse_diag_messages(struct model *m, int fd, int proto, int af)
 {
 	char buf[8192];
@@ -1149,6 +1361,14 @@ static int parse_diag_messages(struct model *m, int fd, int proto, int af)
 	}
 }
 
+/*
+ * parse_diag_for_proto_af - issue one inet sock_diag listener dump request.
+ * @m: model receiving parsed endpoint mappings.
+ * @proto: protocol selector for the request.
+ * @af: address family selector for the request.
+ *
+ * Best-effort helper; failures are tolerated by callers.
+ */
 static void parse_diag_for_proto_af(struct model *m, int proto, int af)
 {
 	struct {
@@ -1184,6 +1404,10 @@ out:
 	close(fd);
 }
 
+/*
+ * parse_diag_listeners - collect SCTP/DCCP listeners via sock_diag.
+ * @m: model receiving discovered listener endpoints.
+ */
 static void parse_diag_listeners(struct model *m)
 {
 	parse_diag_for_proto_af(m, IPPROTO_SCTP, AF_INET);
@@ -1192,6 +1416,12 @@ static void parse_diag_listeners(struct model *m)
 	parse_diag_for_proto_af(m, IPPROTO_DCCP, AF_INET6);
 }
 
+/*
+ * collect_endpoints - gather all endpoint classes into @m.
+ * @m: model receiving inet, diag, packet, and vsock endpoint mappings.
+ *
+ * Data source is current netns procfs/netlink visibility.
+ */
 static void collect_endpoints(struct model *m)
 {
 	parse_inet_file(m, "/proc/net/tcp", "tcp", AF_INET);
@@ -1211,6 +1441,14 @@ static void collect_endpoints(struct model *m)
 	}
 }
 
+/*
+ * wrap_to - choose a safe wrap index for one output line.
+ * @text: source string being wrapped.
+ * @from: starting offset in @text.
+ * @limit: maximum columns to consume from @from.
+ *
+ * Returns next index to continue rendering from.
+ */
 static int wrap_to(const char *text, int from, int limit)
 {
 	int i;
@@ -1228,6 +1466,13 @@ static int wrap_to(const char *text, int from, int limit)
 	return i;
 }
 
+/*
+ * print_tree_node - render one tree node line (with wrapping) to stdout.
+ * @prefix: precomputed branch prefix glyphs.
+ * @is_last: non-zero when this node is the last child.
+ * @txt: node text to render.
+ * @width: target display width used for wrapping.
+ */
 static void print_tree_node(const char *prefix, int is_last, const char *txt,
 	int width)
 {
@@ -1263,6 +1508,13 @@ static void print_tree_node(const char *prefix, int is_last, const char *txt,
 	}
 }
 
+/*
+ * build_child_prefix - extend tree prefix glyphs for child nodes.
+ * @dst: output buffer receiving generated prefix text.
+ * @dst_sz: size of @dst in bytes.
+ * @prefix: parent prefix string.
+ * @parent_is_last: non-zero when parent is the last sibling.
+ */
 static void build_child_prefix(char *dst, size_t dst_sz, const char *prefix,
 	int parent_is_last)
 {
@@ -1270,6 +1522,11 @@ static void build_child_prefix(char *dst, size_t dst_sz, const char *prefix,
 		parent_is_last ? "   " : "│  ");
 }
 
+/*
+ * endpoint_cmp - qsort comparator for stable endpoint grouping.
+ *
+ * Sort order is plane, interface name, interface address, then label.
+ */
 static int endpoint_cmp(const void *a, const void *b)
 {
 	const struct endpoint *ea = a, *eb = b;
@@ -1282,6 +1539,10 @@ static int endpoint_cmp(const void *a, const void *b)
 	return strcmp(ea->label, eb->label);
 }
 
+/*
+ * render_tree - print human-readable advanced report as a tree.
+ * @m: model to render; endpoint array is sorted in place before printing.
+ */
 static void render_tree(struct model *m)
 {
 	size_t i;
@@ -1575,6 +1836,11 @@ static void render_tree(struct model *m)
 	}
 }
 
+/*
+ * json_escape - write @s as a quoted JSON string to stdout.
+ *
+ * Control characters and quotes are escaped; caller handles separators.
+ */
 static void json_escape(const char *s)
 {
 	const unsigned char *p = (const unsigned char *)s;
@@ -1592,6 +1858,10 @@ static void json_escape(const char *s)
 	putchar('"');
 }
 
+/*
+ * render_json - print machine-readable advanced report JSON to stdout.
+ * @m: model to render; endpoint array is sorted in place before printing.
+ */
 static void render_json(struct model *m)
 {
 	size_t i, j, k, l;
@@ -1826,6 +2096,10 @@ static void render_json(struct model *m)
 	puts("}");
 }
 
+/*
+ * free_process - free one process_info and all owned dynamic fields.
+ * @p: process entry pointer, or NULL.
+ */
 static void free_process(struct process_info *p)
 {
 	if (!p)
@@ -1842,6 +2116,10 @@ static void free_process(struct process_info *p)
 	free(p);
 }
 
+/*
+ * free_model - free all heap allocations referenced by @m.
+ * @m: model container whose internal arrays/strings are released.
+ */
 static void free_model(struct model *m)
 {
 	size_t i, j;
@@ -1869,6 +2147,13 @@ static void free_model(struct model *m)
 	free(m->eps);
 }
 
+/*
+ * netcap_advanced_main - entry point for "netcap --advanced" mode.
+ * @opts: parsed options; must be non-NULL and have @advanced set.
+ *
+ * Collects procfs/netlink data in current netns, prints tree/JSON report,
+ * and returns 0 on success or 1 when advanced mode was not requested.
+ */
 int netcap_advanced_main(const struct netcap_opts *opts)
 {
 	struct model m;
