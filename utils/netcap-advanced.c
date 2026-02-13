@@ -1706,17 +1706,6 @@ static int endpoint_cmp(const void *a, const void *b)
 	return strcmp(ea->label, eb->label);
 }
 
-static const struct iface_info *lookup_iface(const struct model *m,
-	const char *name)
-{
-	size_t i;
-
-	for (i = 0; i < m->ifaces_n; i++)
-		if (strcmp(m->ifaces[i].name, name) == 0)
-			return &m->ifaces[i];
-	return NULL;
-}
-
 struct ep_group_ref {
 	struct endpoint *e;
 	size_t idx;
@@ -1942,24 +1931,7 @@ static void render_tree(struct model *m)
 				pfx_iface, iface_last);
 
 			{
-				const struct iface_info *ifc = lookup_iface(m,
-					m->eps[iface_start].ifname);
 				char pfx_proto_root[256];
-				int have_protos = (iface_end > iface_start);
-
-				if (ifc && ifc->addrs_n > 0) {
-					char pfx_addrs[256];
-					size_t ai;
-					int addrs_last = have_protos ? 0 : 1;
-
-					print_tree_node(pfx_iface_child, addrs_last, "addrs", width);
-					build_child_prefix(pfx_addrs, sizeof(pfx_addrs),
-						pfx_iface_child, addrs_last);
-					for (ai = 0; ai < ifc->addrs_n; ai++)
-						print_tree_node(pfx_addrs,
-							ai + 1 == ifc->addrs_n,
-							ifc->addrs[ai].addr, width);
-				}
 
 				snprintf(pfx_proto_root, sizeof(pfx_proto_root), "%s",
 					pfx_iface_child);
