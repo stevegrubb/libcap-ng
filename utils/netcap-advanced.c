@@ -1130,7 +1130,7 @@ static void parse_packet_file(struct model *m)
 			continue;
 		if (!if_indextoname(iface, ifn))
 			strcpy(ifn, "unknown");
-		snprintf(bind, sizeof(bind), "%s", ifn);
+		snprintf(bind, sizeof(bind), "::");
 		snprintf(addr, sizeof(addr), "ifindex:%u", iface);
 		snprintf(name, sizeof(name), "packet");
 		add_endpoint(m, name, bind, proto, PLANE_PACKET, ifn, addr,
