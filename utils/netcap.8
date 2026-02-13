@@ -39,16 +39,17 @@ view of bind ownership and process hardening state.
 The tree layout is:
 
 .RS
-Planes \-> interface \-> (optional addrs inventory) \-> protocol \-> bind
-\-> port \-> process \-> caps/defenses/flags
+Planes \-> interface \-> protocol \-> bind \-> port \-> process \->
+caps/defenses/flags
 .RE
 
 Planes are grouped as INET (external), INET (loopback), VSOCK, and
 LINK-LAYER. These names match the tree output exactly.
 
-The \fBaddrs\fP node is interface address inventory from
-\fBgetifaddrs\fP(3), printed once per interface as context for bind
-interpretation.
+The console tree is a causal exposure chain: protocol, then bind address,
+then port, then owning process. Wildcard binds are printed as \fB*\fP. Some
+endpoints may appear under interface \fBmulticast/group\fP when bound to
+multicast addresses that do not map to a single interface.
 
 Under each protocol, \fBbind\fP nodes are socket bind addresses
 (exposure), and \fBport\fP nodes are children of binds.
@@ -96,19 +97,25 @@ When \fB\-\-advanced --json\fP is used, output contains:
 .IP \[bu] 2
 \fBplanes\fP: array of plane objects.
 
-INET and LINK-LAYER plane objects contain:
+The console tree layout (human output) is:
 
 .RS
-\fBifaces\fP \-> addrs \-> protocols \-> binds \-> ports \-> processes
+planes \-> interface \-> protocol \-> bind \-> port \-> process
 .RE
 
-VSOCK plane objects contain:
+INET and LINK-LAYER JSON plane objects contain:
 
 .RS
-protocols \-> binds \-> ports \-> processes
+\fBifaces\fP \-> addrs \-> endpoints \-> processes
 .RE
 
-Fields under binds/ports/processes/defenses may be omitted when unavailable.
+VSOCK JSON plane objects contain:
+
+.RS
+\fBendpoints\fP \-> processes
+.RE
+
+Fields under endpoints/processes/defenses may be omitted when unavailable.
 When process defenses are present, they include \fBruns_as_nonroot\fP (yes
 when uid != 0, no when uid == 0).
 
