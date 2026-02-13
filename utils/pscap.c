@@ -34,6 +34,7 @@
 #include <pwd.h>
 #include <stdbool.h>
 #include <sys/stat.h>
+#include <sys/ioctl.h>
 #include "cap-ng.h"
 
 #define CMD_LEN 16
@@ -51,6 +52,49 @@ struct proc_info {
 	char cmd[CMD_LEN + USERNS_MARK_LEN];
 	char *caps_text;
 };
+
+static int get_width(void)
+{
+	struct winsize ws;
+	char *e;
+	long c;
+
+	if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0)
+		return ws.ws_col;
+
+	e = getenv("COLUMNS");
+	if (e) {
+		char *endptr;
+
+		errno = 0;
+		c = strtol(e, &endptr, 10);
+		if (errno == 0 && endptr != e && *endptr == '\0' && c > 0)
+			return (int)c;
+	}
+
+	return 80;
+}
+
+static size_t wrap_to(const char *text, size_t max)
+{
+	size_t len = strlen(text);
+	size_t i;
+
+	if (len <= max)
+		return len;
+
+	for (i = max; i > 0; i--) {
+		if (text[i - 1] == ',') {
+			if (i < len && text[i] == ' ')
+				return i + 1;
+			return i;
+		}
+		if (text[i - 1] == ' ')
+			return i;
+	}
+
+	return max;
+}
 
 /*
  * compare_pid - order processes by pid for sorting/bsearch
@@ -149,23 +193,76 @@ static char *format_caps(int caps, bool ambient, bool bounds)
  */
 static void print_tree_node(struct proc_info *procs, size_t count,
 			    size_t index, const char *prefix, bool is_last,
-			    bool is_root)
+			    bool is_root, int width)
 {
 	struct proc_info *proc = &procs[index];
 	size_t child_total = 0;
 	size_t child_seen = 0;
 	size_t i;
+	size_t prefix_len;
+	size_t cont_len;
+	size_t avail;
+	size_t n;
+	const char *caps;
+	char head[64];
 	const char *branch = "";
+	char *line_prefix;
+	char *cont_prefix;
 	char *child_prefix;
 
-	if (!is_root) {
-		printf("%s%s", prefix, is_last ? "└─ " : "├─ ");
+	if (!is_root)
 		branch = is_last ? "   " : "│  ";
-	} else {
-		printf("%s", prefix);
+
+	line_prefix = malloc(strlen(prefix) + strlen(is_root ? "" :
+					      (is_last ? "└─ " : "├─ ")) + 1);
+	if (!line_prefix)
+		return;
+	strcpy(line_prefix, prefix);
+	if (!is_root)
+		strcat(line_prefix, is_last ? "└─ " : "├─ ");
+
+	cont_prefix = malloc(strlen(prefix) + strlen(branch) + 1);
+	if (!cont_prefix) {
+		free(line_prefix);
+		return;
+	}
+	strcpy(cont_prefix, prefix);
+	strcat(cont_prefix, branch);
+
+	snprintf(head, sizeof(head), "%s(%d) [", proc->cmd, proc->pid);
+	prefix_len = strlen(line_prefix);
+	cont_len = strlen(cont_prefix);
+	caps = proc->caps_text;
+
+	if ((int)(prefix_len + strlen(head) + strlen(caps) + 1) <= width) {
+		printf("%s%s%s]\n", line_prefix, head, caps);
+		goto children;
 	}
 
-	printf("%s(%d) [%s]\n", proc->cmd, proc->pid, proc->caps_text);
+	avail = width > (int)(prefix_len + strlen(head)) ?
+		(size_t)(width - (int)(prefix_len + strlen(head))) : 10;
+	if (avail < 10)
+		avail = 10;
+	n = wrap_to(caps, avail);
+	printf("%s%s%.*s\n", line_prefix, head, (int)n, caps);
+	caps += n;
+
+	while (*caps) {
+		avail = width > (int)cont_len ? (size_t)(width - (int)cont_len) : 10;
+		if (avail < 10)
+			avail = 10;
+		if (strlen(caps) + 1 <= avail) {
+			printf("%s%s]\n", cont_prefix, caps);
+			break;
+		}
+		n = wrap_to(caps, avail);
+		printf("%s%.*s\n", cont_prefix, (int)n, caps);
+		caps += n;
+	}
+
+children:
+	free(line_prefix);
+	free(cont_prefix);
 
 	for (i = 0; i < count; i++) {
 		if (procs[i].ppid == proc->pid)
@@ -186,7 +283,7 @@ static void print_tree_node(struct proc_info *procs, size_t count,
 			continue;
 		child_seen++;
 		print_tree_node(procs, count, i, child_prefix,
-				child_seen == child_total, false);
+				child_seen == child_total, false, width);
 	}
 
 	free(child_prefix);
@@ -202,11 +299,12 @@ static void print_tree_node(struct proc_info *procs, size_t count,
 static void print_tree(struct proc_info *procs, size_t count)
 {
 	size_t i;
+	int width = get_width();
 
 	qsort(procs, count, sizeof(*procs), compare_pid);
 	for (i = 0; i < count; i++) {
 		if (!find_proc(procs, count, procs[i].ppid))
-			print_tree_node(procs, count, i, "", true, true);
+			print_tree_node(procs, count, i, "", true, true, width);
 	}
 }
 
