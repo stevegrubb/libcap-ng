@@ -33,6 +33,7 @@
 #include <linux/netlink.h>
 #include <linux/sock_diag.h>
 #include <linux/vm_sockets.h>
+#include <limits.h>
 #ifdef HAVE_LINUX_VM_SOCKETS_DIAG_H
 #include <linux/vm_sockets_diag.h>
 #endif
@@ -42,6 +43,7 @@
 #include <stdio.h>
 #include <stdio_ext.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
@@ -1139,10 +1141,14 @@ static void parse_inet_file(struct model *m, const char *path,
 		if (!ip)
 			continue;
 		if (af == AF_INET) {
-			unsigned int b0, b1, b2, b3;
-			if (sscanf(laddrh, "%2x%2x%2x%2x", &b3, &b2, &b1, &b0) != 4)
+			struct in_addr v4;
+			unsigned int host;
+
+			if (sscanf(laddrh, "%8x", &host) != 1)
 				continue;
-			snprintf(addr, sizeof(addr), "%u.%u.%u.%u", b0, b1, b2, b3);
+			v4.s_addr = htonl(host);
+			if (!inet_ntop(AF_INET, &v4, addr, sizeof(addr)))
+				continue;
 		} else {
 			unsigned char bytes[16] = { 0 };
 			int i;
@@ -1150,17 +1156,15 @@ static void parse_inet_file(struct model *m, const char *path,
 			if (strlen(laddrh) != 32)
 				continue;
 			for (i = 0; i < 4; i++) {
-				unsigned int w;
+				uint32_t host;
+				uint32_t net;
 
-				/* procfs stores each 32-bit word in little-endian hex. */
-				if (sscanf(laddrh + (i * 8), "%8x", &w) != 1) {
+				if (sscanf(laddrh + (i * 8), "%8x", &host) != 1) {
 					ok = 0;
 					break;
 				}
-				bytes[(i * 4) + 0] = (w >> 0) & 0xff;
-				bytes[(i * 4) + 1] = (w >> 8) & 0xff;
-				bytes[(i * 4) + 2] = (w >> 16) & 0xff;
-				bytes[(i * 4) + 3] = (w >> 24) & 0xff;
+				net = htonl(host);
+				memcpy(bytes + (i * 4), &net, sizeof(net));
 			}
 			if (!ok)
 				continue;
@@ -1380,7 +1384,11 @@ static int parse_vsock_diag_messages(struct model *m, int fd)
 			return -1;
 
 		struct nlmsghdr *nlh;
-		ssize_t rem = len;
+		unsigned int rem;
+
+		if (len > UINT_MAX)
+			return -1;
+		rem = (unsigned int)len;
 
 		for (nlh = (struct nlmsghdr *)buf;
 		     NLMSG_OK(nlh, rem);
@@ -1522,7 +1530,11 @@ static int parse_diag_messages(struct model *m, int fd, int proto, int af)
 		diag_dbg("recv proto=%d af=%d len=%zd", proto, af, len);
 
 		struct nlmsghdr *nlh;
-		ssize_t rem = len;
+		unsigned int rem;
+
+		if (len > UINT_MAX)
+			return -1;
+		rem = (unsigned int)len;
 
 		for (nlh = (struct nlmsghdr *)buf;
 		     NLMSG_OK(nlh, rem);
