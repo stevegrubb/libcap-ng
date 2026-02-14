@@ -96,6 +96,12 @@ struct strvec {
 	size_t cap;
 };
 
+struct strset {
+	const char **slots;
+	size_t slots_cap;
+	size_t used;
+};
+
 struct iface_addr {
 	int af;
 	char *addr;
@@ -175,6 +181,81 @@ struct model {
 
 static void free_process(struct process_info *p);
 static void free_model(struct model *m);
+
+static size_t str_hash(const char *s, size_t slots_cap)
+{
+	uint64_t x = 1469598103934665603ULL;
+
+	for (; *s; s++) {
+		x ^= (unsigned char)*s;
+		x *= 1099511628211ULL;
+	}
+	return (size_t)(x % slots_cap);
+}
+
+static int strset_rebuild(struct strset *set, size_t new_cap)
+{
+	const char **slots;
+	size_t i;
+
+	if (new_cap < 16)
+		new_cap = 16;
+	slots = calloc(new_cap, sizeof(*slots));
+	if (!slots) {
+		fprintf(stderr, "Out of memory\n");
+		return -1;
+	}
+	for (i = 0; i < set->slots_cap; i++) {
+		size_t pos;
+
+		if (!set->slots[i])
+			continue;
+		pos = str_hash(set->slots[i], new_cap);
+		while (slots[pos])
+			pos = (pos + 1) % new_cap;
+		slots[pos] = set->slots[i];
+	}
+	free(set->slots);
+	set->slots = slots;
+	set->slots_cap = new_cap;
+	return 0;
+}
+
+static int strset_add(struct strset *set, const char *s)
+{
+	size_t pos;
+
+	if (set->slots_cap == 0) {
+		if (strset_rebuild(set, 16) != 0)
+			return -1;
+	}
+	if ((set->used + 1) * 4 >= set->slots_cap * 3) {
+		size_t new_cap = set->slots_cap * 2;
+
+		if (new_cap < set->slots_cap)
+			return -1;
+		if (strset_rebuild(set, new_cap) != 0)
+			return -1;
+	}
+
+	pos = str_hash(s, set->slots_cap);
+	while (set->slots[pos]) {
+		if (strcmp(set->slots[pos], s) == 0)
+			return 0;
+		pos = (pos + 1) % set->slots_cap;
+	}
+	set->slots[pos] = s;
+	set->used++;
+	return 1;
+}
+
+static void strset_free(struct strset *set)
+{
+	free(set->slots);
+	set->slots = NULL;
+	set->slots_cap = 0;
+	set->used = 0;
+}
 
 static size_t inode_hash(unsigned long inode, size_t slots_cap)
 {
@@ -625,7 +706,8 @@ static char *caps_summary_for_pid(int pid, int *privileged, int *has_amb,
 	int *has_bnd)
 {
 	char out[4096];
-	size_t pos = 0;
+	char *dst = out;
+	size_t left = sizeof(out);
 	int i, first = 1;
 	capng_results_t c;
 
@@ -647,24 +729,19 @@ static char *caps_summary_for_pid(int pid, int *privileged, int *has_amb,
 
 	c = capng_have_capabilities(CAPNG_SELECT_CAPS);
 	if (c == CAPNG_FULL) {
-		int n = snprintf(out, sizeof(out), "(full)");
-
-		if (n < 0 || (size_t)n >= sizeof(out))
-			pos = sizeof(out) - 1;
-		else
-			pos = (size_t)n;
+		strncpy(out, "(full)", sizeof(out));
+		out[sizeof(out) - 1] = 0;
+		dst = out + strlen(out);
+		left = sizeof(out) - (size_t)(dst - out);
 	} else if (c <= CAPNG_NONE) {
-		int n = snprintf(out, sizeof(out), "(none)");
-
-		if (n < 0 || (size_t)n >= sizeof(out))
-			pos = sizeof(out) - 1;
-		else
-			pos = (size_t)n;
+		strncpy(out, "(none)", sizeof(out));
+		out[sizeof(out) - 1] = 0;
+		dst = out + strlen(out);
+		left = sizeof(out) - (size_t)(dst - out);
 	} else {
-		out[0] = 0;
-		pos = 0;
+		*dst = 0;
 		for (i = 0; i <= CAP_LAST_CAP; i++) {
-			int n;
+			size_t n;
 
 			if (!capng_have_capability(CAPNG_PERMITTED, i))
 				continue;
@@ -673,37 +750,49 @@ static char *caps_summary_for_pid(int pid, int *privileged, int *has_amb,
 				continue;
 			if (strncmp(name, "cap_", 4) == 0)
 				name += 4;
-			n = snprintf(out + pos, sizeof(out) - pos, "%s%s",
-				first ? "" : ", ", name);
-			if (n < 0)
-				break;
-			if ((size_t)n >= sizeof(out) - pos) {
-				pos = sizeof(out) - 1;
-				break;
+
+			if (!first) {
+				if (left <= 2)
+					break;
+				*dst++ = ',';
+				*dst++ = ' ';
+				left -= 2;
 			}
-			pos += n;
+			n = strlen(name);
+			if (left <= n)
+				break;
+			memcpy(dst, name, n);
+			dst += n;
+			left -= n;
+			*dst = 0;
 			first = 0;
 		}
 		if (out[0] == 0) {
-			strcpy(out, "(none)");
-			pos = strlen(out);
+			strncpy(out, "(none)", sizeof(out));
+			out[sizeof(out) - 1] = 0;
+			dst = out + strlen(out);
+			left = sizeof(out) - (size_t)(dst - out);
 		}
 	}
 	if (capng_have_capabilities(CAPNG_SELECT_AMBIENT) > CAPNG_NONE)
 		*has_amb = 1;
 	if (capng_have_capabilities(CAPNG_SELECT_BOUNDS) > CAPNG_NONE)
 		*has_bnd = 1;
-	if (*has_amb && pos < sizeof(out)) {
-		int n = snprintf(out + pos, sizeof(out) - pos,
-			" [ambient-present]");
+	if (*has_amb && left > 1) {
+		int n = snprintf(dst, left, " [ambient-present]");
 
-		if (n < 0 || (size_t)n >= sizeof(out) - pos)
-			pos = sizeof(out) - 1;
-		else
-			pos += n;
+		if (n > 0) {
+			if ((size_t)n >= left) {
+				dst = out + sizeof(out) - 1;
+				left = 1;
+			} else {
+				dst += n;
+				left -= (size_t)n;
+			}
+		}
 	}
 	if (*has_bnd)
-		snprintf(out + pos, sizeof(out) - pos,
+		snprintf(dst, left,
 			" [open-ended-bounding]");
 	return xstrdup(out);
 }
@@ -2374,6 +2463,7 @@ static void render_json(struct model *m)
 			i == PLANE_PACKET ? PLANE_PACKET_NAME : "VSOCK";
 		const char *scope = i == PLANE_INET_EXTERNAL ? "external" :
 			i == PLANE_INET_LOOPBACK ? "loopback" : NULL;
+		struct strset seen_ifaces = { 0 };
 		int first_vsock = 1;
 		int first_if = 1;
 
@@ -2466,21 +2556,24 @@ static void render_json(struct model *m)
 			puts("    ]}");
 			if (i + 1 != PLANE_COUNT)
 				puts(",");
+			strset_free(&seen_ifaces);
 			continue;
 		}
 
 		for (j = 0; j < m->eps_n; j++) {
+			struct strset seen_addrs = { 0 };
 			const char *ifn = m->eps[j].ifname;
 			int first_addr = 1;
+			int seen;
 
 			if (m->eps[j].plane != (enum plane_kind)i)
 				continue;
-			for (l = 0; l < j; l++) {
-				if (m->eps[l].plane == (enum plane_kind)i &&
-				    strcmp(m->eps[l].ifname, ifn) == 0)
-					break;
+			seen = strset_add(&seen_ifaces, ifn);
+			if (seen < 0) {
+				strset_free(&seen_addrs);
+				continue;
 			}
-			if (l != j)
+			if (seen == 0)
 				continue;
 			if (!first_if)
 				puts(",");
@@ -2492,16 +2585,14 @@ static void render_json(struct model *m)
 			for (k = 0; k < m->eps_n; k++) {
 				const char *ifa = m->eps[k].ifaddr;
 				int first_ep = 1;
+				int addr_seen;
 				if (m->eps[k].plane != (enum plane_kind)i ||
 				    strcmp(m->eps[k].ifname, ifn) != 0)
 					continue;
-				for (l = 0; l < k; l++) {
-					if (m->eps[l].plane == (enum plane_kind)i &&
-					    strcmp(m->eps[l].ifname, ifn) == 0 &&
-					    strcmp(m->eps[l].ifaddr, ifa) == 0)
-						break;
-				}
-				if (l != k)
+				addr_seen = strset_add(&seen_addrs, ifa);
+				if (addr_seen < 0)
+					break;
+				if (addr_seen == 0)
 					continue;
 				if (!first_addr)
 					puts(",");
@@ -2595,8 +2686,10 @@ static void render_json(struct model *m)
 				puts("        ]}");
 			}
 			puts("      ]}");
+			strset_free(&seen_addrs);
 		}
 		puts("    ]}");
+		strset_free(&seen_ifaces);
 		if (i + 1 != PLANE_COUNT)
 			puts(",");
 	}
