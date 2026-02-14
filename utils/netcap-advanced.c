@@ -123,6 +123,8 @@ struct process_info {
 	char *comm;
 	char *unit;
 	char *caps;
+	int ambient_present;
+	int open_ended_bounding;
 	int has_privileged_caps;
 	int securebits_locked;
 	struct defense_info defenses;
@@ -748,6 +750,8 @@ static struct process_info *add_process(struct model *m, int pid)
 	p->unit = extract_unit_from_cgroup(pid);
 	p->caps = caps_summary_for_pid(pid, &p->has_privileged_caps,
 		&has_amb, &has_bnd);
+	p->ambient_present = has_amb;
+	p->open_ended_bounding = has_bnd;
 	parse_status_defenses(pid, uid, &p->defenses, &secure_nondefault,
 		&secbits_raw, seen_no_new_privs, no_new_privs,
 		seen_seccomp, seccomp, seen_secbits, secbits);
@@ -2321,6 +2325,10 @@ static void render_json(struct model *m)
 					}
 					printf(", \"caps\": ");
 					json_escape(p->caps);
+					printf(", \"ambient_present\": %s",
+						p->ambient_present ? "true" : "false");
+					printf(", \"open_ended_bounding\": %s",
+						p->open_ended_bounding ? "true" : "false");
 					printf(", \"defenses\": {\"" DEFENSES_RUNS_AS_KEY
 						"\": ");
 					json_escape(p->defenses.runs_as_nonroot);
@@ -2435,6 +2443,10 @@ static void render_json(struct model *m)
 						}
 						printf(", \"caps\": ");
 						json_escape(p->caps);
+						printf(", \"ambient_present\": %s",
+							p->ambient_present ? "true" : "false");
+						printf(", \"open_ended_bounding\": %s",
+							p->open_ended_bounding ? "true" : "false");
 						printf(", \"defenses\": {\""
 							DEFENSES_RUNS_AS_KEY "\": ");
 						json_escape(p->defenses.runs_as_nonroot);
