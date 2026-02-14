@@ -25,6 +25,16 @@
  */
 
 #include "config.h"
+#include <arpa/inet.h>
+#include <linux/inet_diag.h>
+#include <linux/netlink.h>
+#include <linux/sock_diag.h>
+#include <linux/vm_sockets.h>
+#ifdef HAVE_LINUX_VM_SOCKETS_DIAG_H
+#include <linux/vm_sockets_diag.h>
+#endif
+#include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <stdio.h>
 #include <stdio_ext.h>
 #include <stdlib.h>
@@ -396,6 +406,318 @@ static void read_packet(void)
 	fclose(f);
 }
 
+static int parse_u32_hex_or_dec(const char *s, unsigned int *out)
+{
+	char *end;
+	unsigned long v;
+	int base = 10;
+	const char *p;
+
+	for (p = s; *p; p++) {
+		if ((*p >= 'a' && *p <= 'f') || (*p >= 'A' && *p <= 'F')) {
+			base = 16;
+			break;
+		}
+	}
+	if (strncmp(s, "0x", 2) == 0 || strncmp(s, "0X", 2) == 0)
+		base = 16;
+	if (base == 10 && strlen(s) > 3 && s[0] == '0')
+		base = 16;
+	v = strtoul(s, &end, base);
+	if (end == s || *end)
+		return -1;
+	*out = (unsigned int)v;
+	return 0;
+}
+
+static int read_diag_messages(int fd, int proto, const char *type)
+{
+	char buf[8192];
+	ssize_t len;
+
+	while (1) {
+		len = recv(fd, buf, sizeof(buf), 0);
+		if (len < 0) {
+			if (errno == EINTR)
+				continue;
+			return -1;
+		}
+		if (len == 0)
+			return -1;
+
+		struct nlmsghdr *nlh;
+		ssize_t rem = len;
+
+		for (nlh = (struct nlmsghdr *)buf;
+		     NLMSG_OK(nlh, rem);
+		     nlh = NLMSG_NEXT(nlh, rem)) {
+			struct inet_diag_msg *r;
+			unsigned int port;
+
+			if (nlh->nlmsg_type == NLMSG_DONE)
+				return 0;
+			if (nlh->nlmsg_type == NLMSG_ERROR) {
+				struct nlmsgerr *e;
+
+				if (nlh->nlmsg_len < NLMSG_LENGTH(sizeof(*e)))
+					return -1;
+				e = NLMSG_DATA(nlh);
+				if (e->error == 0)
+					continue;
+				errno = -e->error;
+				return -1;
+			}
+			if (nlh->nlmsg_len < NLMSG_LENGTH(sizeof(*r)))
+				continue;
+
+			r = NLMSG_DATA(nlh);
+			if (!list_find_inode(&l, r->idiag_inode))
+				continue;
+			port = ntohs(r->id.idiag_sport);
+			if (!port)
+				continue;
+
+			if (proto == IPPROTO_SCTP || proto == IPPROTO_DCCP)
+				report_finding(port, type, NULL);
+		}
+	}
+}
+
+static int read_diag_for_proto_af(int proto, int af, const char *type)
+{
+	struct {
+		struct nlmsghdr nlh;
+		struct inet_diag_req_v2 req;
+	} req;
+	struct sockaddr_nl sa;
+	int fd;
+	int rc = -1;
+
+	fd = socket(AF_NETLINK, SOCK_RAW, NETLINK_SOCK_DIAG);
+	if (fd < 0)
+		return -1;
+
+	memset(&req, 0, sizeof(req));
+	req.nlh.nlmsg_len = NLMSG_LENGTH(sizeof(req.req));
+	req.nlh.nlmsg_type = SOCK_DIAG_BY_FAMILY;
+	req.nlh.nlmsg_flags = NLM_F_REQUEST | NLM_F_DUMP;
+	req.req.sdiag_family = af;
+	req.req.sdiag_protocol = proto;
+	req.req.idiag_states = 1U << TCP_LISTEN;
+
+	memset(&sa, 0, sizeof(sa));
+	sa.nl_family = AF_NETLINK;
+	sa.nl_pid = 0;
+	if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) < 0)
+		goto out;
+
+	if (send(fd, &req, req.nlh.nlmsg_len, 0) < 0)
+		goto out;
+
+	rc = read_diag_messages(fd, proto, type);
+out:
+	close(fd);
+	return rc;
+}
+
+static void read_diag_listeners(void)
+{
+	int sctp_ok = 0;
+	int dccp_ok = 0;
+
+	if (read_diag_for_proto_af(IPPROTO_SCTP, AF_INET, "sctp") == 0)
+		sctp_ok = 1;
+	if (read_diag_for_proto_af(IPPROTO_SCTP, AF_INET6, "sctp") == 0)
+		sctp_ok = 1;
+	if (read_diag_for_proto_af(IPPROTO_DCCP, AF_INET, "dccp") == 0)
+		dccp_ok = 1;
+	if (read_diag_for_proto_af(IPPROTO_DCCP, AF_INET6, "dccp") == 0)
+		dccp_ok = 1;
+
+	if (!dccp_ok) {
+		read_net("/proc/net/dccp", "dccp", 1);
+		read_net("/proc/net/dccp6", "dccp", 1);
+	}
+	(void)sctp_ok;
+}
+
+#ifdef HAVE_LINUX_VM_SOCKETS_DIAG_H
+static int read_vsock_diag_messages(int fd)
+{
+	char buf[8192];
+	ssize_t len;
+
+	while (1) {
+		len = recv(fd, buf, sizeof(buf), 0);
+		if (len < 0) {
+			if (errno == EINTR)
+				continue;
+			return -1;
+		}
+		if (len == 0)
+			return -1;
+
+		struct nlmsghdr *nlh;
+		ssize_t rem = len;
+
+		for (nlh = (struct nlmsghdr *)buf;
+		     NLMSG_OK(nlh, rem);
+		     nlh = NLMSG_NEXT(nlh, rem)) {
+			struct vsock_diag_msg *r;
+
+			if (nlh->nlmsg_type == NLMSG_DONE)
+				return 0;
+			if (nlh->nlmsg_type == NLMSG_ERROR) {
+				struct nlmsgerr *e;
+
+				if (nlh->nlmsg_len < NLMSG_LENGTH(sizeof(*e)))
+					return -1;
+				e = NLMSG_DATA(nlh);
+				if (e->error == 0)
+					continue;
+				errno = -e->error;
+				return -1;
+			}
+			if (nlh->nlmsg_len < NLMSG_LENGTH(sizeof(*r)))
+				continue;
+
+			r = NLMSG_DATA(nlh);
+			if (r->vdiag_family != AF_VSOCK)
+				continue;
+			if (r->vdiag_type != SOCK_STREAM ||
+			    r->vdiag_state != TCP_LISTEN)
+				continue;
+			if (!list_find_inode(&l, r->vdiag_ino))
+				continue;
+			if (r->vdiag_src_port == 0)
+				continue;
+
+			report_finding(r->vdiag_src_port, "vsock", NULL);
+		}
+	}
+}
+
+static int read_vsock_diag(void)
+{
+	struct {
+		struct nlmsghdr nlh;
+		struct vsock_diag_req req;
+	} req;
+	struct sockaddr_nl sa;
+	int fd;
+	int rc = -1;
+
+	fd = socket(AF_NETLINK, SOCK_RAW, NETLINK_SOCK_DIAG);
+	if (fd < 0)
+		return -1;
+
+	memset(&req, 0, sizeof(req));
+	req.nlh.nlmsg_len = NLMSG_LENGTH(sizeof(req.req));
+	req.nlh.nlmsg_type = SOCK_DIAG_BY_FAMILY;
+	req.nlh.nlmsg_flags = NLM_F_REQUEST | NLM_F_DUMP;
+	req.req.sdiag_family = AF_VSOCK;
+	req.req.sdiag_protocol = 0;
+	req.req.vdiag_states = ~0U;
+
+	memset(&sa, 0, sizeof(sa));
+	sa.nl_family = AF_NETLINK;
+	sa.nl_pid = 0;
+
+	if (sendto(fd, &req, req.nlh.nlmsg_len, 0,
+		   (struct sockaddr *)&sa, sizeof(sa)) < 0)
+		goto out;
+
+	rc = read_vsock_diag_messages(fd);
+out:
+	close(fd);
+	return rc;
+}
+#else
+static int read_vsock_diag(void)
+{
+	errno = EOPNOTSUPP;
+	return -1;
+}
+#endif
+
+static void read_vsock_proc(void)
+{
+	FILE *f;
+	char line[512];
+
+	f = fopen("/proc/net/vsock", "rte");
+	if (f == NULL) {
+		if (errno != ENOENT)
+			fprintf(stderr, "Can't open /proc/net/vsock: %s\n",
+				strerror(errno));
+		return;
+	}
+	__fsetlocking(f, FSETLOCKING_BYCALLER);
+	while (fgets(line, sizeof(line), f)) {
+		char work[512];
+		char *tok[24];
+		char *save = NULL;
+		char *local, *sep, *s;
+		int tcnt = 0;
+		unsigned long inode;
+		unsigned int st, type, cid, port;
+
+		if (strstr(line, "Local") || strstr(line, "local") ||
+		    strstr(line, "Num"))
+			continue;
+		snprintf(work, sizeof(work), "%s", line);
+		s = strtok_r(work, " \t\n", &save);
+		while (s && tcnt < (int)(sizeof(tok) / sizeof(tok[0]))) {
+			tok[tcnt++] = s;
+			s = strtok_r(NULL, " \t\n", &save);
+		}
+		if (tcnt < 5)
+			continue;
+
+		local = NULL;
+		int i;
+
+		for (i = 0; i < tcnt; i++) {
+			if (strchr(tok[i], ':')) {
+				local = tok[i];
+				break;
+			}
+		}
+		if (!local)
+			continue;
+		sep = strchr(local, ':');
+		if (!sep)
+			continue;
+		*sep = '\0';
+		if (parse_u32_hex_or_dec(local, &cid) ||
+		    parse_u32_hex_or_dec(sep + 1, &port))
+			continue;
+
+		if (parse_u32_hex_or_dec(tok[tcnt - 2], &st))
+			continue;
+		if (parse_u32_hex_or_dec(tok[tcnt - 3], &type))
+			continue;
+		inode = strtoul(tok[tcnt - 1], NULL, 10);
+		if (!inode)
+			continue;
+
+		if (type != SOCK_STREAM || st != 0x0A || port == 0)
+			continue;
+		if (!list_find_inode(&l, inode))
+			continue;
+
+		(void)cid;
+		report_finding(port, "vsock", NULL);
+	}
+	fclose(f);
+}
+
+static void read_vsock(void)
+{
+	if (read_vsock_diag() < 0)
+		read_vsock_proc();
+}
+
 int main(int argc, char **argv)
 {
 	struct netcap_opts opts = { 0, 0 };
@@ -444,6 +766,10 @@ int main(int argc, char **argv)
 
 	// And last, read packet sockets
 	read_packet();
+
+	// Add listeners from protocols supported in advanced mode
+	read_diag_listeners();
+	read_vsock();
 
 	// Could also do icmp,netlink,unix
 
