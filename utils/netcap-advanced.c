@@ -90,10 +90,13 @@ enum plane_kind {
 /* Keep user-facing key name centralized to avoid legacy regressions. */
 #define DEFENSES_RUNS_AS_KEY	"runs_as_nonroot"
 
-struct strvec {
-	char **v;
-	size_t n;
-	size_t cap;
+enum endpoint_flags {
+	FLAG_WILDCARD_BIND = 1U << 0,
+	FLAG_LOOPBACK_ONLY = 1U << 1,
+	FLAG_PRIVILEGED_CAPS = 1U << 2,
+	FLAG_SECUREBITS_LOCKED = 1U << 3,
+	FLAG_HYPERVISOR_PLANE = 1U << 4,
+	FLAG_SSH_VSOCK_22 = 1U << 5,
 };
 
 struct strset {
@@ -178,9 +181,19 @@ struct model {
 };
 
 #define INODE_SLOT_EMPTY	SIZE_MAX
+#define PIDSET_EMPTY	INT_MIN
+
+struct pidset {
+	int *slots;
+	size_t cap;
+	size_t used;
+};
 
 static void free_process(struct process_info *p);
 static void free_model(struct model *m);
+static void print_tree_node(const char *prefix, int is_last,
+	const char *txt, int width);
+static int bind_sort_cmp(const char *a, const char *b);
 
 static size_t str_hash(const char *s, size_t slots_cap)
 {
@@ -419,27 +432,114 @@ static int vec_grow(void **v, size_t *cap, size_t item)
 	return 0;
 }
 
-/*
- * push_str_unique - append @s to @sv when not already present.
- * @sv: destination vector that takes ownership of duplicated strings.
- * @s: string to deduplicate and append.
- *
- * Returns 0 on success, -1 on allocation failure.
- * Side effects/assumptions: Operates on in-memory data and may read
- * procfs/netns state; it does not change kernel configuration.
- */
-static int push_str_unique(struct strvec *sv, const char *s)
+static size_t pid_hash(int pid, size_t cap)
 {
+	uint32_t v = (uint32_t)pid;
+
+	v ^= v >> 16;
+	v *= 0x7feb352dU;
+	v ^= v >> 15;
+	v *= 0x846ca68bU;
+	v ^= v >> 16;
+	return v % cap;
+}
+
+static int pidset_rehash(struct pidset *ps, size_t new_cap)
+{
+	int *new_slots;
 	size_t i;
 
-	for (i = 0; i < sv->n; i++)
-		if (strcmp(sv->v[i], s) == 0)
-			return 0;
-	if (sv->n == sv->cap && vec_grow((void **)&sv->v, &sv->cap,
-		sizeof(char *)))
+	new_slots = malloc(new_cap * sizeof(*new_slots));
+	if (!new_slots)
 		return -1;
-	sv->v[sv->n++] = xstrdup(s);
-	return sv->v[sv->n - 1] ? 0 : -1;
+	for (i = 0; i < new_cap; i++)
+		new_slots[i] = PIDSET_EMPTY;
+	for (i = 0; i < ps->cap; i++) {
+		size_t pos;
+
+		if (ps->slots[i] == PIDSET_EMPTY)
+			continue;
+		pos = pid_hash(ps->slots[i], new_cap);
+		while (new_slots[pos] != PIDSET_EMPTY)
+			pos = (pos + 1) % new_cap;
+		new_slots[pos] = ps->slots[i];
+	}
+	free(ps->slots);
+	ps->slots = new_slots;
+	ps->cap = new_cap;
+	return 0;
+}
+
+static int pidset_init(struct pidset *ps)
+{
+	ps->cap = 16;
+	ps->used = 0;
+	ps->slots = malloc(ps->cap * sizeof(*ps->slots));
+	if (!ps->slots)
+		return -1;
+	for (size_t i = 0; i < ps->cap; i++)
+		ps->slots[i] = PIDSET_EMPTY;
+	return 0;
+}
+
+static void pidset_free(struct pidset *ps)
+{
+	free(ps->slots);
+	ps->slots = NULL;
+	ps->cap = 0;
+	ps->used = 0;
+}
+
+static int pidset_test_and_add(struct pidset *ps, int pid)
+{
+	size_t pos;
+
+	if ((ps->used + 1) * 10 >= ps->cap * 7) {
+		if (pidset_rehash(ps, ps->cap * 2))
+			return -1;
+	}
+	pos = pid_hash(pid, ps->cap);
+	while (ps->slots[pos] != PIDSET_EMPTY) {
+		if (ps->slots[pos] == pid)
+			return 1;
+		pos = (pos + 1) % ps->cap;
+	}
+	ps->slots[pos] = pid;
+	ps->used++;
+	return 0;
+}
+
+static void print_flag_nodes(const char *pfx_flags, int width,
+	unsigned int flags)
+{
+	static const struct {
+		unsigned int bit;
+		const char *name;
+	} map[] = {
+		{ FLAG_HYPERVISOR_PLANE, "hypervisor-plane" },
+		{ FLAG_SSH_VSOCK_22, "ssh-on-vsock-port-22" },
+		{ FLAG_WILDCARD_BIND, "wildcard-bind" },
+		{ FLAG_LOOPBACK_ONLY, "loopback-only" },
+		{ FLAG_PRIVILEGED_CAPS, "privileged-caps" },
+		{ FLAG_SECUREBITS_LOCKED, "securebits-locked" },
+	};
+	size_t i;
+	size_t n = 0;
+	size_t printed = 0;
+
+	for (i = 0; i < sizeof(map) / sizeof(map[0]); i++)
+		if (flags & map[i].bit)
+			n++;
+	if (!n) {
+		print_tree_node(pfx_flags, 1, "(none)", width);
+		return;
+	}
+	for (i = 0; i < sizeof(map) / sizeof(map[0]); i++) {
+		if (!(flags & map[i].bit))
+			continue;
+		printed++;
+		print_tree_node(pfx_flags, printed == n, map[i].name, width);
+	}
 }
 
 /*
@@ -1975,19 +2075,15 @@ static int endpoint_cmp(const void *a, const void *b)
 		return strcmp(ea->ifname, eb->ifname);
 	if (strcmp(ea->proto, eb->proto) != 0)
 		return strcmp(ea->proto, eb->proto);
+	if (bind_sort_cmp(ea->bind, eb->bind) != 0)
+		return bind_sort_cmp(ea->bind, eb->bind);
 	if (ea->port != eb->port)
 		return ea->port < eb->port ? -1 : 1;
-	if (strcmp(ea->bind, eb->bind) != 0)
-		return strcmp(ea->bind, eb->bind);
 	if (strcmp(ea->ifaddr, eb->ifaddr) != 0)
 		return strcmp(ea->ifaddr, eb->ifaddr);
 	return strcmp(ea->label, eb->label);
 }
 
-struct ep_group_ref {
-	struct endpoint *e;
-	size_t idx;
-};
 
 static void format_bind_node(char *dst, size_t dst_sz, const char *bind)
 {
@@ -2009,21 +2105,6 @@ static int bind_sort_cmp(const char *a, const char *b)
 	return strcmp(a, b);
 }
 
-static int ep_group_ref_cmp(const void *a, const void *b)
-{
-	const struct ep_group_ref *ea = a;
-	const struct ep_group_ref *eb = b;
-	int c;
-
-	c = bind_sort_cmp(ea->e->bind, eb->e->bind);
-	if (c != 0)
-		return c;
-	if (ea->e->port != eb->e->port)
-		return ea->e->port < eb->e->port ? -1 : 1;
-	if (ea->idx != eb->idx)
-		return ea->idx < eb->idx ? -1 : 1;
-	return 0;
-}
 
 /*
  * render_tree - print human-readable advanced report as a tree.
@@ -2091,7 +2172,6 @@ static void render_tree(struct model *m)
 					struct process_info *p = e->procs[k];
 					char pfx_child[256], pfx_def[256], pfx_flags[256];
 					char line[512];
-					struct strvec flags = { 0 };
 					const char *def_nodes[8];
 					char def_buf[8][512];
 					size_t def_n = 0;
@@ -2150,31 +2230,21 @@ static void render_tree(struct model *m)
 						print_tree_node(pfx_def, ai + 1 == def_n,
 							def_nodes[ai], width);
 
-					push_str_unique(&flags, "hypervisor-plane");
-					if (e->port == 22)
-						push_str_unique(&flags,
-							"ssh-on-vsock-port-22");
-					if (p->has_privileged_caps)
-						push_str_unique(&flags,
-							"privileged-caps");
-					if (p->securebits_locked)
-						push_str_unique(&flags,
-							"securebits-locked");
+					{
+						unsigned int flags = FLAG_HYPERVISOR_PLANE;
 
-					print_tree_node(pfx_child, 1, "flags", width);
-					build_child_prefix(pfx_flags, sizeof(pfx_flags),
-						pfx_child, 1);
-					if (flags.n == 0)
-						print_tree_node(pfx_flags, 1, "(none)", width);
-					else {
-						for (ai = 0; ai < flags.n; ai++)
-							print_tree_node(pfx_flags,
-								ai + 1 == flags.n,
-								flags.v[ai], width);
+						if (e->port == 22)
+							flags |= FLAG_SSH_VSOCK_22;
+						if (p->has_privileged_caps)
+							flags |= FLAG_PRIVILEGED_CAPS;
+						if (p->securebits_locked)
+							flags |= FLAG_SECUREBITS_LOCKED;
+
+						print_tree_node(pfx_child, 1, "flags", width);
+						build_child_prefix(pfx_flags, sizeof(pfx_flags),
+							pfx_child, 1);
+						print_flag_nodes(pfx_flags, width, flags);
 					}
-					for (ai = 0; ai < flags.n; ai++)
-						free(flags.v[ai]);
-					free(flags.v);
 				}
 			}
 			continue;
@@ -2232,90 +2302,76 @@ static void render_tree(struct model *m)
 						pfx_proto_root, proto_last);
 
 					{
-						size_t ref_n = proto_end - proto_start;
-						size_t bi;
-						struct ep_group_ref *refs =
-							calloc(ref_n, sizeof(*refs));
+						size_t bi = proto_start;
 
-						if (!refs) {
-							j = proto_end;
-							continue;
-						}
-
-						for (bi = 0; bi < ref_n; bi++) {
-							refs[bi].e = &m->eps[proto_start + bi];
-							refs[bi].idx = proto_start + bi;
-						}
-						qsort(refs, ref_n, sizeof(*refs), ep_group_ref_cmp);
-
-						for (bi = 0; bi < ref_n; ) {
-							size_t bind_start = bi, bind_end;
+						while (bi < proto_end) {
+							size_t bind_start = bi;
+							size_t bind_end;
 							char bind_line[128], pfx_port[256];
 							int bind_last;
 
 							bind_end = bi + 1;
-							while (bind_end < ref_n &&
-							       strcmp(refs[bind_end].e->bind,
-								refs[bind_start].e->bind) == 0)
+							while (bind_end < proto_end &&
+							       strcmp(m->eps[bind_end].bind,
+								m->eps[bind_start].bind) == 0)
 								bind_end++;
-							bind_last = (bind_end == ref_n);
+							bind_last = (bind_end == proto_end);
 
 							format_bind_node(bind_line, sizeof(bind_line),
-								refs[bind_start].e->bind);
-							print_tree_node(pfx_bind, bind_last,
-								bind_line, width);
-							build_child_prefix(pfx_port,
-								sizeof(pfx_port),
+								m->eps[bind_start].bind);
+							print_tree_node(pfx_bind, bind_last, bind_line, width);
+							build_child_prefix(pfx_port, sizeof(pfx_port),
 								pfx_bind, bind_last);
 
 							for (bi = bind_start; bi < bind_end; ) {
-								size_t port_start = bi, port_end;
+								size_t port_start = bi;
+								size_t port_end;
 								char pfx_proc[256], port_line[64];
 								int port_last;
 								size_t k;
+								struct pidset seen;
 
 								port_end = bi + 1;
 								while (port_end < bind_end &&
-								       refs[port_end].e->port ==
-									refs[port_start].e->port)
+								       m->eps[port_end].port ==
+									m->eps[port_start].port)
 									port_end++;
 								port_last = (port_end == bind_end);
 
 								snprintf(port_line, sizeof(port_line), "%u",
-									refs[port_start].e->port);
+									m->eps[port_start].port);
 								print_tree_node(pfx_port, port_last,
 									port_line, width);
-								build_child_prefix(pfx_proc,
-									sizeof(pfx_proc),
+								build_child_prefix(pfx_proc, sizeof(pfx_proc),
 									pfx_port, port_last);
 
+								if (pidset_init(&seen)) {
+									bi = port_end;
+									continue;
+								}
+
 								for (k = port_start; k < port_end; k++) {
-									struct endpoint *e = refs[k].e;
+									struct endpoint *e = &m->eps[k];
 									size_t pi;
 
 									for (pi = 0; pi < e->procs_n; pi++) {
-										size_t kk, kpi;
+										int seen_rc;
 										struct process_info *p = e->procs[pi];
 										char pfx_child[256], pfx_def[256], pfx_flags[256];
 										char line[512];
-										struct strvec flags = { 0 };
 										const char *def_nodes[8];
 										char def_buf[8][512];
 										size_t def_n = 0;
 										size_t ai;
-										int proc_last = (k + 1 == port_end) &&
+										int proc_last;
+										unsigned int flags = 0;
+
+										seen_rc = pidset_test_and_add(&seen, p->pid);
+										if (seen_rc)
+											continue;
+
+										proc_last = (k + 1 == port_end) &&
 											(pi + 1 == e->procs_n);
-
-										for (kk = port_start; kk <= k; kk++) {
-											struct endpoint *prev = refs[kk].e;
-
-											for (kpi = 0; kpi < prev->procs_n; kpi++) {
-												if (kk == k && kpi >= pi)
-													break;
-												if (prev->procs[kpi]->pid == p->pid)
-													goto next_proc;
-											}
-										}
 
 										snprintf(line, sizeof(line),
 											"%s (pid=%d uid=%d%s%s)",
@@ -2343,26 +2399,28 @@ static void render_tree(struct model *m)
 											"seccomp: %s", p->defenses.seccomp);
 										def_nodes[def_n] = def_buf[def_n];
 										def_n++;
+
 										if (p->defenses.lsm_label) {
 											snprintf(def_buf[def_n],
 												sizeof(def_buf[def_n]),
 												"lsm: %s", p->defenses.lsm_label);
 											def_nodes[def_n] = def_buf[def_n];
-											def_n++;
+										def_n++;
 										}
+
 										if (p->defenses.securebits) {
 											snprintf(def_buf[def_n],
 												sizeof(def_buf[def_n]),
 												"securebits: %s",
 												p->defenses.securebits);
 											def_nodes[def_n] = def_buf[def_n];
-											def_n++;
+										def_n++;
 											snprintf(def_buf[def_n],
 												sizeof(def_buf[def_n]),
 												"securebits_locked: %s",
 												p->defenses.securebits_locked);
 											def_nodes[def_n] = def_buf[def_n];
-											def_n++;
+										def_n++;
 										}
 
 										print_tree_node(pfx_child, 0, "defenses", width);
@@ -2373,39 +2431,25 @@ static void render_tree(struct model *m)
 												def_nodes[ai], width);
 
 										if (e->wildcard_bind)
-											push_str_unique(&flags, "wildcard-bind");
+											flags |= FLAG_WILDCARD_BIND;
 										if (e->loopback_only)
-											push_str_unique(&flags, "loopback-only");
+											flags |= FLAG_LOOPBACK_ONLY;
 										if (p->has_privileged_caps)
-											push_str_unique(&flags, "privileged-caps");
+											flags |= FLAG_PRIVILEGED_CAPS;
 										if (p->securebits_locked)
-											push_str_unique(&flags,
-												"securebits-locked");
+											flags |= FLAG_SECUREBITS_LOCKED;
 
 										print_tree_node(pfx_child, 1, "flags", width);
-										build_child_prefix(pfx_flags, sizeof(pfx_flags),
-											pfx_child, 1);
-										if (flags.n == 0)
-											print_tree_node(pfx_flags, 1,
-												"(none)", width);
-										else {
-											for (ai = 0; ai < flags.n; ai++)
-												print_tree_node(pfx_flags,
-													ai + 1 == flags.n,
-													flags.v[ai], width);
-										}
-										for (ai = 0; ai < flags.n; ai++)
-											free(flags.v[ai]);
-										free(flags.v);
-	next_proc:
-										;
+										build_child_prefix(pfx_flags,
+											sizeof(pfx_flags), pfx_child, 1);
+										print_flag_nodes(pfx_flags, width, flags);
 									}
 								}
+
+								pidset_free(&seen);
 								bi = port_end;
 							}
 						}
-
-						free(refs);
 					}
 					j = proto_end;
 				}
