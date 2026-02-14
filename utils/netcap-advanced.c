@@ -69,8 +69,6 @@
  * restricted privileges can hide processes/sockets and yield partial output.
  */
 
-#define MAX_BARS 64
-
 #ifdef NETCAP_DIAG_DEBUG
 #define diag_dbg(fmt, ...) \
 	fprintf(stderr, "netcap-diag: " fmt "\n", ##__VA_ARGS__)
