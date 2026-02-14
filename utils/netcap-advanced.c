@@ -81,6 +81,7 @@ enum plane_kind {
 	PLANE_INET_LOOPBACK,
 	PLANE_PACKET,
 	PLANE_VSOCK,
+	PLANE_COUNT,
 };
 
 #define PLANE_PACKET_NAME	"LINK-LAYER"
@@ -626,12 +627,12 @@ static char *caps_summary_for_pid(int pid, int *privileged, int *has_amb,
  * procfs/netns state; it does not change kernel configuration.
  */
 static void parse_status_defenses(int pid, int uid, struct defense_info *d,
-	int *securebits_nondefault, unsigned long *secbits_raw)
+	int *securebits_nondefault, unsigned long *secbits_raw,
+	int seen_no_new_privs, unsigned long no_new_privs,
+	int seen_seccomp, unsigned long seccomp,
+	int seen_secbits, unsigned long secbits)
 {
-	char path[64], line[512];
-	FILE *f;
-	unsigned long secbits = 0;
-	int seen_secbits = 0;
+	char path[64];
 
 	d->runs_as_nonroot = xstrdup(uid != 0 ? "yes" : "no");
 	d->no_new_privs = xstrdup("unknown");
@@ -642,29 +643,19 @@ static void parse_status_defenses(int pid, int uid, struct defense_info *d,
 	*securebits_nondefault = 0;
 	*secbits_raw = 0;
 
-	snprintf(path, sizeof(path), "/proc/%d/status", pid);
-	f = fopen(path, "rte");
-	if (!f)
-		return;
-	__fsetlocking(f, FSETLOCKING_BYCALLER);
-	while (fgets(line, sizeof(line), f)) {
-		unsigned long val;
-		if (sscanf(line, "NoNewPrivs:\t%lu", &val) == 1) {
-			free(d->no_new_privs);
-			d->no_new_privs = xstrdup(val ? "yes" : "no");
-		} else if (sscanf(line, "Seccomp:\t%lu", &val) == 1) {
-			free(d->seccomp);
-			if (val == 0)
-				d->seccomp = xstrdup("disabled");
-			else if (val == 1)
-				d->seccomp = xstrdup("strict");
-			else
-				d->seccomp = xstrdup("filter");
-		} else if (sscanf(line, "Secbits:\t%lx", &secbits) == 1) {
-			seen_secbits = 1;
-		}
+	if (seen_no_new_privs) {
+		free(d->no_new_privs);
+		d->no_new_privs = xstrdup(no_new_privs ? "yes" : "no");
 	}
-	fclose(f);
+	if (seen_seccomp) {
+		free(d->seccomp);
+		if (seccomp == 0)
+			d->seccomp = xstrdup("disabled");
+		else if (seccomp == 1)
+			d->seccomp = xstrdup("strict");
+		else
+			d->seccomp = xstrdup("filter");
+	}
 
 	snprintf(path, sizeof(path), "/proc/%d/attr/current", pid);
 	d->lsm_label = read_first_line(path);
@@ -709,6 +700,12 @@ static struct process_info *add_process(struct model *m, int pid)
 	int has_amb = 0, has_bnd = 0;
 	int secure_nondefault = 0;
 	unsigned long secbits_raw = 0;
+	unsigned long no_new_privs = 0;
+	unsigned long seccomp = 0;
+	unsigned long secbits = 0;
+	int seen_no_new_privs = 0;
+	int seen_seccomp = 0;
+	int seen_secbits = 0;
 	struct process_info *p;
 
 	snprintf(path, sizeof(path), "/proc/%d/status", pid);
@@ -721,6 +718,18 @@ static struct process_info *add_process(struct model *m, int pid)
 			continue;
 		if (sscanf(line, "Uid:\t%d", &uid) == 1)
 			continue;
+		if (sscanf(line, "NoNewPrivs:\t%lu", &no_new_privs) == 1) {
+			seen_no_new_privs = 1;
+			continue;
+		}
+		if (sscanf(line, "Seccomp:\t%lu", &seccomp) == 1) {
+			seen_seccomp = 1;
+			continue;
+		}
+		if (sscanf(line, "Secbits:\t%lx", &secbits) == 1) {
+			seen_secbits = 1;
+			continue;
+		}
 	}
 	fclose(f);
 	if (uid < 0)
@@ -738,7 +747,8 @@ static struct process_info *add_process(struct model *m, int pid)
 	p->caps = caps_summary_for_pid(pid, &p->has_privileged_caps,
 		&has_amb, &has_bnd);
 	parse_status_defenses(pid, uid, &p->defenses, &secure_nondefault,
-		&secbits_raw);
+		&secbits_raw, seen_no_new_privs, no_new_privs,
+		seen_seccomp, seccomp, seen_secbits, secbits);
 	p->securebits_locked = p->defenses.securebits_locked &&
 		strcmp(p->defenses.securebits_locked, "yes") == 0;
 	if (!p->comm || !p->caps || !p->defenses.runs_as_nonroot ||
@@ -1833,7 +1843,7 @@ static void render_tree(struct model *m)
 	qsort(m->eps, m->eps_n, sizeof(struct endpoint), endpoint_cmp);
 	puts("netcap --advanced");
 
-	for (i = 0; i < 4; i++) {
+	for (i = 0; i < PLANE_COUNT; i++) {
 		size_t j;
 		for (j = 0; j < m->eps_n; j++) {
 			if (m->eps[j].plane == (enum plane_kind)i) {
@@ -2247,7 +2257,7 @@ static void render_json(struct model *m)
 	puts("{");
 	puts("  \"schema_version\": 1,");
 	puts("  \"planes\": [");
-	for (i = 0; i < 4; i++) {
+	for (i = 0; i < PLANE_COUNT; i++) {
 		const char *pname = i == PLANE_INET_EXTERNAL ? "INET" :
 			i == PLANE_INET_LOOPBACK ? "INET" :
 			i == PLANE_PACKET ? PLANE_PACKET_NAME : "VSOCK";
@@ -2339,7 +2349,7 @@ static void render_json(struct model *m)
 				puts("      ]}");
 			}
 			puts("    ]}");
-			if (i != 3)
+			if (i + 1 != PLANE_COUNT)
 				puts(",");
 			continue;
 		}
@@ -2468,7 +2478,7 @@ static void render_json(struct model *m)
 			puts("      ]}");
 		}
 		puts("    ]}");
-		if (i != 3)
+		if (i + 1 != PLANE_COUNT)
 			puts(",");
 	}
 	puts("  ]");
