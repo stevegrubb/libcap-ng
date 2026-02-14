@@ -529,6 +529,7 @@ static char *caps_summary_for_pid(int pid, int *privileged, int *has_amb,
 	int *has_bnd)
 {
 	char out[4096];
+	size_t pos = 0;
 	int i, first = 1;
 	capng_results_t c;
 
@@ -549,36 +550,65 @@ static char *caps_summary_for_pid(int pid, int *privileged, int *has_amb,
 		*privileged = 1;
 
 	c = capng_have_capabilities(CAPNG_SELECT_CAPS);
-	if (c == CAPNG_FULL)
-		strcpy(out, "(full)");
-	else if (c <= CAPNG_NONE)
-		strcpy(out, "(none)");
-	else {
+	if (c == CAPNG_FULL) {
+		int n = snprintf(out, sizeof(out), "(full)");
+
+		if (n < 0 || (size_t)n >= sizeof(out))
+			pos = sizeof(out) - 1;
+		else
+			pos = (size_t)n;
+	} else if (c <= CAPNG_NONE) {
+		int n = snprintf(out, sizeof(out), "(none)");
+
+		if (n < 0 || (size_t)n >= sizeof(out))
+			pos = sizeof(out) - 1;
+		else
+			pos = (size_t)n;
+	} else {
 		out[0] = 0;
+		pos = 0;
 		for (i = 0; i <= CAP_LAST_CAP; i++) {
+			int n;
+
 			if (!capng_have_capability(CAPNG_PERMITTED, i))
 				continue;
 			const char *name = capng_capability_to_name(i);
 			if (!name)
 				continue;
-			if (!first)
-				strcat(out, ", ");
 			if (strncmp(name, "cap_", 4) == 0)
 				name += 4;
-			strcat(out, name);
+			n = snprintf(out + pos, sizeof(out) - pos, "%s%s",
+				first ? "" : ", ", name);
+			if (n < 0)
+				break;
+			if ((size_t)n >= sizeof(out) - pos) {
+				pos = sizeof(out) - 1;
+				break;
+			}
+			pos += n;
 			first = 0;
 		}
-		if (out[0] == 0)
+		if (out[0] == 0) {
 			strcpy(out, "(none)");
+			pos = strlen(out);
+		}
 	}
 	if (capng_have_capabilities(CAPNG_SELECT_AMBIENT) > CAPNG_NONE)
 		*has_amb = 1;
 	if (capng_have_capabilities(CAPNG_SELECT_BOUNDS) > CAPNG_NONE)
 		*has_bnd = 1;
-	if (*has_amb)
-		strcat(out, " [ambient-present]");
+	if (*has_amb && pos < sizeof(out)) {
+		int n = snprintf(out + pos, sizeof(out) - pos,
+			" [ambient-present]");
+
+		if (n < 0 || (size_t)n >= sizeof(out) - pos)
+			pos = sizeof(out) - 1;
+		else
+			pos += n;
+	}
 	if (*has_bnd)
-		strcat(out, " [open-ended-bounding]");
+		snprintf(out + pos, sizeof(out) - pos,
+			" [open-ended-bounding]");
 	return xstrdup(out);
 }
 
@@ -886,7 +916,7 @@ static int add_endpoint(struct model *m, const char *proto, const char *bind,
 	if (m->eps_n == m->eps_cap && vec_grow((void **)&m->eps, &m->eps_cap,
 	    sizeof(struct endpoint)))
 		return -1;
-	e = &m->eps[m->eps_n++];
+	e = &m->eps[m->eps_n];
 	memset(e, 0, sizeof(*e));
 	e->proto = xstrdup(proto);
 	e->bind = xstrdup(bind);
@@ -899,8 +929,16 @@ static int add_endpoint(struct model *m, const char *proto, const char *bind,
 	e->ifaddr = xstrdup(ifaddr);
 	e->wildcard_bind = wildcard;
 	e->loopback_only = loopback;
-	if (!e->proto || !e->bind || !e->label || !e->ifname || !e->ifaddr)
+	if (!e->proto || !e->bind || !e->label || !e->ifname || !e->ifaddr) {
+		free(e->proto);
+		free(e->bind);
+		free(e->label);
+		free(e->ifname);
+		free(e->ifaddr);
+		memset(e, 0, sizeof(*e));
 		return -1;
+	}
+	m->eps_n++;
 add_procs:
 	for (j = 0; j < ip->n; j++) {
 		size_t k;
@@ -950,7 +988,7 @@ static int add_vsock_endpoint(struct model *m, const char *type,
 	if (m->eps_n == m->eps_cap && vec_grow((void **)&m->eps, &m->eps_cap,
 	    sizeof(struct endpoint)))
 		return -1;
-	e = &m->eps[m->eps_n++];
+	e = &m->eps[m->eps_n];
 	memset(e, 0, sizeof(*e));
 	e->proto = xstrdup(type);
 	e->bind = xstrdup(cidbuf);
@@ -961,8 +999,16 @@ static int add_vsock_endpoint(struct model *m, const char *type,
 	e->plane = PLANE_VSOCK;
 	e->ifname = xstrdup("");
 	e->ifaddr = xstrdup("");
-	if (!e->proto || !e->bind || !e->label || !e->ifname || !e->ifaddr)
+	if (!e->proto || !e->bind || !e->label || !e->ifname || !e->ifaddr) {
+		free(e->proto);
+		free(e->bind);
+		free(e->label);
+		free(e->ifname);
+		free(e->ifaddr);
+		memset(e, 0, sizeof(*e));
 		return -1;
+	}
+	m->eps_n++;
 
 add_procs:
 	for (j = 0; j < ip->n; j++) {
