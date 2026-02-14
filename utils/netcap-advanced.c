@@ -164,13 +164,104 @@ struct model {
 	struct inode_proc *inode_map;
 	size_t inode_n;
 	size_t inode_cap;
+	size_t *inode_slots;
+	size_t inode_slots_cap;
 	struct endpoint *eps;
 	size_t eps_n;
 	size_t eps_cap;
 };
 
+#define INODE_SLOT_EMPTY	SIZE_MAX
+
 static void free_process(struct process_info *p);
 static void free_model(struct model *m);
+
+static size_t inode_hash(unsigned long inode, size_t slots_cap)
+{
+	uint64_t x = inode;
+
+	x ^= x >> 33;
+	x *= 0xff51afd7ed558ccdULL;
+	x ^= x >> 33;
+	x *= 0xc4ceb9fe1a85ec53ULL;
+	x ^= x >> 33;
+	return (size_t)(x % slots_cap);
+}
+
+static int inode_hash_rebuild(struct model *m, size_t new_cap)
+{
+	size_t i;
+	size_t *slots;
+
+	if (new_cap < 16)
+		new_cap = 16;
+	slots = malloc(new_cap * sizeof(*slots));
+	if (!slots) {
+		fprintf(stderr, "Out of memory\n");
+		return -1;
+	}
+	for (i = 0; i < new_cap; i++)
+		slots[i] = INODE_SLOT_EMPTY;
+
+	for (i = 0; i < m->inode_n; i++) {
+		size_t pos = inode_hash(m->inode_map[i].inode, new_cap);
+
+		while (slots[pos] != INODE_SLOT_EMPTY)
+			pos = (pos + 1) % new_cap;
+		slots[pos] = i;
+	}
+
+	free(m->inode_slots);
+	m->inode_slots = slots;
+	m->inode_slots_cap = new_cap;
+	return 0;
+}
+
+static int inode_hash_ensure_capacity(struct model *m)
+{
+	size_t new_cap;
+
+	if (m->inode_slots_cap == 0)
+		return inode_hash_rebuild(m, 16);
+	if ((m->inode_n + 1) * 4 < m->inode_slots_cap * 3)
+		return 0;
+
+	new_cap = m->inode_slots_cap * 2;
+	if (new_cap < m->inode_slots_cap)
+		return -1;
+	return inode_hash_rebuild(m, new_cap);
+}
+
+static ssize_t inode_hash_find(struct model *m, unsigned long inode)
+{
+	size_t pos;
+	size_t start;
+
+	if (m->inode_slots_cap == 0)
+		return -1;
+
+	pos = inode_hash(inode, m->inode_slots_cap);
+	start = pos;
+	while (m->inode_slots[pos] != INODE_SLOT_EMPTY) {
+		size_t idx = m->inode_slots[pos];
+
+		if (m->inode_map[idx].inode == inode)
+			return idx;
+		pos = (pos + 1) % m->inode_slots_cap;
+		if (pos == start)
+			break;
+	}
+	return -1;
+}
+
+static void inode_hash_insert(struct model *m, size_t idx)
+{
+	size_t pos = inode_hash(m->inode_map[idx].inode, m->inode_slots_cap);
+
+	while (m->inode_slots[pos] != INODE_SLOT_EMPTY)
+		pos = (pos + 1) % m->inode_slots_cap;
+	m->inode_slots[pos] = idx;
+}
 
 /*
  * get_width - choose terminal width for wrapped tree output.
@@ -734,6 +825,9 @@ static struct process_info *add_process(struct model *m, int pid)
 			seen_secbits = 1;
 			continue;
 		}
+		if (uid >= 0 && comm[0] && seen_no_new_privs && seen_seccomp &&
+		    seen_secbits)
+			break;
 	}
 	fclose(f);
 	if (uid < 0)
@@ -785,22 +879,23 @@ fail:
 static int add_inode_proc(struct model *m, unsigned long inode,
 	struct process_info *p)
 {
-	size_t i, j;
+	size_t j;
+	ssize_t idx;
 	struct inode_proc *ip = NULL;
 
-	for (i = 0; i < m->inode_n; i++) {
-		if (m->inode_map[i].inode == inode) {
-			ip = &m->inode_map[i];
-			break;
-		}
-	}
+	idx = inode_hash_find(m, inode);
+	if (idx >= 0)
+		ip = &m->inode_map[idx];
 	if (!ip) {
+		if (inode_hash_ensure_capacity(m) != 0)
+			return -1;
 		if (m->inode_n == m->inode_cap && vec_grow((void **)&m->inode_map,
 		    &m->inode_cap, sizeof(struct inode_proc)))
 			return -1;
 		ip = &m->inode_map[m->inode_n++];
 		memset(ip, 0, sizeof(*ip));
 		ip->inode = inode;
+		inode_hash_insert(m, m->inode_n - 1);
 	}
 	for (j = 0; j < ip->n; j++)
 		if (ip->procs[j]->pid == p->pid)
@@ -891,12 +986,12 @@ static void collect_proc_inodes(struct model *m)
  */
 static struct inode_proc *lookup_inode(struct model *m, unsigned long inode)
 {
-	size_t i;
+	ssize_t idx;
 
-	for (i = 0; i < m->inode_n; i++)
-		if (m->inode_map[i].inode == inode)
-			return &m->inode_map[i];
-	return NULL;
+	idx = inode_hash_find(m, inode);
+	if (idx < 0)
+		return NULL;
+	return &m->inode_map[idx];
 }
 
 /*
@@ -2557,6 +2652,7 @@ static void free_model(struct model *m)
 	for (i = 0; i < m->inode_n; i++)
 		free(m->inode_map[i].procs);
 	free(m->inode_map);
+	free(m->inode_slots);
 	for (i = 0; i < m->eps_n; i++) {
 		free(m->eps[i].proto);
 		free(m->eps[i].bind);
