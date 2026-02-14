@@ -30,6 +30,7 @@
 #include <linux/netlink.h>
 #include <linux/sock_diag.h>
 #include <linux/vm_sockets.h>
+#include <limits.h>
 #ifdef HAVE_LINUX_VM_SOCKETS_DIAG_H
 #include <linux/vm_sockets_diag.h>
 #endif
@@ -446,7 +447,11 @@ static int read_diag_messages(int fd, int proto, const char *type)
 			return -1;
 
 		struct nlmsghdr *nlh;
-		ssize_t rem = len;
+		unsigned int rem;
+
+		if (len > UINT_MAX)
+			return -1;
+		rem = (unsigned int)len;
 
 		for (nlh = (struct nlmsghdr *)buf;
 		     NLMSG_OK(nlh, rem);
@@ -558,7 +563,11 @@ static int read_vsock_diag_messages(int fd)
 			return -1;
 
 		struct nlmsghdr *nlh;
-		ssize_t rem = len;
+		unsigned int rem;
+
+		if (len > UINT_MAX)
+			return -1;
+		rem = (unsigned int)len;
 
 		for (nlh = (struct nlmsghdr *)buf;
 		     NLMSG_OK(nlh, rem);
