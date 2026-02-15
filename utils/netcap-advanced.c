@@ -1434,7 +1434,12 @@ static void parse_inet_file(struct model *m, const char *path,
 
 			if (sscanf(laddrh, "%8x", &host) != 1)
 				continue;
-			v4.s_addr = htonl(host);
+			/*
+			 * procfs inet tables print IPv4 addresses as host-
+			 * order hex. Assigning directly to s_addr keeps the
+			 * bytes correct on both little- and big-endian systems.
+			 */
+			v4.s_addr = host;
 			if (!inet_ntop(AF_INET, &v4, addr, sizeof(addr)))
 				continue;
 		} else {
