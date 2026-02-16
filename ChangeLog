@@ -5,6 +5,7 @@
 - In cap-audit, add JSON escaping to output
 - In cap-audit, filter pre-exec, startup, and shutdown capability noise
 - pscap now has a --tree disply mode
+- More code cleanups
 
 0.9
 - Fix python path when invoking py-compile (Jan Palus)
