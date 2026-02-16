@@ -259,7 +259,7 @@ static void report_finding(unsigned int port, const char *type, const char *ifc)
 
 	// And print out anything with capabilities
 	if (header == 0) {
-		printf("%-5s %-5s %-10s %-16s %-8s %-6s %s\n",
+		printf("%-7s %-7s %-16s %-15s %-8s %-15s %s\n",
 			"ppid", "pid", "acct", "command", "type", "port",
 			"capabilities");
 		header = 1;
@@ -277,14 +277,14 @@ static void report_finding(unsigned int port, const char *type, const char *ifc)
 		// If not taking this branch, use last val
 	}
 	if (tacct) {
-		printf("%-5d %-5d %-10s", n->ppid, n->pid, tacct);
+		printf("%-7d %-7d %-16s", n->ppid, n->pid, tacct);
 	} else
-		printf("%-5d %-5d %-10d", n->ppid, n->pid, last_uid);
-	printf(" %-16s %-8s", n->cmd, type);
+		printf("%-7d %-7d %-16d", n->ppid, n->pid, last_uid);
+	printf(" %-15s %-8s", n->cmd, type);
 	if (ifc)
-		printf(" %-6s", ifc);
+		printf(" %-15s", ifc);
 	else
-		printf(" %-6u", port);
+		printf(" %-15u", port);
 	printf(" %s %s%s\n", n->capabilities, n->ambient, n->bounds);
 }
 
