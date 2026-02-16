@@ -427,7 +427,7 @@ int main(int argc, char *argv[])
 		else
 			continue;
 		memset(cmd, 0, sizeof(cmd));
-		sscanf(buf, "%d (%15c", &ppid, cmd);
+		sscanf(buf, "%d (%15c", &ppid, cmd); // ppid is throwaway
 		sscanf(tmp+2, "%c %d", &state, &ppid);
 
 		// Skip kthreads
