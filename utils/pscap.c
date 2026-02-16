@@ -511,7 +511,7 @@ int main(int argc, char *argv[])
 			}
 
 			if (header == 0) {
-				printf("%-5s %-5s %-10s  %-18s  %s\n",
+				printf("%-7s %-7s %-16s %-15s %s\n",
 				    "ppid", "pid", "uid", "command",
 				    "capabilities");
 				header = 1;
@@ -530,10 +530,10 @@ int main(int argc, char *argv[])
 			}
 
 			if (name) {
-				printf("%-5d %-5d %-10s  %-18s  ", ppid, pid,
+				printf("%-7d %-7d %-16s %-15s ", ppid, pid,
 					name, cmd);
 			} else
-				printf("%-5d %-5d %-10d  %-18s  ", ppid, pid,
+				printf("%-7d %-7d %-16d %-15s ", ppid, pid,
 					uid, cmd);
 			if (caps == CAPNG_PARTIAL) {
 				capng_print_caps_text(CAPNG_PRINT_STDOUT,

@@ -1369,7 +1369,7 @@ if (HAVE_PR_CAPBSET_DROP) {
 #ifdef PR_CAP_AMBIENT
 if (HAVE_PR_CAP_AMBIENT) {
 		if (set & CAPNG_SELECT_AMBIENT)
-			printf("Ambient :     %08X, %08X\n",
+			printf("Ambient:      %08X, %08X\n",
 				m.ambient[1] & UPPER_MASK, m.ambient[0]);
 }
 #endif
