@@ -6,6 +6,7 @@
 - In cap-audit, filter pre-exec, startup, and shutdown capability noise
 - pscap now has a --tree disply mode
 - More code cleanups
+- Improve output alignment of various utilities (Miroslav Koškár)
 
 0.9
 - Fix python path when invoking py-compile (Jan Palus)
