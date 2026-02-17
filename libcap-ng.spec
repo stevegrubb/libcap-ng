@@ -117,5 +117,5 @@ make check
 %endif
 
 %changelog
-* Sun Jan 11 2026 Steve Grubb <sgrubb@redhat.com> 0.9.1-1
+* Tue Feb 17 2026 Steve Grubb <sgrubb@redhat.com> 0.9.1-1
 - New upstream release
