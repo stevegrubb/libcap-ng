@@ -28,12 +28,41 @@
  * BPF overview:
  * The BPF side attaches to capability helpers (cap_capable, ns_capable,
  * capable) and syscall tracepoints to capture capability checks only for a
- * target process tree. A PID hash map gates all work; if the PID is not in
- * target_pids the probes exit immediately. For traced tasks the program builds
- * cap_event records with task identity, syscall context, namespace inode, and
- * stack id, tracks per-capability statistics, and streams finalized events to
- * userspace through a ring buffer. Fork/exit tracepoints keep the PID filter
- * in sync so children are traced and exits are pruned.
+ * target process tree.
+ *
+ * The design challenge is noise filtering: distinguish capability checks
+ * caused by the target application from kernel-internal checks running under
+ * the same PID. The first filtering layer lives entirely in this BPF program
+ * and is encoded in target_pids map values.
+ *
+ * target_pids values are phases, not just booleans:
+ *   0 = not traced
+ *   1 = pre-exec (PID registered, but exec transition not complete)
+ *   2 = post-exec (target image is running; capability events are recordable)
+ *
+ * Phase 1 suppresses all capability events for the initial child so checks
+ * between fork() and execve() are dropped. That removes pre-exec noise such
+ * as DAC_READ_SEARCH from PATH traversal while resolving the target binary.
+ *
+ * The transition point is sched_process_exec. That tracepoint fires in
+ * begin_new_exec() after the point-of-no-return where the old image is gone
+ * and the new executable is committed. This is a kernel-level signal, so it
+ * works regardless of libc/toolchain choice (glibc, musl, static, scripts).
+ *
+ * Fork inherits the parent's phase value. Children of an already running
+ * target (phase 2) begin recording immediately, while children spawned before
+ * the initial exec remain in phase 1 until their own exec transition.
+ *
+ * raw_syscalls/sys_enter and sys_exit use should_trace_pid() (phase > 0)
+ * so syscall context is available the instant the exec gate opens.
+ * Capability hooks use should_record_pid() (phase >= 2), so only post-exec
+ * capability checks are emitted.
+ *
+ * For traced tasks, the program builds cap_event records with task identity,
+ * syscall context, namespace inode, and stack id; tracks per-capability
+ * statistics; and streams finalized events to userspace through a ring
+ * buffer. Fork/exit tracepoints keep the PID filter in sync so children are
+ * traced and exits are pruned.
  */
 
 #ifndef PERF_MAX_STACK_DEPTH

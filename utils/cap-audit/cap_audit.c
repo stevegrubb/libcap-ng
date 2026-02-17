@@ -43,22 +43,60 @@
 
 /*
  * Overview:
- * cap-audit launches a target application, traces that process tree
- * using eBPF hooks, and reports which Linux capabilities were actually
- * exercised. The userspace side performs three major jobs:
+ * cap-audit launches a target application, traces that process tree using
+ * eBPF hooks, and reports which Linux capabilities were actually exercised.
+ * The userspace side performs three major jobs:
  *
- * (1) prepare the runtime environment by checking our own capabilities
- * and raising rlimits;
+ * (1) prepare the runtime environment by checking our own capabilities and
+ * raising rlimits;
  * (2) coordinate with the eBPF program by registering the target PID before
  * exec() and consuming capability check events from the ring buffer; and
- * (3) analyze the collected data to present required, conditional, and denied
+ * (3) analyze collected data to present required, conditional, and denied
  * capabilities in human and machine-readable formats.
  *
- * PID filtering is key: the parent registers the child PID immediately after
- * fork(), while the BPF program follows forks and exits to keep the target
- * set precise. Each event includes the capability, syscall context,
- * namespace info, and result, which are aggregated into per-capability
- * statistics and summarized for the user.
+ * Core design problem:
+ * when tracing as root, many capability checks come from kernel-internal
+ * work under the same PID rather than from app logic. The tool uses a
+ * three-layer noise filter pipeline, split between BPF and userspace, to
+ * separate real requirements from incidental checks.
+ *
+ * Layer 1 - pre-exec noise (BPF phase gate):
+ * after fork() but before execve() completes, the child is still this
+ * auditor image. PATH lookup, directory traversal, and exec machinery can
+ * trigger checks like DAC_READ_SEARCH/SYS_ADMIN/SETPCAP that are unrelated
+ * to the target app. The BPF side tracks PID phases and suppresses all
+ * capability events until sched_process_exec transitions the PID from
+ * phase 1 (pre-exec) to phase 2 (post-exec).
+ *
+ * Layer 2 - post-exec startup noise (userspace startup gate):
+ * immediately after exec and before main(), runtime linker activity
+ * (mmap/brk/mprotect) can trigger repeated SYS_ADMIN checks via
+ * security_mmap_addr(). Exec credential transitions also emit SYS_ADMIN and
+ * SETPCAP from execve itself. handle_cap_event() applies two startup filters:
+ * is_always_noise() unconditionally drops execve SYS_ADMIN/SETPCAP, and
+ * is_startup_noise() drops mmap/brk/mprotect SYS_ADMIN until a genuine
+ * capability event arrives and sets recording_ready.
+ *
+ * Layer 3 - shutdown noise (userspace drain gate):
+ * when tracing stops, interpreter/runtime cleanup can recreate the same
+ * mmap/brk SYS_ADMIN pattern. During final ring-buffer drain, shutting_down
+ * reuses is_startup_noise() to suppress that shutdown-only chatter.
+ *
+ * The is_always_noise()/is_startup_noise() split is deliberate: always-noise
+ * events are dropped without opening recording_ready. That keeps the startup
+ * gate closed across shebang re-exec chains (script -> /usr/bin/env ->
+ * interpreter), where multiple exec transitions would otherwise open the gate
+ * early and let interpreter linker noise leak through.
+ *
+ * PID filtering remains central: parent registers the child immediately after
+ * fork(), BPF follows forks/exits to keep the target set precise, and each
+ * event carries capability, syscall context, namespace info, and result for
+ * per-capability aggregation.
+ *
+ * Parent/child startup is synchronized with a pipe. The child blocks in
+ * read(sync_pipe) until the parent has inserted its PID in target_pids and
+ * written a go byte. That ordering prevents missed events and prevents events
+ * from arriving before the PID is registered.
  */
 
 typedef enum { UNSUPPORTED, ELF, PYTHON } type_t;
@@ -135,6 +173,13 @@ static int audit_machine = -1;	// Hardware architecture (syscall lookup)
 
 static int include_cap_in_recommendations(int cap)
 {
+	/*
+	 * SETPCAP from capset(2) can be a legitimate app event (for example,
+	 * libcap-ng adjusting process capabilities). But if the executable has
+	 * file capabilities and CAP_SETPCAP is absent from that xattr, observed
+	 * SETPCAP usually reflects internal capability-set bookkeeping rather
+	 * than a deployment-time requirement to grant CAP_SETPCAP.
+	 */
 	if (cap == CAP_SETPCAP && state.app.file_caps &&
 	    !state.app.file_setpcap)
 		return 0;
@@ -147,9 +192,9 @@ static int include_cap_in_recommendations(int cap)
  *
  * SYS_ADMIN and SETPCAP from execve are always kernel-internal credential
  * transitions (install_exec_creds/commit_creds). No application needs these
- * capabilities for exec to succeed. Filtering these unconditionally also
- * keeps the startup gate closed across shebang re-exec chains, so that the
- * startup_noise filter remains effective for the interpreter's linker.
+ * capabilities for exec to succeed. Dropping these without setting
+ * recording_ready keeps the startup gate closed across shebang re-exec
+ * chains, so startup noise filtering still applies in the final interpreter.
  */
 static int is_always_noise(const struct cap_event *e)
 {
@@ -406,8 +451,8 @@ static int check_auditor_caps(void)
  * @pid: process ID to watch.
  *
  * Looks up the target_pids map file descriptor, inserts the PID with a value
- * of 1, and optionally logs the registration when verbose. Returns 0 on
- * success or -1 on error.
+ * of 1 (phase 1: pre-exec), and optionally logs registration when verbose.
+ * Returns 0 on success or -1 on error.
  */
 static int set_target_pid(pid_t pid)
 {
@@ -646,9 +691,9 @@ static int handle_cap_event(void *ctx __attribute__((unused)), void *data,
 	const struct cap_event *e = data;
 
 	/*
-	 * Always-filter: credential transition noise from exec. These are
-	 * never real application needs and are dropped silently so the
-	 * recording_ready gate stays closed across shebang re-exec chains.
+	 * Filter block 1 (always-noise): drop exec credential-transition
+	 * checks unconditionally. This must run first so these events do not
+	 * set recording_ready and prematurely open the startup gate.
 	 */
 	if (is_always_noise(e)) {
 		if (state.verbose)
@@ -660,8 +705,9 @@ static int handle_cap_event(void *ctx __attribute__((unused)), void *data,
 	}
 
 	/*
-	 * Startup-filter: runtime linker noise, only active until the first
-	 * genuine application capability check arrives.
+	 * Filter block 2 (startup-noise gate): while recording_ready is still
+	 * closed, drop runtime-linker mmap/brk/mprotect SYS_ADMIN checks.
+	 * First non-noise event opens the gate for normal recording.
 	 */
 	if (!state.recording_ready) {
 		if (is_startup_noise(e)) {
@@ -679,9 +725,9 @@ static int handle_cap_event(void *ctx __attribute__((unused)), void *data,
 	}
 
 	/*
-	 * Shutdown-filter: interpreter cleanup triggers the same mmap/brk
-	 * SYS_ADMIN noise as startup.  Once we have decided to stop, filter
-	 * these so the final ring-buffer drain doesn't pollute results.
+	 * Filter block 3 (shutdown-noise drain): after stop is decided,
+	 * reapply startup-noise filtering during final drain because runtime
+	 * teardown can produce the same mmap/brk SYS_ADMIN pattern.
 	 */
 	if (state.shutting_down && is_startup_noise(e)) {
 		if (state.verbose)
@@ -1474,6 +1520,11 @@ int main(int argc, char **argv)
 		char sync_byte;
 		ssize_t bytes;
 
+		/*
+		 * Child waits until parent registers this PID in target_pids.
+		 * This prevents events from an unregistered PID and avoids
+		 * missing earliest post-exec events.
+		 */
 		close(state.sync_pipe[1]);
 		bytes = read(state.sync_pipe[0], &sync_byte, 1);
 		if (bytes != 1) {
