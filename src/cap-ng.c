@@ -1230,6 +1230,7 @@ capng_results_t capng_have_permitted_capabilities(void)
 	else
 		return CAPNG_PARTIAL;
 
+	// At this point, lower 32 bits are either full or empty
 	if ((m.data.v3[1].permitted & UPPER_MASK) == 0 && !full)
 		empty = 1;
 	else if ((m.data.v3[1].permitted & UPPER_MASK) == UPPER_MASK && !empty)
@@ -1237,12 +1238,11 @@ capng_results_t capng_have_permitted_capabilities(void)
 	else
 		return CAPNG_PARTIAL;
 
-	if (empty == 1 && full == 0)
+	// Partial is already handled, it's either empty or full now
+	if (empty)
 		return CAPNG_NONE;
-	else if (empty == 0 && full == 1)
-		return CAPNG_FULL;
 
-	return CAPNG_PARTIAL;
+	return CAPNG_FULL;
 }
 
 static int check_effective(unsigned int capability, unsigned int idx)
