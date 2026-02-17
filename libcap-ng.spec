@@ -1,7 +1,7 @@
 %global bpf_supported_arches aarch64 x86_64 ppc64le riscv64 s390x
 Summary: An alternate POSIX capabilities library
 Name: libcap-ng
-Version: 0.9.1
+Version: 0.9.2
 Release: 1%{?dist}
 License: LGPL-2.0-or-later
 URL: https://github.com/stevegrubb/libcap-ng
@@ -117,5 +117,5 @@ make check
 %endif
 
 %changelog
-* Tue Feb 17 2026 Steve Grubb <sgrubb@redhat.com> 0.9.1-1
+* Tue Feb 17 2026 Steve Grubb <sgrubb@redhat.com> 0.9.2-1
 - New upstream release
