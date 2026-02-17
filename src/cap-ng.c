@@ -1376,10 +1376,11 @@ if (HAVE_PR_CAP_AMBIENT) {
 	} else if (where == CAPNG_PRINT_BUFFER) {
 		if (set & CAPNG_SELECT_CAPS) {
 			// Make it big enough for bounding & ambient set, too
-			ptr = malloc(180);
+			size_t buf_size = 180;
+			ptr = malloc(buf_size);
 			if (m.cap_ver == 1) {
 				// 22 * 3 + 1
-				snprintf(ptr, sizeof(ptr),
+				snprintf(ptr, buf_size,
 					"Effective:   %08X\n"
 					"Permitted:   %08X\n"
 					"Inheritable: %08X\n",
@@ -1388,7 +1389,7 @@ if (HAVE_PR_CAP_AMBIENT) {
 					m.data.v1.inheritable);
 			} else {
 				// 35 * 5 + 1  (bounding is 35)
-				snprintf(ptr, sizeof(ptr),
+				snprintf(ptr, buf_size,
 					"Effective:   %08X, %08X\n"
 					"Permitted:   %08X, %08X\n"
 					"Inheritable: %08X, %08X\n",
