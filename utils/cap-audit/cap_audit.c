@@ -1405,6 +1405,16 @@ static type_t classify_app(const char *exe)
 	return UNSUPPORTED;
 }
 
+static void usage(FILE *out, const char *prog)
+{
+	fprintf(out, "Usage: %s [options] -- command [args...]\n", prog);
+	fprintf(out, "Options:\n");
+	fprintf(out, "  -h, --help       Show this help message\n");
+	fprintf(out, "  -v, --verbose    Verbose output\n");
+	fprintf(out, "  -j, --json       JSON output\n");
+	fprintf(out, "  -y, --yaml       YAML output\n");
+}
+
 /*
  * Parses options, validates the auditor's own capabilities, loads and
  * attaches the BPF program, forks the target, registers its PID for tracing,
@@ -1422,18 +1432,17 @@ int main(int argc, char **argv)
 
 
 	if (argc < 2) {
-		fprintf(stderr, "Usage: %s [options] -- command [args...]\n",
-			argv[0]);
-		fprintf(stderr, "Options:\n");
-		fprintf(stderr, "  -v, --verbose    Verbose output\n");
-		fprintf(stderr, "  -j, --json       JSON output\n");
-		fprintf(stderr, "  -y, --yaml       YAML output\n");
+		usage(stderr, argv[0]);
 		return 1;
 	}
 
 	arg_idx = 1;
 	while (arg_idx < argc && argv[arg_idx][0] == '-') {
-		if (!strcmp(argv[arg_idx], "-v") ||
+		if (!strcmp(argv[arg_idx], "-h") ||
+		    !strcmp(argv[arg_idx], "--help")) {
+			usage(stdout, argv[0]);
+			return 0;
+		} else if (!strcmp(argv[arg_idx], "-v") ||
 		    !strcmp(argv[arg_idx], "--verbose"))
 			state.verbose = 1;
 		else if (!strcmp(argv[arg_idx], "-j") ||
@@ -1445,12 +1454,18 @@ int main(int argc, char **argv)
 		else if (!strcmp(argv[arg_idx], "--")) {
 			arg_idx++;
 			break;
+		} else {
+			fprintf(stderr, "Error: Unknown option '%s'\n",
+				argv[arg_idx]);
+			usage(stderr, argv[0]);
+			return 1;
 		}
 		arg_idx++;
 	}
 
 	if (arg_idx >= argc) {
 		fprintf(stderr, "Error: No command specified\n");
+		usage(stderr, argv[0]);
 		return 1;
 	}
 
