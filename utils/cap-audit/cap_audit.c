@@ -580,8 +580,8 @@ static void update_reason(struct cap_check *check, int syscall_nr)
 	}
 
 	syscall_name = syscall_name_from_nr(syscall_nr);
-	if (asprintf(&check->reason, "Used by %s (syscall %d)",
-		     syscall_name ? syscall_name : "unknown", syscall_nr) < 0)
+	if (asprintf(&check->reason, "Used by %s",
+		     syscall_name ? syscall_name : "unknown") < 0)
 		check->reason = NULL;
 }
 
@@ -740,11 +740,10 @@ static int handle_cap_event(void *ctx __attribute__((unused)), void *data,
 	}
 
 	if (state.verbose) {
-		printf("[CAP] pid=%d cap=%d (%s) result=%s syscall=%d (%s) "
+		printf("[CAP] pid=%d cap=%s result=%s syscall=%s "
 		       "comm=%s\n",
-		       e->pid, e->capability,
-		       cap_name_safe(e->capability),
-		       e->result ? "GRANTED" : "DENIED", e->syscall_nr,
+		       e->pid, cap_name_safe(e->capability),
+		       e->result ? "GRANTED" : "DENIED",
 		       syscall_name_from_nr(e->syscall_nr) ?: "unknown",
 		       e->comm);
 	}
