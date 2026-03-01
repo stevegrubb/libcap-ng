@@ -130,6 +130,7 @@ struct process_info {
 	int pid;
 	int uid;
 	char *comm;
+	char *exe;
 	char *unit;
 	char *caps;
 	int ambient_present;
@@ -980,7 +981,9 @@ static void parse_status_defenses(int pid, int uid, struct defense_info *d,
 static struct process_info *add_process(struct model *m, int pid)
 {
 	char path[64], line[256], comm[64] = "";
+	char exepath[PATH_MAX];
 	FILE *f;
+	ssize_t exelen;
 	int uid = -1;
 	int has_amb = 0, has_bnd = 0;
 	int secure_nondefault = 0;
@@ -1031,6 +1034,18 @@ static struct process_info *add_process(struct model *m, int pid)
 	p->pid = pid;
 	p->uid = uid;
 	p->comm = xstrdup(comm[0] ? comm : "?");
+	snprintf(path, sizeof(path), "/proc/%d/exe", pid);
+	exelen = readlink(path, exepath, sizeof(exepath) - 1);
+	if (exelen >= 0) {
+		size_t deleted_len = strlen(" (deleted)");
+
+		exepath[exelen] = '\0';
+		if ((size_t)exelen > deleted_len &&
+		    strcmp(exepath + exelen - deleted_len,
+			" (deleted)") == 0)
+			exepath[exelen - deleted_len] = '\0';
+		p->exe = xstrdup(exepath);
+	}
 	p->unit = extract_unit_from_cgroup(pid);
 	p->caps = caps_summary_for_pid(pid, &p->has_privileged_caps,
 		&has_amb, &has_bnd);
@@ -1041,7 +1056,8 @@ static struct process_info *add_process(struct model *m, int pid)
 		seen_seccomp, seccomp, seen_secbits, secbits);
 	p->securebits_locked = p->defenses.securebits_locked &&
 		strcmp(p->defenses.securebits_locked, "yes") == 0;
-	if (!p->comm || !p->caps || !p->defenses.runs_as_nonroot ||
+	if (!p->comm || (exelen >= 0 && !p->exe) || !p->caps ||
+	    !p->defenses.runs_as_nonroot ||
 	    !p->defenses.no_new_privs || !p->defenses.seccomp)
 		goto fail;
 
@@ -2125,8 +2141,10 @@ static void render_tree_process_details(const char *prefix,
 	size_t ai;
 	unsigned int flags = 0;
 
-	snprintf(line, sizeof(line), "%s (pid=%d uid=%d%s%s)",
+	snprintf(line, sizeof(line), "%s (pid=%d uid=%d%s%s%s%s)",
 		p->comm, p->pid, p->uid,
+		p->exe ? " exe=" : "",
+		p->exe ? p->exe : "",
 		p->unit ? " unit=" : "",
 		p->unit ? p->unit : "");
 	print_tree_node(prefix, is_last, line, width);
@@ -2198,6 +2216,10 @@ static void render_json_process(struct process_info *p,
 
 	printf("%s{\"comm\": ", indent);
 	json_escape(p->comm);
+	if (p->exe) {
+		printf(", \"exe\": ");
+		json_escape(p->exe);
+	}
 	printf(", \"pid\": %d, \"uid\": %d", p->pid, p->uid);
 	if (p->unit) {
 		printf(", \"unit\": ");
@@ -2666,6 +2688,7 @@ static void free_process(struct process_info *p)
 	if (!p)
 		return;
 	free(p->comm);
+	free(p->exe);
 	free(p->unit);
 	free(p->caps);
 	free(p->defenses.runs_as_nonroot);
