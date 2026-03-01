@@ -191,6 +191,7 @@ struct pidset {
 
 static void free_process(struct process_info *p);
 static void free_model(struct model *m);
+static void json_escape(const char *s);
 static void print_tree_node(const char *prefix, int is_last,
 	const char *txt, int width);
 static int bind_sort_cmp(const char *a, const char *b);
@@ -2110,6 +2111,157 @@ static int bind_sort_cmp(const char *a, const char *b)
 	return strcmp(a, b);
 }
 
+static void render_tree_process_details(const char *prefix,
+					int is_last,
+					struct process_info *p,
+					const struct endpoint *e,
+					int width)
+{
+	char pfx_child[256], pfx_def[256], pfx_flags[256];
+	char line[512];
+	const char *def_nodes[8];
+	char def_buf[8][512];
+	size_t def_n = 0;
+	size_t ai;
+	unsigned int flags = 0;
+
+	snprintf(line, sizeof(line), "%s (pid=%d uid=%d%s%s)",
+		p->comm, p->pid, p->uid,
+		p->unit ? " unit=" : "",
+		p->unit ? p->unit : "");
+	print_tree_node(prefix, is_last, line, width);
+	build_child_prefix(pfx_child, sizeof(pfx_child), prefix, is_last);
+
+	snprintf(line, sizeof(line), "caps: %s", p->caps);
+	print_tree_node(pfx_child, 0, line, width);
+
+	snprintf(def_buf[def_n], sizeof(def_buf[def_n]),
+		DEFENSES_RUNS_AS_KEY ": %s",
+		p->defenses.runs_as_nonroot);
+	def_nodes[def_n] = def_buf[def_n];
+	def_n++;
+	snprintf(def_buf[def_n], sizeof(def_buf[def_n]), "no_new_privs: %s",
+		p->defenses.no_new_privs);
+	def_nodes[def_n] = def_buf[def_n];
+	def_n++;
+	snprintf(def_buf[def_n], sizeof(def_buf[def_n]), "seccomp: %s",
+		p->defenses.seccomp);
+	def_nodes[def_n] = def_buf[def_n];
+	def_n++;
+	if (p->defenses.lsm_label) {
+		snprintf(def_buf[def_n], sizeof(def_buf[def_n]), "lsm: %s",
+			p->defenses.lsm_label);
+		def_nodes[def_n] = def_buf[def_n];
+		def_n++;
+	}
+	if (p->defenses.securebits) {
+		snprintf(def_buf[def_n], sizeof(def_buf[def_n]),
+			"securebits: %s", p->defenses.securebits);
+		def_nodes[def_n] = def_buf[def_n];
+		def_n++;
+		snprintf(def_buf[def_n], sizeof(def_buf[def_n]),
+			"securebits_locked: %s", p->defenses.securebits_locked);
+		def_nodes[def_n] = def_buf[def_n];
+		def_n++;
+	}
+
+	print_tree_node(pfx_child, 0, "defenses", width);
+	build_child_prefix(pfx_def, sizeof(pfx_def), pfx_child, 0);
+	for (ai = 0; ai < def_n; ai++)
+		print_tree_node(pfx_def, ai + 1 == def_n, def_nodes[ai], width);
+
+	if (e->plane == PLANE_VSOCK) {
+		flags |= FLAG_HYPERVISOR_PLANE;
+		if (e->port == 22)
+			flags |= FLAG_SSH_VSOCK_22;
+	} else {
+		if (e->wildcard_bind)
+			flags |= FLAG_WILDCARD_BIND;
+		if (e->loopback_only)
+			flags |= FLAG_LOOPBACK_ONLY;
+	}
+	if (p->has_privileged_caps)
+		flags |= FLAG_PRIVILEGED_CAPS;
+	if (p->securebits_locked)
+		flags |= FLAG_SECUREBITS_LOCKED;
+
+	print_tree_node(pfx_child, 1, "flags", width);
+	build_child_prefix(pfx_flags, sizeof(pfx_flags), pfx_child, 1);
+	print_flag_nodes(pfx_flags, width, flags);
+}
+
+static void render_json_process(struct process_info *p,
+				const struct endpoint *ep,
+				const char *indent)
+{
+	int firstf = 1;
+
+	printf("%s{\"comm\": ", indent);
+	json_escape(p->comm);
+	printf(", \"pid\": %d, \"uid\": %d", p->pid, p->uid);
+	if (p->unit) {
+		printf(", \"unit\": ");
+		json_escape(p->unit);
+	}
+	printf(", \"caps\": ");
+	json_escape(p->caps);
+	printf(", \"ambient_present\": %s",
+		p->ambient_present ? "true" : "false");
+	printf(", \"open_ended_bounding\": %s",
+		p->open_ended_bounding ? "true" : "false");
+	printf(", \"defenses\": {\"" DEFENSES_RUNS_AS_KEY "\": ");
+	json_escape(p->defenses.runs_as_nonroot);
+	printf(", \"no_new_privs\": ");
+	json_escape(p->defenses.no_new_privs);
+	printf(", \"seccomp\": ");
+	json_escape(p->defenses.seccomp);
+	if (p->defenses.lsm_label) {
+		printf(", \"lsm\": ");
+		json_escape(p->defenses.lsm_label);
+	}
+	if (p->defenses.securebits) {
+		printf(", \"securebits\": ");
+		json_escape(p->defenses.securebits);
+		printf(", \"securebits_locked\": ");
+		json_escape(p->defenses.securebits_locked);
+	}
+	printf("}, \"flags\": [");
+
+	if (ep->plane == PLANE_VSOCK) {
+		json_escape("hypervisor-plane");
+		firstf = 0;
+		if (ep->port == 22) {
+			printf(", ");
+			json_escape("ssh-on-vsock-port-22");
+		}
+	} else {
+		if (ep->wildcard_bind) {
+			if (!firstf)
+				printf(", ");
+			json_escape("wildcard-bind");
+			firstf = 0;
+		}
+		if (ep->loopback_only) {
+			if (!firstf)
+				printf(", ");
+			json_escape("loopback-only");
+			firstf = 0;
+		}
+	}
+	if (p->has_privileged_caps) {
+		if (!firstf)
+			printf(", ");
+		json_escape("privileged-caps");
+		firstf = 0;
+	}
+	if (p->securebits_locked) {
+		if (!firstf)
+			printf(", ");
+		json_escape("securebits-locked");
+	}
+	printf("]}");
+}
+
 
 /*
  * render_tree - print human-readable advanced report as a tree.
@@ -2175,81 +2327,10 @@ static void render_tree(struct model *m)
 					ep_last);
 				for (k = 0; k < e->procs_n; k++) {
 					struct process_info *p = e->procs[k];
-					char pfx_child[256], pfx_def[256], pfx_flags[256];
-					char line[512];
-					const char *def_nodes[8];
-					char def_buf[8][512];
-					size_t def_n = 0;
-					size_t ai;
 					int proc_last = (k + 1 == e->procs_n);
 
-					snprintf(line, sizeof(line),
-						"%s (pid=%d uid=%d%s%s)",
-						p->comm, p->pid, p->uid,
-						p->unit ? " unit=" : "",
-						p->unit ? p->unit : "");
-					print_tree_node(pfx_proc, proc_last, line, width);
-					build_child_prefix(pfx_child, sizeof(pfx_child), pfx_proc,
-						proc_last);
-
-					snprintf(line, sizeof(line), "caps: %s", p->caps);
-					print_tree_node(pfx_child, 0, line, width);
-
-					snprintf(def_buf[def_n], sizeof(def_buf[def_n]),
-						DEFENSES_RUNS_AS_KEY ": %s",
-						p->defenses.runs_as_nonroot);
-					def_nodes[def_n] = def_buf[def_n];
-					def_n++;
-					snprintf(def_buf[def_n], sizeof(def_buf[def_n]),
-						"no_new_privs: %s",
-						p->defenses.no_new_privs);
-					def_nodes[def_n] = def_buf[def_n];
-					def_n++;
-					snprintf(def_buf[def_n], sizeof(def_buf[def_n]),
-						"seccomp: %s", p->defenses.seccomp);
-					def_nodes[def_n] = def_buf[def_n];
-					def_n++;
-					if (p->defenses.lsm_label) {
-						snprintf(def_buf[def_n], sizeof(def_buf[def_n]),
-							"lsm: %s",
-							p->defenses.lsm_label);
-						def_nodes[def_n] = def_buf[def_n];
-					def_n++;
-					}
-					if (p->defenses.securebits) {
-						snprintf(def_buf[def_n], sizeof(def_buf[def_n]),
-							"securebits: %s",
-							p->defenses.securebits);
-						def_nodes[def_n] = def_buf[def_n];
-					def_n++;
-						snprintf(def_buf[def_n], sizeof(def_buf[def_n]),
-							"securebits_locked: %s",
-							p->defenses.securebits_locked);
-						def_nodes[def_n] = def_buf[def_n];
-					def_n++;
-					}
-
-					print_tree_node(pfx_child, 0, "defenses", width);
-					build_child_prefix(pfx_def, sizeof(pfx_def), pfx_child, 0);
-					for (ai = 0; ai < def_n; ai++)
-						print_tree_node(pfx_def, ai + 1 == def_n,
-							def_nodes[ai], width);
-
-					{
-						unsigned int flags = FLAG_HYPERVISOR_PLANE;
-
-						if (e->port == 22)
-							flags |= FLAG_SSH_VSOCK_22;
-						if (p->has_privileged_caps)
-							flags |= FLAG_PRIVILEGED_CAPS;
-						if (p->securebits_locked)
-							flags |= FLAG_SECUREBITS_LOCKED;
-
-						print_tree_node(pfx_child, 1, "flags", width);
-						build_child_prefix(pfx_flags, sizeof(pfx_flags),
-							pfx_child, 1);
-						print_flag_nodes(pfx_flags, width, flags);
-					}
+					render_tree_process_details(pfx_proc, proc_last, p, e,
+						width);
 				}
 			}
 			continue;
@@ -2362,14 +2443,7 @@ static void render_tree(struct model *m)
 									for (pi = 0; pi < e->procs_n; pi++) {
 										int seen_rc;
 										struct process_info *p = e->procs[pi];
-										char pfx_child[256], pfx_def[256], pfx_flags[256];
-										char line[512];
-										const char *def_nodes[8];
-										char def_buf[8][512];
-										size_t def_n = 0;
-										size_t ai;
 										int proc_last;
-										unsigned int flags = 0;
 
 										seen_rc = pidset_test_and_add(&seen, p->pid);
 										if (seen_rc)
@@ -2378,76 +2452,8 @@ static void render_tree(struct model *m)
 										proc_last = (k + 1 == port_end) &&
 											(pi + 1 == e->procs_n);
 
-										snprintf(line, sizeof(line),
-											"%s (pid=%d uid=%d%s%s)",
-											p->comm, p->pid, p->uid,
-											p->unit ? " unit=" : "",
-											p->unit ? p->unit : "");
-										print_tree_node(pfx_proc, proc_last, line, width);
-										build_child_prefix(pfx_child, sizeof(pfx_child),
-											pfx_proc, proc_last);
-
-										snprintf(line, sizeof(line), "caps: %s", p->caps);
-										print_tree_node(pfx_child, 0, line, width);
-
-										snprintf(def_buf[def_n], sizeof(def_buf[def_n]),
-											DEFENSES_RUNS_AS_KEY ": %s",
-											p->defenses.runs_as_nonroot);
-										def_nodes[def_n] = def_buf[def_n];
-										def_n++;
-										snprintf(def_buf[def_n], sizeof(def_buf[def_n]),
-											"no_new_privs: %s",
-											p->defenses.no_new_privs);
-										def_nodes[def_n] = def_buf[def_n];
-										def_n++;
-										snprintf(def_buf[def_n], sizeof(def_buf[def_n]),
-											"seccomp: %s", p->defenses.seccomp);
-										def_nodes[def_n] = def_buf[def_n];
-										def_n++;
-
-										if (p->defenses.lsm_label) {
-											snprintf(def_buf[def_n],
-												sizeof(def_buf[def_n]),
-												"lsm: %s", p->defenses.lsm_label);
-											def_nodes[def_n] = def_buf[def_n];
-										def_n++;
-										}
-
-										if (p->defenses.securebits) {
-											snprintf(def_buf[def_n],
-												sizeof(def_buf[def_n]),
-												"securebits: %s",
-												p->defenses.securebits);
-											def_nodes[def_n] = def_buf[def_n];
-										def_n++;
-											snprintf(def_buf[def_n],
-												sizeof(def_buf[def_n]),
-												"securebits_locked: %s",
-												p->defenses.securebits_locked);
-											def_nodes[def_n] = def_buf[def_n];
-										def_n++;
-										}
-
-										print_tree_node(pfx_child, 0, "defenses", width);
-										build_child_prefix(pfx_def, sizeof(pfx_def),
-											pfx_child, 0);
-										for (ai = 0; ai < def_n; ai++)
-											print_tree_node(pfx_def, ai + 1 == def_n,
-												def_nodes[ai], width);
-
-										if (e->wildcard_bind)
-											flags |= FLAG_WILDCARD_BIND;
-										if (e->loopback_only)
-											flags |= FLAG_LOOPBACK_ONLY;
-										if (p->has_privileged_caps)
-											flags |= FLAG_PRIVILEGED_CAPS;
-										if (p->securebits_locked)
-											flags |= FLAG_SECUREBITS_LOCKED;
-
-										print_tree_node(pfx_child, 1, "flags", width);
-										build_child_prefix(pfx_flags,
-											sizeof(pfx_flags), pfx_child, 1);
-										print_flag_nodes(pfx_flags, width, flags);
+										render_tree_process_details(pfx_proc,
+											proc_last, p, e, width);
 									}
 								}
 
@@ -2549,52 +2555,8 @@ static void render_json(struct model *m)
 				puts(", \"processes\": [");
 				for (size_t pi = 0; pi < ep->procs_n; pi++) {
 					struct process_info *p = ep->procs[pi];
-					printf("        {\"comm\": ");
-					json_escape(p->comm);
-					printf(", \"pid\": %d, \"uid\": %d", p->pid,
-						p->uid);
-					if (p->unit) {
-						printf(", \"unit\": ");
-						json_escape(p->unit);
-					}
-					printf(", \"caps\": ");
-					json_escape(p->caps);
-					printf(", \"ambient_present\": %s",
-						p->ambient_present ? "true" : "false");
-					printf(", \"open_ended_bounding\": %s",
-						p->open_ended_bounding ? "true" : "false");
-					printf(", \"defenses\": {\"" DEFENSES_RUNS_AS_KEY
-						"\": ");
-					json_escape(p->defenses.runs_as_nonroot);
-					printf(", \"no_new_privs\": ");
-					json_escape(p->defenses.no_new_privs);
-					printf(", \"seccomp\": ");
-					json_escape(p->defenses.seccomp);
-					if (p->defenses.lsm_label) {
-						printf(", \"lsm\": ");
-						json_escape(p->defenses.lsm_label);
-					}
-					if (p->defenses.securebits) {
-						printf(", \"securebits\": ");
-						json_escape(p->defenses.securebits);
-						printf(", \"securebits_locked\": ");
-						json_escape(p->defenses.securebits_locked);
-					}
-					printf("}, \"flags\": [");
-					json_escape("hypervisor-plane");
-					if (ep->port == 22) {
-						printf(", ");
-						json_escape("ssh-on-vsock-port-22");
-					}
-					if (p->has_privileged_caps) {
-						printf(", ");
-						json_escape("privileged-caps");
-					}
-					if (p->securebits_locked) {
-						printf(", ");
-						json_escape("securebits-locked");
-					}
-					printf("]}");
+
+					render_json_process(p, ep, "        ");
 					if (pi + 1 != ep->procs_n)
 						puts(",");
 					else
@@ -2668,63 +2630,8 @@ static void render_json(struct model *m)
 					puts(", \"processes\": [");
 					for (size_t pi = 0; pi < ep->procs_n; pi++) {
 						struct process_info *p = ep->procs[pi];
-						printf("            {\"comm\": ");
-						json_escape(p->comm);
-						printf(", \"pid\": %d, \"uid\": %d", p->pid,
-							p->uid);
-						if (p->unit) {
-							printf(", \"unit\": ");
-							json_escape(p->unit);
-						}
-						printf(", \"caps\": ");
-						json_escape(p->caps);
-						printf(", \"ambient_present\": %s",
-							p->ambient_present ? "true" : "false");
-						printf(", \"open_ended_bounding\": %s",
-							p->open_ended_bounding ? "true" : "false");
-						printf(", \"defenses\": {\""
-							DEFENSES_RUNS_AS_KEY "\": ");
-						json_escape(p->defenses.runs_as_nonroot);
-						printf(", \"no_new_privs\": ");
-						json_escape(p->defenses.no_new_privs);
-						printf(", \"seccomp\": ");
-						json_escape(p->defenses.seccomp);
-						if (p->defenses.lsm_label) {
-							printf(", \"lsm\": ");
-							json_escape(p->defenses.lsm_label);
-						}
-						if (p->defenses.securebits) {
-							printf(", \"securebits\": ");
-							json_escape(p->defenses.securebits);
-							printf(", \"securebits_locked\": ");
-							json_escape(p->defenses.securebits_locked);
-						}
-						printf("}, \"flags\": [");
-						int firstf = 1;
-						if (ep->wildcard_bind) {
-							if (!firstf)
-								printf(", ");
-							json_escape("wildcard-bind");
-							firstf = 0;
-						}
-						if (ep->loopback_only) {
-							if (!firstf)
-								printf(", ");
-							json_escape("loopback-only");
-							firstf = 0;
-						}
-						if (p->has_privileged_caps) {
-							if (!firstf)
-								printf(", ");
-							json_escape("privileged-caps");
-							firstf = 0;
-						}
-						if (p->securebits_locked) {
-							if (!firstf)
-								printf(", ");
-							json_escape("securebits-locked");
-						}
-						printf("]}");
+
+						render_json_process(p, ep, "            ");
 						if (pi + 1 != ep->procs_n)
 							puts(",");
 						else
