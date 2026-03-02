@@ -48,3 +48,4 @@ vmlinux.h:
 	$(AM_V_GEN)$(BPFTOOL) btf dump file /sys/kernel/btf/vmlinux format c > $@
 
 man_MANS = cap-audit.8
+

@@ -29,15 +29,17 @@ else
 SUBDIRS =
 endif
 DIST_SUBDIRS = cap-audit
-EXTRA_DIST = $(man_MANS) captest.c captest.8
+EXTRA_DIST = $(man_MANS) captest.c captest.8 $(dist_bashcompletion_DATA)
 AM_CPPFLAGS = -I${top_srcdir} -I${top_srcdir}/src
 LDADD = ${top_builddir}/src/libcap-ng.la
 AM_CFLAGS = -W -Wall -Wshadow ${WFLAGS} -Wundef -D_GNU_SOURCE
 bin_PROGRAMS = pscap netcap filecap
 man_MANS = pscap.8 netcap.8 filecap.8
+bashcompletiondir = $(datadir)/bash-completion/completions
+dist_bashcompletion_DATA = completions/libcap-ng
 
 pscap_SOURCES = pscap.c
-netcap_SOURCES = netcap.c proc-llist.c proc-llist.h
+netcap_SOURCES = netcap.c netcap-advanced.c netcap-advanced.h proc-llist.c proc-llist.h
 filecap_SOURCES = filecap.c
 
 if BUILD_DEPRECATED

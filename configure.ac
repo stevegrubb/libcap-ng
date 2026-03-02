@@ -153,6 +153,7 @@ AC_CHECK_HEADERS(sys/xattr.h, [], [
 	AC_CHECK_HEADERS(attr/xattr.h, [], [AC_MSG_WARN(attr/xattr.h not found, disabling file system capabilities.)])
 	])
 AC_CHECK_HEADERS(linux/securebits.h, [], [])
+AC_CHECK_HEADERS(linux/vm_sockets_diag.h, [], [])
 AC_CHECK_HEADERS(pthread.h,
 	[AC_SEARCH_LIBS(pthread_atfork, pthread)],
 	[AC_MSG_WARN(pthread.h not found, disabling pthread_atfork.)])
