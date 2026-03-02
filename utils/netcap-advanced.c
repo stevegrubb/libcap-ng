@@ -48,6 +48,7 @@
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <sys/types.h>
 #include <unistd.h>
 #include "cap-ng.h"
@@ -97,6 +98,7 @@ enum endpoint_flags {
 	FLAG_SECUREBITS_LOCKED = 1U << 3,
 	FLAG_HYPERVISOR_PLANE = 1U << 4,
 	FLAG_SSH_VSOCK_22 = 1U << 5,
+	FLAG_REUSEPORT = 1U << 6,
 };
 
 struct strset {
@@ -145,6 +147,7 @@ struct inode_proc {
 	struct process_info **procs;
 	size_t n;
 	size_t cap;
+	int reuseport;
 };
 
 struct endpoint {
@@ -162,6 +165,7 @@ struct endpoint {
 	size_t procs_cap;
 	int wildcard_bind;
 	int loopback_only;
+	int reuseport;
 };
 
 struct model {
@@ -196,6 +200,7 @@ static void json_escape(const char *s);
 static void print_tree_node(const char *prefix, int is_last,
 	const char *txt, int width);
 static int bind_sort_cmp(const char *a, const char *b);
+static struct inode_proc *lookup_inode(struct model *m, unsigned long inode);
 
 static size_t str_hash(const char *s, size_t slots_cap)
 {
@@ -522,6 +527,7 @@ static void print_flag_nodes(const char *pfx_flags, int width,
 		{ FLAG_SSH_VSOCK_22, "ssh-on-vsock-port-22" },
 		{ FLAG_WILDCARD_BIND, "wildcard-bind" },
 		{ FLAG_LOOPBACK_ONLY, "loopback-only" },
+		{ FLAG_REUSEPORT, "reuseport" },
 		{ FLAG_PRIVILEGED_CAPS, "privileged-caps" },
 		{ FLAG_SECUREBITS_LOCKED, "securebits-locked" },
 	};
@@ -1114,6 +1120,59 @@ static int add_inode_proc(struct model *m, unsigned long inode,
 }
 
 /*
+ * probe_reuseport - probe SO_REUSEPORT on a target process socket fd.
+ * @pid: process id owning @fdnum.
+ * @fdnum: socket fd number in target process.
+ *
+ * Uses pidfd_open + pidfd_getfd when supported by the running kernel.
+ * Returns 1/0 on successful getsockopt, or -1 when unsupported/inaccessible.
+ * Side effects/assumptions: Operates on in-memory data and may read
+ * procfs/netns state; it does not change kernel configuration.
+ */
+static int probe_reuseport(int pid, int fdnum)
+{
+#if defined(__NR_pidfd_open) && defined(__NR_pidfd_getfd)
+	static int warned_unavail;
+	int pidfd;
+	int dupfd;
+	int val = 0;
+	socklen_t len = sizeof(val);
+	int rc;
+
+	pidfd = syscall(__NR_pidfd_open, pid, 0);
+	if (pidfd < 0) {
+		if (errno == ENOSYS && !warned_unavail) {
+			diag_dbg("pidfd_getfd unavailable; SO_REUSEPORT detection disabled");
+			warned_unavail = 1;
+		}
+		return -1;
+	}
+
+	dupfd = syscall(__NR_pidfd_getfd, pidfd, fdnum, 0);
+	if (dupfd < 0) {
+		if (errno == ENOSYS && !warned_unavail) {
+			diag_dbg("pidfd_getfd unavailable; SO_REUSEPORT detection disabled");
+			warned_unavail = 1;
+		}
+		close(pidfd);
+		return -1;
+	}
+
+	rc = getsockopt(dupfd, SOL_SOCKET, SO_REUSEPORT, &val, &len);
+	close(dupfd);
+	close(pidfd);
+	if (rc < 0)
+		return -1;
+
+	return val ? 1 : 0;
+#else
+	(void)pid;
+	(void)fdnum;
+	return -1;
+#endif
+}
+
+/*
  * collect_proc_inodes - build inode ownership map from /proc/<pid>/fd links.
  * @m: model receiving process entries and inode->process associations.
  *
@@ -1153,6 +1212,9 @@ static void collect_proc_inodes(struct model *m)
 			char lpath[128], link[256], *s;
 			ssize_t l;
 			unsigned long inode;
+			int fdnum;
+			int reuseport;
+			struct inode_proc *ip;
 
 			if (fdent->d_name[0] == '.')
 				continue;
@@ -1173,8 +1235,19 @@ static void collect_proc_inodes(struct model *m)
 				continue;
 			}
 			inode = strtoul(s, NULL, 10);
-			if (inode)
-				add_inode_proc(m, inode, p);
+			if (!inode)
+				continue;
+			add_inode_proc(m, inode, p);
+
+			fdnum = atoi(fdent->d_name);
+			if (fdnum < 0)
+				continue;
+			reuseport = probe_reuseport(pid, fdnum);
+			if (reuseport != 1)
+				continue;
+			ip = lookup_inode(m, inode);
+			if (ip)
+				ip->reuseport |= 1;
 		}
 		closedir(fds);
 	}
@@ -1213,7 +1286,8 @@ static struct inode_proc *lookup_inode(struct model *m, unsigned long inode)
  */
 static int add_endpoint(struct model *m, const char *proto, const char *bind,
 	unsigned int port, enum plane_kind plane, const char *ifname,
-	const char *ifaddr, int wildcard, int loopback, struct inode_proc *ip)
+	const char *ifaddr, int wildcard, int loopback, int reuseport,
+	struct inode_proc *ip)
 {
 	size_t i, j;
 	struct endpoint *e;
@@ -1227,8 +1301,10 @@ static int add_endpoint(struct model *m, const char *proto, const char *bind,
 	for (i = 0; i < m->eps_n; i++) {
 		e = &m->eps[i];
 		if (strcmp(e->label, label) == 0 && strcmp(e->ifname, ifname) == 0 &&
-		    strcmp(e->ifaddr, ifaddr) == 0)
+		    strcmp(e->ifaddr, ifaddr) == 0) {
+			e->reuseport |= reuseport;
 			goto add_procs;
+		}
 	}
 	if (m->eps_n == m->eps_cap && vec_grow((void **)&m->eps, &m->eps_cap,
 	    sizeof(struct endpoint)))
@@ -1246,6 +1322,7 @@ static int add_endpoint(struct model *m, const char *proto, const char *bind,
 	e->ifaddr = xstrdup(ifaddr);
 	e->wildcard_bind = wildcard;
 	e->loopback_only = loopback;
+	e->reuseport = reuseport;
 	if (!e->proto || !e->bind || !e->label || !e->ifname || !e->ifaddr) {
 		free(e->proto);
 		free(e->bind);
@@ -1316,6 +1393,7 @@ static int add_vsock_endpoint(struct model *m, const char *type,
 	e->plane = PLANE_VSOCK;
 	e->ifname = xstrdup("");
 	e->ifaddr = xstrdup("");
+	e->reuseport = 0;
 	if (!e->proto || !e->bind || !e->label || !e->ifname || !e->ifaddr) {
 		free(e->proto);
 		free(e->bind);
@@ -1356,7 +1434,8 @@ next:
  * procfs/netns state; it does not change kernel configuration.
  */
 static void endpoint_to_ifaces(struct model *m, const char *proto, int af,
-	const char *bind, unsigned int port, struct inode_proc *ip)
+	const char *bind, unsigned int port, int reuseport,
+	struct inode_proc *ip)
 {
 	size_t i, j;
 	int wildcard = str_is_wildcard(af, bind);
@@ -1377,13 +1456,15 @@ static void endpoint_to_ifaces(struct model *m, const char *proto, int af,
 				if (strcmp(ifc->name, "lo") == 0)
 					continue;
 				add_endpoint(m, proto, bind, port, PLANE_INET_EXTERNAL,
-					ifc->name, ifc->addrs[j].addr, 1, 0, ip);
+					ifc->name, ifc->addrs[j].addr, 1, 0,
+					reuseport, ip);
 				matched = 1;
 			} else if (strcmp(ifc->addrs[j].addr, bind) == 0) {
 				enum plane_kind plane = loopback ?
 					PLANE_INET_LOOPBACK : PLANE_INET_EXTERNAL;
 				add_endpoint(m, proto, bind, port, plane, ifc->name,
-					ifc->addrs[j].addr, 0, loopback, ip);
+					ifc->addrs[j].addr, 0, loopback,
+					reuseport, ip);
 				matched = 1;
 			}
 		}
@@ -1393,7 +1474,7 @@ static void endpoint_to_ifaces(struct model *m, const char *proto, int af,
 			loopback ? PLANE_INET_LOOPBACK : PLANE_INET_EXTERNAL,
 			loopback ? "lo" :
 			(multicast ? "multicast/group" : "unknown"),
-			bind, wildcard, loopback, ip);
+			bind, wildcard, loopback, reuseport, ip);
 }
 
 /*
@@ -1481,7 +1562,7 @@ static void parse_inet_file(struct model *m, const char *path,
 			if (!inet_ntop(AF_INET6, bytes, addr, sizeof(addr)))
 				continue;
 		}
-		endpoint_to_ifaces(m, proto, af, addr, lport, ip);
+		endpoint_to_ifaces(m, proto, af, addr, lport, ip->reuseport, ip);
 	}
 	fclose(f);
 }
@@ -1526,7 +1607,7 @@ static void parse_packet_file(struct model *m)
 		snprintf(addr, sizeof(addr), "ifindex:%u", iface);
 		snprintf(name, sizeof(name), "packet");
 		add_endpoint(m, name, bind, proto, PLANE_PACKET, ifn, addr,
-			0, 0, ip);
+			0, 0, 0, ip);
 	}
 	fclose(f);
 }
@@ -1891,7 +1972,7 @@ static int parse_diag_messages(struct model *m, int fd, int proto, int af)
 			}
 			endpoint_to_ifaces(m,
 				proto == IPPROTO_SCTP ? "sctp" : "dccp",
-				af, addr, port, ip);
+				af, addr, port, ip->reuseport, ip);
 		}
 	}
 }
@@ -2197,6 +2278,8 @@ static void render_tree_process_details(const char *prefix,
 			flags |= FLAG_WILDCARD_BIND;
 		if (e->loopback_only)
 			flags |= FLAG_LOOPBACK_ONLY;
+		if (e->reuseport)
+			flags |= FLAG_REUSEPORT;
 	}
 	if (p->has_privileged_caps)
 		flags |= FLAG_PRIVILEGED_CAPS;
@@ -2267,6 +2350,12 @@ static void render_json_process(struct process_info *p,
 			if (!firstf)
 				printf(", ");
 			json_escape("loopback-only");
+			firstf = 0;
+		}
+		if (ep->reuseport) {
+			if (!firstf)
+				printf(", ");
+			json_escape("reuseport");
 			firstf = 0;
 		}
 	}
