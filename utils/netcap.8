@@ -72,6 +72,11 @@ Under each protocol, \fBbind\fP nodes are socket bind addresses
 Each process entry may include a \fBunit\fP field showing the systemd service
 or scope name, extracted from the process cgroup hierarchy; it is omitted when
 the process is not managed by systemd.
+Each process line also includes an optional \fBexe\fP field showing the full
+executable path read from \fB/proc/<pid>/exe\fP; it is omitted for kernel
+threads or when the path is unreadable. The kernel \fBName:\fP field shown as
+\fBcomm\fP is truncated to 15 characters, so \fBexe\fP provides the complete
+binary path.
 
 Socket selection is protocol-specific:
 .IP \[bu] 2
@@ -135,11 +140,22 @@ Each plane object contains \fBname\fP, optional \fBscope\fP
 Under \fBifaces\fP: each interface has \fBname\fP and \fBaddrs\fP
 (array). Each addr object has \fBaddr\fP and \fBendpoints\fP (array).
 
-Each endpoint object has \fBlabel\fP, \fBproto\fP, \fBbind\fP,
-\fBport\fP, and \fBprocesses\fP (array).
+For INET and LINK-LAYER planes, each endpoint object has \fBlabel\fP,
+\fBproto\fP, \fBbind\fP, \fBport\fP, and \fBprocesses\fP (array).
+For VSOCK planes, endpoint objects use \fBlabel\fP, \fBvsock_type\fP
+(socket type string: \fBstream\fP/\fBdgram\fP/\fBseqpacket\fP), \fBcid\fP
+(source CID or the string \fBANY\fP), \fBport\fP, and \fBprocesses\fP;
+they do not include \fBproto\fP or \fBbind\fP.
 
-Each process object has \fBcomm\fP, \fBpid\fP, \fBuid\fP, optional
-\fBunit\fP, \fBcaps\fP, \fBdefenses\fP object, and \fBflags\fP array.
+Each process object has \fBcomm\fP, optional \fBexe\fP, \fBpid\fP,
+\fBuid\fP, optional \fBunit\fP, \fBcaps\fP,
+\fBambient_present\fP (boolean), \fBopen_ended_bounding\fP (boolean),
+\fBdefenses\fP object, and \fBflags\fP array.
+
+\fBambient_present\fP and \fBopen_ended_bounding\fP are the structured
+equivalents of the \fB[ambient-present]\fP and
+\fB[open-ended-bounding]\fP annotations that may appear in the caps text
+string; both fields are always present in JSON output.
 
 Fields under endpoints/processes/defenses may be omitted when unavailable.
 When process defenses are present, they include \fBruns_as_nonroot\fP, derived
