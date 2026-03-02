@@ -111,7 +111,7 @@ make check
 %attr(0644,root,root) %{_mandir}/man8/filecap.8.gz
 %attr(0644,root,root) %{_mandir}/man8/netcap.8.gz
 %attr(0644,root,root) %{_mandir}/man8/pscap.8.gz
-%attr(0644,root,root) %{_datadir}/bash-completion/completions/libcap-ng
+%attr(0644,root,root) %{_datadir}/bash-completion.d/completions/libcap-ng.bash_completion
 %ifarch %{bpf_supported_arches}
 %attr(0755,root,root) %{_bindir}/cap-audit
 %attr(0644,root,root) %{_mandir}/man8/cap-audit.8.gz
