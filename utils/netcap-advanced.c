@@ -893,7 +893,7 @@ static char *caps_summary_for_pid(int pid, int *privileged, int *has_amb,
 			}
 		}
 	}
-	if (*has_bnd)
+	if (*has_bnd && left > 1)
 		snprintf(dst, left,
 			" [open-ended-bounding]");
 	return xstrdup(out);
