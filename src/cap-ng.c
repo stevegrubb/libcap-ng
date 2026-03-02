@@ -1230,6 +1230,7 @@ capng_results_t capng_have_permitted_capabilities(void)
 	else
 		return CAPNG_PARTIAL;
 
+	// At this point, lower 32 bits are either full or empty
 	if ((m.data.v3[1].permitted & UPPER_MASK) == 0 && !full)
 		empty = 1;
 	else if ((m.data.v3[1].permitted & UPPER_MASK) == UPPER_MASK && !empty)
@@ -1237,12 +1238,11 @@ capng_results_t capng_have_permitted_capabilities(void)
 	else
 		return CAPNG_PARTIAL;
 
-	if (empty == 1 && full == 0)
+	// Partial is already handled, it's either empty or full now
+	if (empty)
 		return CAPNG_NONE;
-	else if (empty == 0 && full == 1)
-		return CAPNG_FULL;
 
-	return CAPNG_PARTIAL;
+	return CAPNG_FULL;
 }
 
 static int check_effective(unsigned int capability, unsigned int idx)
@@ -1376,10 +1376,11 @@ if (HAVE_PR_CAP_AMBIENT) {
 	} else if (where == CAPNG_PRINT_BUFFER) {
 		if (set & CAPNG_SELECT_CAPS) {
 			// Make it big enough for bounding & ambient set, too
-			ptr = malloc(180);
+			size_t buf_size = 180;
+			ptr = malloc(buf_size);
 			if (m.cap_ver == 1) {
 				// 22 * 3 + 1
-				snprintf(ptr, sizeof(ptr),
+				snprintf(ptr, buf_size,
 					"Effective:   %08X\n"
 					"Permitted:   %08X\n"
 					"Inheritable: %08X\n",
@@ -1388,7 +1389,7 @@ if (HAVE_PR_CAP_AMBIENT) {
 					m.data.v1.inheritable);
 			} else {
 				// 35 * 5 + 1  (bounding is 35)
-				snprintf(ptr, sizeof(ptr),
+				snprintf(ptr, buf_size,
 					"Effective:   %08X, %08X\n"
 					"Permitted:   %08X, %08X\n"
 					"Inheritable: %08X, %08X\n",
