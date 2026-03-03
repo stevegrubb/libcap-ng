@@ -782,6 +782,8 @@ static char *extract_unit_from_cgroup(int pid)
 		s = strstr(line, ".service");
 		if (!s)
 			s = strstr(line, ".scope");
+		if (s && !strstr(line, "system.slice"))
+			continue;
 		if (s) {
 			while (s > line && *s != '/')
 				s--;
