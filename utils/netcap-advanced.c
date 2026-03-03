@@ -93,7 +93,6 @@ enum plane_kind {
 
 enum endpoint_flags {
 	FLAG_WILDCARD_BIND = 1U << 0,
-	FLAG_LOOPBACK_ONLY = 1U << 1,
 	FLAG_PRIVILEGED_CAPS = 1U << 2,
 	FLAG_SECUREBITS_LOCKED = 1U << 3,
 	FLAG_HYPERVISOR_PLANE = 1U << 4,
@@ -165,7 +164,6 @@ struct endpoint {
 	size_t procs_n;
 	size_t procs_cap;
 	int wildcard_bind;
-	int loopback_only;
 	int reuseport;
 };
 
@@ -527,7 +525,6 @@ static void print_flag_nodes(const char *pfx_flags, int width,
 		{ FLAG_HYPERVISOR_PLANE, "hypervisor-plane" },
 		{ FLAG_SSH_VSOCK_22, "ssh-on-vsock-port-22" },
 		{ FLAG_WILDCARD_BIND, "wildcard-bind" },
-		{ FLAG_LOOPBACK_ONLY, "loopback-only" },
 		{ FLAG_REUSEPORT, "reuseport" },
 		{ FLAG_PRIVILEGED_CAPS, "privileged-caps" },
 		{ FLAG_SECUREBITS_LOCKED, "securebits-locked" },
@@ -1304,7 +1301,7 @@ static struct inode_proc *lookup_inode(struct model *m, unsigned long inode)
  * add_endpoint - add/merge one inet or packet endpoint in @m.
  * @m: model receiving endpoint data.
  * @proto/@bind/@ifname/@ifaddr: copied strings for endpoint identity.
- * @port/@plane/@wildcard/@loopback: endpoint attributes for rendering/flags.
+ * @port/@plane/@wildcard: endpoint attributes for rendering/flags.
  * @ip: inode-owner mapping whose process pointers are attached to endpoint.
  *
  * Returns 0 on success, -1 on allocation failure.
@@ -1313,7 +1310,7 @@ static struct inode_proc *lookup_inode(struct model *m, unsigned long inode)
  */
 static int add_endpoint(struct model *m, const char *proto, const char *bind,
 	unsigned int port, enum plane_kind plane, const char *ifname,
-	const char *ifaddr, int wildcard, int loopback, int reuseport,
+	const char *ifaddr, int wildcard, int reuseport,
 	struct inode_proc *ip)
 {
 	size_t i, j;
@@ -1348,7 +1345,6 @@ static int add_endpoint(struct model *m, const char *proto, const char *bind,
 	e->ifname = xstrdup(ifname);
 	e->ifaddr = xstrdup(ifaddr);
 	e->wildcard_bind = wildcard;
-	e->loopback_only = loopback;
 	e->reuseport = reuseport;
 	if (!e->proto || !e->bind || !e->label || !e->ifname || !e->ifaddr) {
 		free(e->proto);
@@ -1466,7 +1462,6 @@ static void endpoint_to_ifaces(struct model *m, const char *proto, int af,
 {
 	size_t i, j;
 	int wildcard = str_is_wildcard(af, bind);
-	int loopback = str_is_loopback(af, bind);
 	int multicast = str_is_multicast(af, bind);
 	int matched = 0;
 
@@ -1483,14 +1478,14 @@ static void endpoint_to_ifaces(struct model *m, const char *proto, int af,
 				if (strcmp(ifc->name, "lo") == 0)
 					continue;
 				add_endpoint(m, proto, bind, port, PLANE_INET_EXTERNAL,
-					ifc->name, ifc->addrs[j].addr, 1, 0,
+					ifc->name, ifc->addrs[j].addr, 1,
 					reuseport, ip);
 				matched = 1;
 			} else if (strcmp(ifc->addrs[j].addr, bind) == 0) {
-				enum plane_kind plane = loopback ?
+				enum plane_kind plane = str_is_loopback(af, bind) ?
 					PLANE_INET_LOOPBACK : PLANE_INET_EXTERNAL;
 				add_endpoint(m, proto, bind, port, plane, ifc->name,
-					ifc->addrs[j].addr, 0, loopback,
+					ifc->addrs[j].addr, 0,
 					reuseport, ip);
 				matched = 1;
 			}
@@ -1498,10 +1493,11 @@ static void endpoint_to_ifaces(struct model *m, const char *proto, int af,
 	}
 	if (!matched)
 		add_endpoint(m, proto, bind, port,
-			loopback ? PLANE_INET_LOOPBACK : PLANE_INET_EXTERNAL,
-			loopback ? "lo" :
+			str_is_loopback(af, bind) ?
+			PLANE_INET_LOOPBACK : PLANE_INET_EXTERNAL,
+			str_is_loopback(af, bind) ? "lo" :
 			(multicast ? "multicast/group" : "unknown"),
-			bind, wildcard, loopback, reuseport, ip);
+			bind, wildcard, reuseport, ip);
 }
 
 /*
@@ -1634,7 +1630,7 @@ static void parse_packet_file(struct model *m)
 		snprintf(addr, sizeof(addr), "ifindex:%u", iface);
 		snprintf(name, sizeof(name), "packet");
 		add_endpoint(m, name, bind, proto, PLANE_PACKET, ifn, addr,
-			0, 0, 0, ip);
+			0, 0, ip);
 	}
 	fclose(f);
 }
@@ -2338,8 +2334,6 @@ static void render_tree_process_details(const char *prefix,
 	} else {
 		if (e->wildcard_bind)
 			flags |= FLAG_WILDCARD_BIND;
-		if (e->loopback_only)
-			flags |= FLAG_LOOPBACK_ONLY;
 		if (e->reuseport)
 			flags |= FLAG_REUSEPORT;
 	}
@@ -2410,12 +2404,6 @@ static void render_json_process(struct process_info *p,
 			if (!firstf)
 				printf(", ");
 			json_escape("wildcard-bind");
-			firstf = 0;
-		}
-		if (ep->loopback_only) {
-			if (!firstf)
-				printf(", ");
-			json_escape("loopback-only");
 			firstf = 0;
 		}
 		if (ep->reuseport) {
