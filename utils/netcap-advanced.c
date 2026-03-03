@@ -1714,6 +1714,10 @@ static void parse_vsock_file(struct model *m)
 			if (st != 0x0A)
 				continue;
 			kind = "stream";
+		} else if (type == SOCK_SEQPACKET) {
+			if (st != 0x0A)
+				continue;
+			kind = "seqpacket";
 		} else if (type == SOCK_DGRAM) {
 			if (port == 0)
 				continue;
@@ -1811,11 +1815,11 @@ static int parse_vsock_diag_messages(struct model *m, int fd)
 			if (!kind)
 				continue;
 
-			if (r->vdiag_type == SOCK_STREAM &&
+			if ((r->vdiag_type == SOCK_STREAM ||
+			     r->vdiag_type == SOCK_SEQPACKET) &&
 			    r->vdiag_state != TCP_LISTEN)
 				continue;
-			if ((r->vdiag_type == SOCK_DGRAM ||
-			     r->vdiag_type == SOCK_SEQPACKET) &&
+			if (r->vdiag_type == SOCK_DGRAM &&
 			    r->vdiag_src_port == 0)
 				continue;
 
