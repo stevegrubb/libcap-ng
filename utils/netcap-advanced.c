@@ -135,6 +135,7 @@ struct process_info {
 	char *exe;
 	char *unit;
 	char *caps;
+	char *ambient_caps;
 	int ambient_present;
 	int open_ended_bounding;
 	int has_privileged_caps;
@@ -813,17 +814,21 @@ static char *extract_unit_from_cgroup(int pid)
  * procfs/netns state; it does not change kernel configuration.
  */
 static char *caps_summary_for_pid(int pid, int *privileged, int *has_amb,
-	int *has_bnd)
+	int *has_bnd, char **amb_list)
 {
 	char out[4096];
+	char amb_out[1024];
+	char *amb_dst = amb_out;
 	char *dst = out;
+	size_t amb_left = sizeof(amb_out);
 	size_t left = sizeof(out);
-	int i, first = 1;
+	int i, first = 1, amb_first = 1;
 	capng_results_t c;
 
 	*privileged = 0;
 	*has_amb = 0;
 	*has_bnd = 0;
+	*amb_list = NULL;
 
 	capng_clear(CAPNG_SELECT_ALL);
 	capng_setpid(pid);
@@ -886,24 +891,41 @@ static char *caps_summary_for_pid(int pid, int *privileged, int *has_amb,
 	}
 	if (capng_have_capabilities(CAPNG_SELECT_AMBIENT) > CAPNG_NONE)
 		*has_amb = 1;
+	if (*has_amb) {
+		*amb_dst = 0;
+		for (i = 0; i <= CAP_LAST_CAP; i++) {
+			size_t n;
+			const char *name;
+
+			if (!capng_have_capability(CAPNG_AMBIENT, i))
+				continue;
+			name = capng_capability_to_name(i);
+			if (!name)
+				continue;
+			if (strncmp(name, "cap_", 4) == 0)
+				name += 4;
+
+			if (!amb_first) {
+				if (amb_left <= 2)
+					break;
+				*amb_dst++ = ',';
+				*amb_dst++ = ' ';
+				amb_left -= 2;
+			}
+			n = strlen(name);
+			if (amb_left <= n)
+				break;
+			memcpy(amb_dst, name, n);
+			amb_dst += n;
+			amb_left -= n;
+			*amb_dst = 0;
+			amb_first = 0;
+		}
+		if (amb_out[0])
+			*amb_list = xstrdup(amb_out);
+	}
 	if (capng_have_capabilities(CAPNG_SELECT_BOUNDS) > CAPNG_NONE)
 		*has_bnd = 1;
-	if (*has_amb && left > 1) {
-		int n = snprintf(dst, left, " [ambient-present]");
-
-		if (n > 0) {
-			if ((size_t)n >= left) {
-				dst = out + sizeof(out) - 1;
-				left = 1;
-			} else {
-				dst += n;
-				left -= (size_t)n;
-			}
-		}
-	}
-	if (*has_bnd && left > 1)
-		snprintf(dst, left,
-			" [open-ended-bounding]");
 	return xstrdup(out);
 }
 
@@ -994,6 +1016,7 @@ static struct process_info *add_process(struct model *m, int pid)
 	ssize_t exelen;
 	int uid = -1;
 	int has_amb = 0, has_bnd = 0;
+	char *amb_list = NULL;
 	int secure_nondefault = 0;
 	unsigned long secbits_raw = 0;
 	unsigned long no_new_privs = 0;
@@ -1056,7 +1079,8 @@ static struct process_info *add_process(struct model *m, int pid)
 	}
 	p->unit = extract_unit_from_cgroup(pid);
 	p->caps = caps_summary_for_pid(pid, &p->has_privileged_caps,
-		&has_amb, &has_bnd);
+		&has_amb, &has_bnd, &amb_list);
+	p->ambient_caps = amb_list;
 	p->ambient_present = has_amb;
 	p->open_ended_bounding = has_bnd;
 	parse_status_defenses(pid, uid, &p->defenses, &secure_nondefault,
@@ -1065,6 +1089,7 @@ static struct process_info *add_process(struct model *m, int pid)
 	p->securebits_locked = p->defenses.securebits_locked &&
 		strcmp(p->defenses.securebits_locked, "yes") == 0;
 	if (!p->comm || (exelen >= 0 && !p->exe) || !p->caps ||
+	    (has_amb && !p->ambient_caps) ||
 	    !p->defenses.runs_as_nonroot ||
 	    !p->defenses.no_new_privs || !p->defenses.seccomp)
 		goto fail;
@@ -2239,6 +2264,37 @@ static void render_tree_process_details(const char *prefix,
 
 	snprintf(line, sizeof(line), "caps: %s", p->caps);
 	print_tree_node(pfx_child, 0, line, width);
+	if (p->ambient_caps) {
+		snprintf(line, sizeof(line), "ambient: %s", p->ambient_caps);
+		print_tree_node(pfx_child, 0, line, width);
+	}
+	if (p->ambient_present || p->open_ended_bounding) {
+		int n;
+		size_t off = 0;
+
+		n = snprintf(line + off, sizeof(line) - off, "findings:");
+		if (n > 0) {
+			if ((size_t)n >= sizeof(line) - off)
+				off = sizeof(line) - 1;
+			else
+				off += (size_t)n;
+		}
+		if (p->ambient_present && off < sizeof(line)) {
+			n = snprintf(line + off, sizeof(line) - off,
+				" [ambient-present]");
+			if (n > 0) {
+				if ((size_t)n >= sizeof(line) - off)
+					off = sizeof(line) - 1;
+				else
+					off += (size_t)n;
+			}
+		}
+		if (p->open_ended_bounding && off < sizeof(line)) {
+			snprintf(line + off, sizeof(line) - off,
+				" [open-ended-bounding]");
+		}
+		print_tree_node(pfx_child, 0, line, width);
+	}
 
 	snprintf(def_buf[def_n], sizeof(def_buf[def_n]),
 		DEFENSES_RUNS_AS_KEY ": %s",
@@ -2318,6 +2374,10 @@ static void render_json_process(struct process_info *p,
 	json_escape(p->caps);
 	printf(", \"ambient_present\": %s",
 		p->ambient_present ? "true" : "false");
+	if (p->ambient_caps) {
+		printf(", \"ambient_caps\": ");
+		json_escape(p->ambient_caps);
+	}
 	printf(", \"open_ended_bounding\": %s",
 		p->open_ended_bounding ? "true" : "false");
 	printf(", \"defenses\": {\"" DEFENSES_RUNS_AS_KEY "\": ");
@@ -2786,6 +2846,7 @@ static void free_process(struct process_info *p)
 	free(p->exe);
 	free(p->unit);
 	free(p->caps);
+	free(p->ambient_caps);
 	free(p->defenses.runs_as_nonroot);
 	free(p->defenses.no_new_privs);
 	free(p->defenses.seccomp);
