@@ -57,7 +57,7 @@
  * Core design problem:
  * when tracing as root, many capability checks come from kernel-internal
  * work under the same PID rather than from app logic. The tool uses a
- * three-layer noise filter pipeline, split between BPF and userspace, to
+ * four-category noise filter pipeline, split between BPF and userspace, to
  * separate real requirements from incidental checks.
  *
  * Layer 1 - pre-exec noise (BPF phase gate):
@@ -70,16 +70,22 @@
  *
  * Layer 2 - post-exec startup noise (userspace startup gate):
  * immediately after exec and before main(), runtime linker activity
- * (mmap/brk/mprotect) can trigger repeated SYS_ADMIN checks via
+ * (mmap/mprotect) can trigger repeated SYS_ADMIN checks via
  * security_mmap_addr(). Exec credential transitions also emit SYS_ADMIN and
  * SETPCAP from execve itself. handle_cap_event() applies two startup filters:
  * is_always_noise() unconditionally drops execve SYS_ADMIN/SETPCAP, and
- * is_startup_noise() drops mmap/brk/mprotect SYS_ADMIN until a genuine
+ * is_startup_noise() drops mmap/mprotect SYS_ADMIN until a genuine
  * capability event arrives and sets recording_ready.
  *
- * Layer 3 - shutdown noise (userspace drain gate):
+ * Layer 3 - memory overcommit accounting noise (userspace always-noise):
+ * brk triggers cap_vm_enough_memory()->cap_capable(CAP_SYS_ADMIN) as part of
+ * kernel memory overcommit accounting. This is advisory resource accounting,
+ * not a permission gate, so brk does not require CAP_SYS_ADMIN to succeed.
+ * is_always_noise() drops these SYS_ADMIN-from-brk checks unconditionally.
+ *
+ * Layer 4 - shutdown noise (userspace drain gate):
  * when tracing stops, interpreter/runtime cleanup can recreate the same
- * mmap/brk SYS_ADMIN pattern. During final ring-buffer drain, shutting_down
+ * mmap SYS_ADMIN pattern. During final ring-buffer drain, shutting_down
  * reuses is_startup_noise() to suppress that shutdown-only chatter.
  *
  * The is_always_noise()/is_startup_noise() split is deliberate: always-noise
@@ -190,11 +196,19 @@ static int include_cap_in_recommendations(int cap)
 /*
  * is_always_noise - capability checks that are never real application needs.
  *
- * SYS_ADMIN and SETPCAP from execve are always kernel-internal credential
+ * Covers two categories:
+ *
+ * 1) SYS_ADMIN and SETPCAP from execve are kernel-internal credential
  * transitions (install_exec_creds/commit_creds). No application needs these
- * capabilities for exec to succeed. Dropping these without setting
- * recording_ready keeps the startup gate closed across shebang re-exec
- * chains, so startup noise filtering still applies in the final interpreter.
+ * capabilities for exec to succeed.
+ *
+ * 2) SYS_ADMIN from brk comes from cap_vm_enough_memory() overcommit
+ * accounting, not permission enforcement. brk can still succeed without
+ * CAP_SYS_ADMIN; this check only changes accounting behavior.
+ *
+ * Dropping these without setting recording_ready keeps the startup gate closed
+ * across shebang re-exec chains, so startup noise filtering still applies in
+ * the final interpreter.
  */
 static int is_always_noise(const struct cap_event *e)
 {
@@ -203,13 +217,17 @@ static int is_always_noise(const struct cap_event *e)
 	    e->capability == CAP_SETPCAP))
 		return 1;
 
+	if (e->capability == CAP_SYS_ADMIN &&
+	    e->syscall_nr == state.app.brk_nr)
+		return 1;
+
 	return 0;
 }
 
 /*
  * is_startup_noise - runtime linker noise filtered during startup only.
  *
- * SYS_ADMIN from mmap/brk/mprotect happens when root maps memory via
+ * SYS_ADMIN from mmap/mprotect happens when root maps memory via
  * security_mmap_addr(). The runtime linker does this while loading shared
  * libraries. After startup (recording_ready=1), these are not filtered
  * because they could represent legitimate app usage (e.g., MAP_HUGETLB).
@@ -218,7 +236,6 @@ static int is_startup_noise(const struct cap_event *e)
 {
 	if (e->capability == CAP_SYS_ADMIN &&
 	    (e->syscall_nr == state.app.mmap_nr ||
-	     e->syscall_nr == state.app.brk_nr ||
 	     e->syscall_nr == state.app.mprotect_nr))
 		return 1;
 
@@ -691,22 +708,32 @@ static int handle_cap_event(void *ctx __attribute__((unused)), void *data,
 	const struct cap_event *e = data;
 
 	/*
-	 * Filter block 1 (always-noise): drop exec credential-transition
-	 * checks unconditionally. This must run first so these events do not
-	 * set recording_ready and prematurely open the startup gate.
+	 * Filter block 1 (always-noise): drop exec credential-transition and
+	 * brk overcommit-accounting checks unconditionally. This must run first
+	 * so these events do not set recording_ready and prematurely open the
+	 * startup gate.
 	 */
 	if (is_always_noise(e)) {
-		if (state.verbose)
-			printf("[CAP] Filtered exec noise: cap=%s syscall=%s\n",
-			       cap_name_safe(e->capability),
-			       syscall_name_from_nr(e->syscall_nr) ?:
-			       "unknown");
+		if (state.verbose) {
+			if (e->syscall_nr == state.app.brk_nr)
+				printf("[CAP] Filtered memory accounting noise: "
+				       "cap=%s syscall=%s\n",
+				       cap_name_safe(e->capability),
+				       syscall_name_from_nr(e->syscall_nr) ?:
+				       "unknown");
+			else
+				printf("[CAP] Filtered exec noise: cap=%s "
+				       "syscall=%s\n",
+				       cap_name_safe(e->capability),
+				       syscall_name_from_nr(e->syscall_nr) ?:
+				       "unknown");
+		}
 		return 0;
 	}
 
 	/*
 	 * Filter block 2 (startup-noise gate): while recording_ready is still
-	 * closed, drop runtime-linker mmap/brk/mprotect SYS_ADMIN checks.
+	 * closed, drop runtime-linker mmap/mprotect SYS_ADMIN checks.
 	 * First non-noise event opens the gate for normal recording.
 	 */
 	if (!state.recording_ready) {
@@ -727,7 +754,7 @@ static int handle_cap_event(void *ctx __attribute__((unused)), void *data,
 	/*
 	 * Filter block 3 (shutdown-noise drain): after stop is decided,
 	 * reapply startup-noise filtering during final drain because runtime
-	 * teardown can produce the same mmap/brk SYS_ADMIN pattern.
+	 * teardown can produce the same mmap/mprotect SYS_ADMIN pattern.
 	 */
 	if (state.shutting_down && is_startup_noise(e)) {
 		if (state.verbose)
