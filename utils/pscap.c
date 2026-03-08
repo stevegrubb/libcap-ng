@@ -38,6 +38,7 @@
 #include "cap-ng.h"
 
 #define CMD_LEN 16
+#define ACCOUNT_LEN 32
 #define USERNS_MARK_LEN 3	// two characters plus '\0'.
 
 static void usage(void)
@@ -50,8 +51,59 @@ struct proc_info {
 	pid_t pid;
 	pid_t ppid;
 	char cmd[CMD_LEN + USERNS_MARK_LEN];
+	char account[ACCOUNT_LEN];
 	char *caps_text;
 };
+
+static int get_euid(int pid)
+{
+	char path[32], buf[128];
+	FILE *f;
+	int euid = -1;
+
+	snprintf(path, sizeof(path), "/proc/%d/status", pid);
+	f = fopen(path, "rte");
+	if (f == NULL)
+		return 0;
+
+	__fsetlocking(f, FSETLOCKING_BYCALLER);
+	while (fgets(buf, sizeof(buf), f)) {
+		if (memcmp(buf, "Uid:", 4) == 0) {
+			int uid;
+
+			sscanf(buf, "Uid: %d %d", &uid, &euid);
+			break;
+		}
+	}
+	fclose(f);
+
+	if (euid < 0)
+		return 0;
+
+	return euid;
+}
+
+static void get_account_name(int pid, char *account, size_t account_len)
+{
+	struct passwd *p;
+	int euid;
+
+	euid = get_euid(pid);
+	if (euid == 0) {
+		strncpy(account, "root", account_len - 1);
+		account[account_len - 1] = '\0';
+		return;
+	}
+
+	p = getpwuid(euid);
+	if (p && p->pw_name) {
+		strncpy(account, p->pw_name, account_len - 1);
+		account[account_len - 1] = '\0';
+		return;
+	}
+
+	snprintf(account, account_len, "%d", euid);
+}
 
 static int get_width(void)
 {
@@ -229,7 +281,8 @@ static void print_tree_node(struct proc_info *procs, size_t count,
 	strcpy(cont_prefix, prefix);
 	strcat(cont_prefix, branch);
 
-	snprintf(head, sizeof(head), "%s(%d) [", proc->cmd, proc->pid);
+	snprintf(head, sizeof(head), "%s(%d:%s) [", proc->cmd,
+		 proc->pid, proc->account);
 	prefix_len = strlen(line_prefix);
 	cont_len = strlen(cont_prefix);
 	caps = proc->caps_text;
@@ -390,7 +443,7 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 	while (( ent = readdir(d) )) {
-		int pid, ppid, euid = -1;
+		int pid, ppid;
 		char buf[100];
 		char *tmp, cmd[CMD_LEN + USERNS_MARK_LEN], state;
 		int fd, len;
@@ -482,33 +535,12 @@ int main(int argc, char *argv[])
 				sizeof(procs[proc_count].cmd) - 1);
 			procs[proc_count].cmd[
 				sizeof(procs[proc_count].cmd) - 1] = '\0';
+			get_account_name(pid, procs[proc_count].account,
+					 sizeof(procs[proc_count].account));
 			procs[proc_count].caps_text = caps_text;
 			proc_count++;
 		} else if (caps > CAPNG_NONE) {
-			// Get the effective uid
-			FILE *f;
-			int line;
-			snprintf(buf, sizeof(buf), "/proc/%d/status", pid);
-			f = fopen(buf, "rte");
-			if (f == NULL)
-				euid = 0;
-			else {
-				line = 0;
-				__fsetlocking(f, FSETLOCKING_BYCALLER);
-				while (fgets(buf, sizeof(buf), f)) {
-					if (line == 0) {
-						line++;
-						continue;
-					}
-					if (memcmp(buf, "Uid:", 4) == 0) {
-						int id;
-						sscanf(buf, "Uid: %d %d",
-							&id, &euid);
-						break;
-					}
-				}
-				fclose(f);
-			}
+			int euid = get_euid(pid);
 
 			if (header == 0) {
 				printf("%-7s %-7s %-16s %-15s %s\n",
