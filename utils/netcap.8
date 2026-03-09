@@ -177,41 +177,41 @@ orange highlights problems to fix, yellow highlights cautionary conditions
 to review, green highlights good hardening state, and uncolored output is
 neutral context.
 
-The ␌Bcaps␌P line shows permitted capabilities. Orange-tier capabilities
+The \fBcaps\fP line shows permitted capabilities. Orange-tier capabilities
 represent severe privilege that is rarely necessary for network-facing daemons:
-␌Bsys_ptrace␌P, ␌Bsys_module␌P, ␌Bsys_rawio␌P, ␌Bsetuid␌P, ␌Bsetgid␌P,
-␌Bsetpcap␌P, and ␌Baudit_control␌P. Yellow-tier capabilities are common but
-still materially increase attack impact: ␌Bsys_admin␌P, ␌Bdac_override␌P,
-␌Bdac_read_search␌P, ␌Bnet_admin␌P, ␌Bnet_raw␌P, ␌Bchown␌P, ␌Bfowner␌P,
-␌Bmknod␌P, and ␌Bsys_chroot␌P. ␌Bcaps: (full)␌P means all capabilities are
-present (effectively full root privilege). ␌Bcaps: (none)␌P is ideal.
+\fBsys_ptrace\fP, \fBsys_module\fP, \fBsys_rawio\fP, \fBsetuid\fP, \fBsetgid\fP,
+\fBsetpcap\fP, and \fBaudit_control\fP. Yellow-tier capabilities are common but
+still materially increase attack impact: \fBsys_admin\fP, \fBdac_override\fP,
+\fBdac_read_search\fP, \fBnet_admin\fP, \fBnet_raw\fP, \fBchown\fP, \fBfowner\fP,
+\fBmknod\fP, and \fBsys_chroot\fP. \fBcaps: (full)\fP means all capabilities are
+present (effectively full root privilege). \fBcaps: (none)\fP is ideal.
 
-Ambient capabilities are inherited across ␌Bexecve␌P by child processes
-(unless constrained by ␌Bno_new_privs␌P), so their presence on a network
-daemon is typically a problem. The ␌Bambient:␌P line lists active ambient
+Ambient capabilities are inherited across \fBexecve\fP by child processes
+(unless constrained by \fBno_new_privs\fP), so their presence on a network
+daemon is typically a problem. The \fBambient:\fP line lists active ambient
 capabilities.
 
-␌B[open-ended-bounding]␌P means the process has not trimmed its bounding
+\fB[open-ended-bounding]\fP means the process has not trimmed its bounding
 set ceiling. This is not active privilege by itself, but it leaves future
 privilege-acquisition paths open (for example via file capabilities or ambient
 inheritance). For libcap-ng users, trimming is typically a one-flag change
-(␌BCAPNG_SELECT_BOUNDS␌P) in existing capability-set calls; with libcap,
+(\fBCAPNG_SELECT_BOUNDS\fP) in existing capability-set calls; with libcap,
 bounding capabilities are dropped individually.
 
-Defense fields summarize exploit-resistance posture: ␌Bno_new_privs: yes␌P
+Defense fields summarize exploit-resistance posture: \fBno_new_privs: yes\fP
 blocks privilege gain through setuid/file-capability exec paths and is often
-the highest-value single toggle. ␌Bseccomp: filter␌P restricts available
-syscalls (␌Bdisabled␌P means no syscall filtering). ␌Bruns_as_nonroot: yes␌P
-indicates non-UID-0 execution. ␌Bsecurebits␌P with ␌Bnoroot=yes␌P disables
-legacy setuid-root capability gain behavior; ␌Bsecurebits_locked: yes␌P
+the highest-value single toggle. \fBseccomp: filter\fP restricts available
+syscalls (\fBdisabled\fP means no syscall filtering). \fBruns_as_nonroot: yes\fP
+indicates non-UID-0 execution. \fBsecurebits\fP with \fBnoroot=yes\fP disables
+legacy setuid-root capability gain behavior; \fBsecurebits_locked: yes\fP
 means those securebits cannot be reverted at runtime.
 
-Flags provide reachability and interception context: ␌Bwildcard-bind␌P means
-the daemon listens on every interface, ␌Bhypervisor-plane␌P indicates host/
-guest boundary exposure (VSOCK), and ␌Breuseport␌P means another process with
+Flags provide reachability and interception context: \fBwildcard-bind\fP means
+the daemon listens on every interface, \fBhypervisor-plane\fP indicates host/
+guest boundary exposure (VSOCK), and \fBreuseport\fP means another process with
 the same UID could bind and potentially intercept traffic.
 
-␌Braw␌P/␌Braw6␌P and ␌Bpacket␌P protocol nodes denote sockets with IP- or
+\fBraw\fP/\fBraw6\fP and \fBpacket\fP protocol nodes denote sockets with IP- or
 link-layer packet craft/sniff capabilities, significantly expanding what an
 attacker can do post-compromise.
 

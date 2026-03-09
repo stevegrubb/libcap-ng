@@ -2565,11 +2565,36 @@ static void render_tree_process_details(const char *prefix,
 		snprintf(sb, sizeof(sb), "%s", p->defenses.securebits);
 		if (use_color) {
 			char *pos;
+
 			if ((pos = strstr(sb, "noroot=yes"))) {
 				char t[512];
+
 				*pos = 0;
-				snprintf(t, sizeof(t), "%s%s%snoroot=yes%s%s", sb,
-					COLOR_GREEN, "", COLOR_RESET, pos + strlen("noroot=yes"));
+				snprintf(t, sizeof(t), "%s%snoroot=yes%s%s", sb,
+					COLOR_GREEN, COLOR_RESET,
+					pos + strlen("noroot=yes"));
+				strncpy(sb, t, sizeof(sb));
+				sb[sizeof(sb)-1] = 0;
+			}
+
+			if ((pos = strstr(sb, "keep_caps=yes"))) {
+				char t[512];
+
+				*pos = 0;
+				snprintf(t, sizeof(t), "%s%skeep_caps=yes%s%s", sb,
+					COLOR_YELLOW, COLOR_RESET,
+					pos + strlen("keep_caps=yes"));
+				strncpy(sb, t, sizeof(sb));
+				sb[sizeof(sb)-1] = 0;
+			}
+
+			if ((pos = strstr(sb, "no_setuid_fixup=yes"))) {
+				char t[512];
+
+				*pos = 0;
+				snprintf(t, sizeof(t), "%s%sno_setuid_fixup=yes%s%s", sb,
+					COLOR_YELLOW, COLOR_RESET,
+					pos + strlen("no_setuid_fixup=yes"));
 				strncpy(sb, t, sizeof(sb));
 				sb[sizeof(sb)-1] = 0;
 			}
@@ -2710,7 +2735,7 @@ static void render_json_process(struct process_info *p,
 static void render_tree(struct model *m)
 {
 	size_t i;
-	int planes[4];
+	int planes[PLANE_COUNT];
 	size_t plane_n = 0;
 	int width = get_width();
 
