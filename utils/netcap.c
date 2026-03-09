@@ -54,7 +54,7 @@ static char *tacct = NULL;
 
 static void usage(void)
 {
-	fprintf(stderr, "usage: netcap [--advanced [--json]]\n");
+	fprintf(stderr, "usage: netcap [--advanced [--json] [--no-color]]\n");
 	exit(1);
 }
 
@@ -729,7 +729,7 @@ static void read_vsock(void)
 
 int main(int argc, char **argv)
 {
-	struct netcap_opts opts = { 0, 0 };
+	struct netcap_opts opts = { 0, 0, 0 };
 	int i;
 
 	for (i = 1; i < argc; i++) {
@@ -737,6 +737,8 @@ int main(int argc, char **argv)
 			opts.advanced = 1;
 		else if (strcmp(argv[i], "--json") == 0)
 			opts.json = 1;
+		else if (strcmp(argv[i], "--no-color") == 0)
+			opts.no_color = 1;
 		else {
 			fprintf(stderr, "Unknown option: %s\n", argv[i]);
 			usage();

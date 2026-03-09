@@ -36,6 +36,11 @@ and flags.
 .B \-\-json
 With \fB\-\-advanced\fP, emit machine-readable JSON instead of the tree
 view.
+.TP
+.B \-\-no\-color
+Suppress colored output. By default, when stdout is a terminal, keywords are
+colorized by severity to highlight problems, cautions, and positive hardening
+state.
 
 .SH "ADVANCED MODE"
 Advanced mode is an attack-surface and posture inventory for the current
@@ -165,6 +170,50 @@ started as root and later changed only effective UID via setuid still reports
 If a plane has no discovered binds, it appears with an empty list. If a
 consumer does not receive a given plane, treat it as none found or omitted by
 the producer.
+
+.SH INTERPRETATION
+Colorized tree output is intended to prioritize remediation quickly:
+orange highlights problems to fix, yellow highlights cautionary conditions
+to review, green highlights good hardening state, and uncolored output is
+neutral context.
+
+The ␌Bcaps␌P line shows permitted capabilities. Orange-tier capabilities
+represent severe privilege that is rarely necessary for network-facing daemons:
+␌Bsys_ptrace␌P, ␌Bsys_module␌P, ␌Bsys_rawio␌P, ␌Bsetuid␌P, ␌Bsetgid␌P,
+␌Bsetpcap␌P, and ␌Baudit_control␌P. Yellow-tier capabilities are common but
+still materially increase attack impact: ␌Bsys_admin␌P, ␌Bdac_override␌P,
+␌Bdac_read_search␌P, ␌Bnet_admin␌P, ␌Bnet_raw␌P, ␌Bchown␌P, ␌Bfowner␌P,
+␌Bmknod␌P, and ␌Bsys_chroot␌P. ␌Bcaps: (full)␌P means all capabilities are
+present (effectively full root privilege). ␌Bcaps: (none)␌P is ideal.
+
+Ambient capabilities are inherited across ␌Bexecve␌P by child processes
+(unless constrained by ␌Bno_new_privs␌P), so their presence on a network
+daemon is typically a problem. The ␌Bambient:␌P line lists active ambient
+capabilities.
+
+␌B[open-ended-bounding]␌P means the process has not trimmed its bounding
+set ceiling. This is not active privilege by itself, but it leaves future
+privilege-acquisition paths open (for example via file capabilities or ambient
+inheritance). For libcap-ng users, trimming is typically a one-flag change
+(␌BCAPNG_SELECT_BOUNDS␌P) in existing capability-set calls; with libcap,
+bounding capabilities are dropped individually.
+
+Defense fields summarize exploit-resistance posture: ␌Bno_new_privs: yes␌P
+blocks privilege gain through setuid/file-capability exec paths and is often
+the highest-value single toggle. ␌Bseccomp: filter␌P restricts available
+syscalls (␌Bdisabled␌P means no syscall filtering). ␌Bruns_as_nonroot: yes␌P
+indicates non-UID-0 execution. ␌Bsecurebits␌P with ␌Bnoroot=yes␌P disables
+legacy setuid-root capability gain behavior; ␌Bsecurebits_locked: yes␌P
+means those securebits cannot be reverted at runtime.
+
+Flags provide reachability and interception context: ␌Bwildcard-bind␌P means
+the daemon listens on every interface, ␌Bhypervisor-plane␌P indicates host/
+guest boundary exposure (VSOCK), and ␌Breuseport␌P means another process with
+the same UID could bind and potentially intercept traffic.
+
+␌Braw␌P/␌Braw6␌P and ␌Bpacket␌P protocol nodes denote sockets with IP- or
+link-layer packet craft/sniff capabilities, significantly expanding what an
+attacker can do post-compromise.
 
 .SH "SEE ALSO"
 .BR pscap (8),

@@ -194,6 +194,91 @@ struct pidset {
 };
 
 static void free_process(struct process_info *p);
+
+static int use_color;
+
+#define COLOR_ORANGE	"\033[38;5;208m"
+#define COLOR_YELLOW	"\033[38;5;226m"
+#define COLOR_GREEN	"\033[38;5;82m"
+#define COLOR_RESET	"\033[0m"
+
+enum cap_severity {
+	CAP_SEV_NEUTRAL,
+	CAP_SEV_YELLOW,
+	CAP_SEV_ORANGE,
+};
+
+static const char *orange_caps[] = {
+	"sys_ptrace", "sys_module", "sys_rawio", "setuid", "setgid",
+	"setpcap", "audit_control",
+};
+
+static const char *yellow_caps[] = {
+	"sys_admin", "dac_override", "dac_read_search", "net_admin",
+	"net_raw", "chown", "fowner", "mknod", "sys_chroot",
+};
+
+static enum cap_severity cap_name_severity(const char *name)
+{
+	size_t i;
+
+	for (i = 0; i < sizeof(orange_caps) / sizeof(orange_caps[0]); i++) {
+		if (strcmp(name, orange_caps[i]) == 0)
+			return CAP_SEV_ORANGE;
+	}
+	for (i = 0; i < sizeof(yellow_caps) / sizeof(yellow_caps[0]); i++) {
+		if (strcmp(name, yellow_caps[i]) == 0)
+			return CAP_SEV_YELLOW;
+	}
+	return CAP_SEV_NEUTRAL;
+}
+
+static int caps_contains_token(const char *caps, const char *token)
+{
+	size_t len;
+	const char *p;
+
+	if (!caps || !token)
+		return 0;
+	len = strlen(token);
+	for (p = caps; (p = strstr(p, token)) != NULL; p++) {
+		int left_ok = (p == caps) ||
+			(p > caps + 1 && p[-1] == ' ' && p[-2] == ',');
+		char right = p[len];
+		int right_ok = right == 0 || right == ',' || right == ' ' || right == '[';
+
+		if (left_ok && right_ok)
+			return 1;
+	}
+	return 0;
+}
+
+static const char *sev_color(enum cap_severity sev)
+{
+	if (sev == CAP_SEV_ORANGE)
+		return COLOR_ORANGE;
+	if (sev == CAP_SEV_YELLOW)
+		return COLOR_YELLOW;
+	return NULL;
+}
+
+static enum cap_severity caps_worst_severity(const char *caps)
+{
+	size_t i;
+
+	if (!caps)
+		return CAP_SEV_NEUTRAL;
+	for (i = 0; i < sizeof(orange_caps) / sizeof(orange_caps[0]); i++) {
+		if (caps_contains_token(caps, orange_caps[i]))
+			return CAP_SEV_ORANGE;
+	}
+	for (i = 0; i < sizeof(yellow_caps) / sizeof(yellow_caps[0]); i++) {
+		if (caps_contains_token(caps, yellow_caps[i]))
+			return CAP_SEV_YELLOW;
+	}
+	return CAP_SEV_NEUTRAL;
+}
+
 static void free_model(struct model *m);
 static void json_escape(const char *s);
 static void print_tree_node(const char *prefix, int is_last,
@@ -516,22 +601,24 @@ static int pidset_test_and_add(struct pidset *ps, int pid)
 }
 
 static void print_flag_nodes(const char *pfx_flags, int width,
-	unsigned int flags)
+	unsigned int flags, enum cap_severity priv_sev)
 {
 	static const struct {
 		unsigned int bit;
 		const char *name;
+		const char *color;
 	} map[] = {
-		{ FLAG_HYPERVISOR_PLANE, "hypervisor-plane" },
-		{ FLAG_SSH_VSOCK_22, "ssh-on-vsock-port-22" },
-		{ FLAG_WILDCARD_BIND, "wildcard-bind" },
-		{ FLAG_REUSEPORT, "reuseport" },
-		{ FLAG_PRIVILEGED_CAPS, "privileged-caps" },
-		{ FLAG_SECUREBITS_LOCKED, "securebits-locked" },
+		{ FLAG_HYPERVISOR_PLANE, "hypervisor-plane", COLOR_YELLOW },
+		{ FLAG_SSH_VSOCK_22, "ssh-on-vsock-port-22", NULL },
+		{ FLAG_WILDCARD_BIND, "wildcard-bind", COLOR_YELLOW },
+		{ FLAG_REUSEPORT, "reuseport", COLOR_YELLOW },
+		{ FLAG_PRIVILEGED_CAPS, "privileged-caps", NULL },
+		{ FLAG_SECUREBITS_LOCKED, "securebits-locked", NULL },
 	};
 	size_t i;
 	size_t n = 0;
 	size_t printed = 0;
+	char node[256];
 
 	for (i = 0; i < sizeof(map) / sizeof(map[0]); i++)
 		if (flags & map[i].bit)
@@ -541,10 +628,21 @@ static void print_flag_nodes(const char *pfx_flags, int width,
 		return;
 	}
 	for (i = 0; i < sizeof(map) / sizeof(map[0]); i++) {
+		const char *color = map[i].color;
+
 		if (!(flags & map[i].bit))
 			continue;
+		if (map[i].bit == FLAG_PRIVILEGED_CAPS)
+			color = sev_color(priv_sev);
+		if (map[i].bit == FLAG_SECUREBITS_LOCKED)
+			color = COLOR_YELLOW;
+		if (use_color && color)
+			snprintf(node, sizeof(node), "%s%s%s", color, map[i].name,
+				COLOR_RESET);
+		else
+			snprintf(node, sizeof(node), "%s", map[i].name);
 		printed++;
-		print_tree_node(pfx_flags, printed == n, map[i].name, width);
+		print_tree_node(pfx_flags, printed == n, node, width);
 	}
 }
 
@@ -2105,14 +2203,90 @@ static void collect_endpoints(struct model *m)
  * Side effects/assumptions: Operates on in-memory data and may read
  * procfs/netns state; it does not change kernel configuration.
  */
+enum color_state {
+	COLOR_STATE_NONE,
+	COLOR_STATE_ORANGE,
+	COLOR_STATE_YELLOW,
+	COLOR_STATE_GREEN,
+};
+
+static const char *color_state_code(enum color_state st)
+{
+	switch (st) {
+	case COLOR_STATE_ORANGE:
+		return COLOR_ORANGE;
+	case COLOR_STATE_YELLOW:
+		return COLOR_YELLOW;
+	case COLOR_STATE_GREEN:
+		return COLOR_GREEN;
+	default:
+		return NULL;
+	}
+}
+
+static int skip_ansi_sgr(const char *text, int i)
+{
+	if (text[i] != '\033' || text[i + 1] != '[')
+		return i;
+	i += 2;
+	while (text[i] && text[i] != 'm')
+		i++;
+	if (text[i] == 'm')
+		i++;
+	return i;
+}
+
+static enum color_state scan_color_state(const char *text, int from, int to,
+	enum color_state st)
+{
+	int i;
+
+	for (i = from; i < to && text[i]; ) {
+		if (text[i] == '\033' && text[i + 1] == '[') {
+			if (strncmp(text + i, COLOR_ORANGE, strlen(COLOR_ORANGE)) == 0) {
+				st = COLOR_STATE_ORANGE;
+				i += strlen(COLOR_ORANGE);
+				continue;
+			}
+			if (strncmp(text + i, COLOR_YELLOW, strlen(COLOR_YELLOW)) == 0) {
+				st = COLOR_STATE_YELLOW;
+				i += strlen(COLOR_YELLOW);
+				continue;
+			}
+			if (strncmp(text + i, COLOR_GREEN, strlen(COLOR_GREEN)) == 0) {
+				st = COLOR_STATE_GREEN;
+				i += strlen(COLOR_GREEN);
+				continue;
+			}
+			if (strncmp(text + i, COLOR_RESET, strlen(COLOR_RESET)) == 0) {
+				st = COLOR_STATE_NONE;
+				i += strlen(COLOR_RESET);
+				continue;
+			}
+			i = skip_ansi_sgr(text, i);
+			continue;
+		}
+		i++;
+	}
+	return st;
+}
+
 static int wrap_to(const char *text, int from, int limit)
 {
 	int i;
+	int vis = 0;
 	int space = -1;
 
-	for (i = from; text[i] && (i - from) < limit; i++)
+	for (i = from; text[i] && vis < limit; ) {
+		if (text[i] == '\033' && text[i + 1] == '[') {
+			i = skip_ansi_sgr(text, i);
+			continue;
+		}
 		if (text[i] == ' ')
 			space = i;
+		i++;
+		vis++;
+	}
 	if (!text[i])
 		return i;
 	if (space > from)
@@ -2140,6 +2314,7 @@ static void print_tree_node(const char *prefix, int is_last, const char *txt,
 	char cont[512];
 	int pos = 0;
 	int first = 1;
+	enum color_state st = COLOR_STATE_NONE;
 
 	snprintf(head, sizeof(head), "%s%s", prefix,
 		is_last ? "└─ " : "├─ ");
@@ -2150,6 +2325,7 @@ static void print_tree_node(const char *prefix, int is_last, const char *txt,
 		int lead_len = strlen(lead);
 		int avail = width - lead_len;
 		int to;
+		const char *code;
 
 		if (avail < 10)
 			avail = 10;
@@ -2158,7 +2334,15 @@ static void print_tree_node(const char *prefix, int is_last, const char *txt,
 			return;
 		}
 		to = wrap_to(txt, pos, avail);
-		printf("%s%.*s\n", lead, to - pos, txt + pos);
+		printf("%s", lead);
+		code = color_state_code(st);
+		if (!first && code)
+			fputs(code, stdout);
+		printf("%.*s", to - pos, txt + pos);
+		st = scan_color_state(txt, pos, to, st);
+		if (st != COLOR_STATE_NONE)
+			fputs(COLOR_RESET, stdout);
+		putchar('\n');
 		while (txt[to] == ' ')
 			to++;
 		pos = to;
@@ -2242,12 +2426,13 @@ static void render_tree_process_details(const char *prefix,
 					int width)
 {
 	char pfx_child[256], pfx_def[256], pfx_flags[256];
-	char line[512];
+	char line[4096];
 	const char *def_nodes[8];
 	char def_buf[8][512];
 	size_t def_n = 0;
 	size_t ai;
 	unsigned int flags = 0;
+	enum cap_severity priv_sev = caps_worst_severity(p->caps);
 
 	snprintf(line, sizeof(line), "%s (pid=%d uid=%d%s%s%s%s)",
 		p->comm, p->pid, p->uid,
@@ -2258,66 +2443,151 @@ static void render_tree_process_details(const char *prefix,
 	print_tree_node(prefix, is_last, line, width);
 	build_child_prefix(pfx_child, sizeof(pfx_child), prefix, is_last);
 
-	snprintf(line, sizeof(line), "caps: %s", p->caps);
-	print_tree_node(pfx_child, 0, line, width);
-	if (p->ambient_caps) {
-		snprintf(line, sizeof(line), "ambient: %s", p->ambient_caps);
-		print_tree_node(pfx_child, 0, line, width);
-	}
-	if (p->ambient_present || p->open_ended_bounding) {
-		int n;
-		size_t off = 0;
+	if (strcmp(p->caps, "(full)") == 0 || strcmp(p->caps, "(none)") == 0) {
+		const char *c = strcmp(p->caps, "(full)") == 0 ? COLOR_ORANGE :
+			COLOR_GREEN;
+		if (use_color)
+			snprintf(line, sizeof(line), "caps: %s%s%s", c, p->caps,
+				COLOR_RESET);
+		else
+			snprintf(line, sizeof(line), "caps: %s", p->caps);
+	} else {
+		char capsbuf[3072] = "";
+		char *tmp = xstrdup(p->caps);
+		char *save = NULL;
+		char *tok;
+		int first = 1;
 
-		n = snprintf(line + off, sizeof(line) - off, "findings:");
-		if (n > 0) {
-			if ((size_t)n >= sizeof(line) - off)
-				off = sizeof(line) - 1;
-			else
-				off += (size_t)n;
-		}
-		if (p->ambient_present && off < sizeof(line)) {
-			n = snprintf(line + off, sizeof(line) - off,
-				" [ambient-present]");
-			if (n > 0) {
-				if ((size_t)n >= sizeof(line) - off)
-					off = sizeof(line) - 1;
+		if (!tmp) {
+			snprintf(line, sizeof(line), "caps: %s", p->caps);
+		} else {
+			for (tok = strtok_r(tmp, ",", &save); tok;
+			     tok = strtok_r(NULL, ",", &save)) {
+				char part[256];
+				char *t = tok;
+				enum cap_severity sev;
+				while (*t == ' ')
+					t++;
+				sev = cap_name_severity(t);
+				if (use_color && sev_color(sev))
+					snprintf(part, sizeof(part), "%s%s%s",
+						sev_color(sev), t, COLOR_RESET);
 				else
-					off += (size_t)n;
+					snprintf(part, sizeof(part), "%s", t);
+				if (!first)
+					strncat(capsbuf, ", ", sizeof(capsbuf)-strlen(capsbuf)-1);
+				strncat(capsbuf, part, sizeof(capsbuf)-strlen(capsbuf)-1);
+				first = 0;
 			}
+			free(tmp);
+			if (p->ambient_present) {
+				if (use_color)
+					strncat(capsbuf, " [\033[38;5;208mambient-present\033[0m]",
+						sizeof(capsbuf)-strlen(capsbuf)-1);
+				else
+					strncat(capsbuf, " [ambient-present]",
+						sizeof(capsbuf)-strlen(capsbuf)-1);
+			}
+			if (p->open_ended_bounding) {
+				if (use_color && strcmp(p->caps, "(full)") != 0 &&
+				    caps_contains_token(p->caps, "setpcap"))
+					strncat(capsbuf,
+						" [\033[38;5;208mopen-ended-bounding\033[0m]",
+						sizeof(capsbuf) - strlen(capsbuf) - 1);
+				else
+					strncat(capsbuf, " [open-ended-bounding]",
+						sizeof(capsbuf) - strlen(capsbuf) - 1);
+			}
+			snprintf(line, sizeof(line), "caps: %s", capsbuf);
 		}
-		if (p->open_ended_bounding && off < sizeof(line)) {
-			snprintf(line + off, sizeof(line) - off,
-				" [open-ended-bounding]");
-		}
+	}
+	print_tree_node(pfx_child, 0, line, width);
+
+	if (p->ambient_caps) {
+		if (use_color)
+			snprintf(line, sizeof(line), "ambient: %s%s%s", COLOR_ORANGE,
+				p->ambient_caps, COLOR_RESET);
+		else
+			snprintf(line, sizeof(line), "ambient: %s", p->ambient_caps);
 		print_tree_node(pfx_child, 0, line, width);
 	}
 
 	snprintf(def_buf[def_n], sizeof(def_buf[def_n]),
-		DEFENSES_RUNS_AS_KEY ": %s",
-		p->defenses.runs_as_nonroot);
+		DEFENSES_RUNS_AS_KEY ": %s%s%s",
+		strcmp(p->defenses.runs_as_nonroot, "yes") == 0 && use_color ? COLOR_GREEN :
+		(strcmp(p->defenses.runs_as_nonroot, "no") == 0 && use_color ? COLOR_YELLOW : ""),
+		p->defenses.runs_as_nonroot,
+		use_color && (strcmp(p->defenses.runs_as_nonroot, "yes") == 0 ||
+		 strcmp(p->defenses.runs_as_nonroot, "no") == 0) ? COLOR_RESET : "");
 	def_nodes[def_n] = def_buf[def_n];
 	def_n++;
-	snprintf(def_buf[def_n], sizeof(def_buf[def_n]), "no_new_privs: %s",
-		p->defenses.no_new_privs);
+
+	if (strcmp(p->defenses.no_new_privs, "yes") == 0 && use_color)
+		snprintf(def_buf[def_n], sizeof(def_buf[def_n]), "no_new_privs: %syes%s",
+			COLOR_GREEN, COLOR_RESET);
+	else if (strcmp(p->defenses.no_new_privs, "no") == 0 && use_color)
+		snprintf(def_buf[def_n], sizeof(def_buf[def_n]), "no_new_privs: %sno%s",
+			COLOR_YELLOW, COLOR_RESET);
+	else
+		snprintf(def_buf[def_n], sizeof(def_buf[def_n]), "no_new_privs: %s",
+			p->defenses.no_new_privs);
 	def_nodes[def_n] = def_buf[def_n];
 	def_n++;
-	snprintf(def_buf[def_n], sizeof(def_buf[def_n]), "seccomp: %s",
-		p->defenses.seccomp);
+
+	if ((strcmp(p->defenses.seccomp, "filter") == 0 ||
+	     strcmp(p->defenses.seccomp, "strict") == 0) && use_color)
+		snprintf(def_buf[def_n], sizeof(def_buf[def_n]), "seccomp: %s%s%s",
+			COLOR_GREEN, p->defenses.seccomp, COLOR_RESET);
+	else if (strcmp(p->defenses.seccomp, "disabled") == 0 && use_color)
+		snprintf(def_buf[def_n], sizeof(def_buf[def_n]), "seccomp: %sdisabled%s",
+			COLOR_YELLOW, COLOR_RESET);
+	else
+		snprintf(def_buf[def_n], sizeof(def_buf[def_n]), "seccomp: %s",
+			p->defenses.seccomp);
 	def_nodes[def_n] = def_buf[def_n];
 	def_n++;
+
 	if (p->defenses.lsm_label) {
-		snprintf(def_buf[def_n], sizeof(def_buf[def_n]), "lsm: %s",
-			p->defenses.lsm_label);
+		if (use_color && strstr(p->defenses.lsm_label, "unconfined_t"))
+			snprintf(def_buf[def_n], sizeof(def_buf[def_n]), "lsm: %s%s%s",
+				COLOR_ORANGE, p->defenses.lsm_label, COLOR_RESET);
+		else if (use_color && p->defenses.lsm_label[0])
+			snprintf(def_buf[def_n], sizeof(def_buf[def_n]), "lsm: %s%s%s",
+				COLOR_GREEN, p->defenses.lsm_label, COLOR_RESET);
+		else
+			snprintf(def_buf[def_n], sizeof(def_buf[def_n]), "lsm: %s",
+				p->defenses.lsm_label);
 		def_nodes[def_n] = def_buf[def_n];
 		def_n++;
 	}
 	if (p->defenses.securebits) {
+		char sb[512];
+		snprintf(sb, sizeof(sb), "%s", p->defenses.securebits);
+		if (use_color) {
+			char *pos;
+			if ((pos = strstr(sb, "noroot=yes"))) {
+				char t[512];
+				*pos = 0;
+				snprintf(t, sizeof(t), "%s%s%snoroot=yes%s%s", sb,
+					COLOR_GREEN, "", COLOR_RESET, pos + strlen("noroot=yes"));
+				strncpy(sb, t, sizeof(sb));
+				sb[sizeof(sb)-1] = 0;
+			}
+		}
 		snprintf(def_buf[def_n], sizeof(def_buf[def_n]),
-			"securebits: %s", p->defenses.securebits);
+			"securebits: %s", sb);
 		def_nodes[def_n] = def_buf[def_n];
 		def_n++;
-		snprintf(def_buf[def_n], sizeof(def_buf[def_n]),
-			"securebits_locked: %s", p->defenses.securebits_locked);
+
+		if (use_color && strcmp(p->defenses.securebits_locked, "yes") == 0)
+			snprintf(def_buf[def_n], sizeof(def_buf[def_n]),
+				"securebits_locked: %syes%s", COLOR_GREEN, COLOR_RESET);
+		else if (use_color && strcmp(p->defenses.securebits_locked, "no") == 0)
+			snprintf(def_buf[def_n], sizeof(def_buf[def_n]),
+				"securebits_locked: %sno%s", COLOR_YELLOW, COLOR_RESET);
+		else
+			snprintf(def_buf[def_n], sizeof(def_buf[def_n]),
+				"securebits_locked: %s", p->defenses.securebits_locked);
 		def_nodes[def_n] = def_buf[def_n];
 		def_n++;
 	}
@@ -2344,8 +2614,9 @@ static void render_tree_process_details(const char *prefix,
 
 	print_tree_node(pfx_child, 1, "flags", width);
 	build_child_prefix(pfx_flags, sizeof(pfx_flags), pfx_child, 1);
-	print_flag_nodes(pfx_flags, width, flags);
+	print_flag_nodes(pfx_flags, width, flags, priv_sev);
 }
+
 
 static void render_json_process(struct process_info *p,
 				const struct endpoint *ep,
@@ -2547,8 +2818,17 @@ static void render_tree(struct model *m)
 						proto_end++;
 					proto_last = (proto_end == iface_end);
 
-					print_tree_node(pfx_proto_root, proto_last,
-						m->eps[proto_start].proto, width);
+					if (use_color && (strcmp(m->eps[proto_start].proto, "raw") == 0 ||
+					    strcmp(m->eps[proto_start].proto, "raw6") == 0 ||
+					    strcmp(m->eps[proto_start].proto, "packet") == 0)) {
+						char pbuf[64];
+						snprintf(pbuf, sizeof(pbuf), "%s%s%s", COLOR_YELLOW,
+							m->eps[proto_start].proto, COLOR_RESET);
+						print_tree_node(pfx_proto_root, proto_last, pbuf, width);
+					} else {
+						print_tree_node(pfx_proto_root, proto_last,
+							m->eps[proto_start].proto, width);
+					}
 					build_child_prefix(pfx_bind, sizeof(pfx_bind),
 						pfx_proto_root, proto_last);
 
@@ -2902,6 +3182,7 @@ int netcap_advanced_main(const struct netcap_opts *opts)
 	}
 	collect_proc_inodes(&m);
 	collect_endpoints(&m);
+	use_color = !opts->json && !opts->no_color && isatty(STDOUT_FILENO);
 	if (opts->json)
 		render_json(&m);
 	else
