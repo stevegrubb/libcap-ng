@@ -102,9 +102,12 @@ The defenses section is best-effort: \fBno_new_privs\fP and
 \fBseccomp\fP mode are read from \fB/proc/<pid>/status\fP when
 available, and the LSM label is read from
 \fB/proc/<pid>/attr/current\fP when available. \fBsecurebits\fP and
-their lock status are reported when available and meaningful
-(typically for \fBuid==0\fP or non-default state), and may be
-omitted otherwise. \fBruns_as_nonroot\fP is always reported.
+their lock status are reported as a single tree line when available and
+meaningful (typically for \fBuid==0\fP or non-default state), in the form
+\fBsecurebits: keep_caps=... no_setuid_fixup=... noroot=... (locked: ...)\fP,
+and may be omitted otherwise. JSON output keeps separate
+\fBsecurebits\fP and \fBsecurebits_locked\fP fields for stable machine parsing.
+\fBruns_as_nonroot\fP is always reported.
 
 Flags annotate notable conditions:
 .IP \[bu] 2
@@ -202,9 +205,14 @@ Defense fields summarize exploit-resistance posture: \fBno_new_privs: yes\fP
 blocks privilege gain through setuid/file-capability exec paths and is often
 the highest-value single toggle. \fBseccomp: filter\fP restricts available
 syscalls (\fBdisabled\fP means no syscall filtering). \fBruns_as_nonroot: yes\fP
-indicates non-UID-0 execution. \fBsecurebits\fP with \fBnoroot=yes\fP disables
-legacy setuid-root capability gain behavior; \fBsecurebits_locked: yes\fP
-means those securebits cannot be reverted at runtime.
+indicates non-UID-0 execution. The combined
+\fBsecurebits: keep_caps=... no_setuid_fixup=... noroot=... (locked: ...)\fP
+line uses full value colorization: \fBnoroot=yes\fP and
+\fBlocked: yes\fP are green (good hardening), \fBnoroot=no\fP and
+\fBlocked: no\fP are yellow (legacy setuid-root capability auto-grant path
+or unlocked state), \fBkeep_caps=yes\fP and \fBno_setuid_fixup=yes\fP are
+yellow (caution), and \fBkeep_caps=no\fP plus \fBno_setuid_fixup=no\fP remain
+neutral.
 
 Flags provide reachability and interception context: \fBwildcard-bind\fP means
 the daemon listens on every interface, \fBhypervisor-plane\fP indicates host/

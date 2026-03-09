@@ -2811,58 +2811,71 @@ static void render_tree_process_details(const char *prefix,
 		def_n++;
 	}
 	if (p->defenses.securebits) {
-		char sb[512];
-		snprintf(sb, sizeof(sb), "%s", p->defenses.securebits);
+		const char *keep_caps = "unknown";
+		const char *fixup = "unknown";
+		const char *noroot = "unknown";
+		const char *locked = p->defenses.securebits_locked ?
+			p->defenses.securebits_locked : "unknown";
+		char sb_color[512];
+		char sb_plain[256];
+		const char *keep_color = "";
+		const char *fixup_color = "";
+		const char *noroot_color = "";
+		const char *locked_color = "";
+
+		if (strstr(p->defenses.securebits, "keep_caps=yes"))
+			keep_caps = "yes";
+		else if (strstr(p->defenses.securebits, "keep_caps=no"))
+			keep_caps = "no";
+
+		if (strstr(p->defenses.securebits, "no_setuid_fixup=yes"))
+			fixup = "yes";
+		else if (strstr(p->defenses.securebits, "no_setuid_fixup=no"))
+			fixup = "no";
+
+		if (strstr(p->defenses.securebits, "noroot=yes"))
+			noroot = "yes";
+		else if (strstr(p->defenses.securebits, "noroot=no"))
+			noroot = "no";
+
+		snprintf(sb_plain, sizeof(sb_plain),
+			"keep_caps=%s no_setuid_fixup=%s noroot=%s (locked: %s)",
+			keep_caps, fixup, noroot, locked);
+
 		if (use_color) {
-			char *pos;
+			if (strcmp(keep_caps, "yes") == 0)
+				keep_color = COLOR_YELLOW;
 
-			if ((pos = strstr(sb, "noroot=yes"))) {
-				char t[512];
+			if (strcmp(fixup, "yes") == 0)
+				fixup_color = COLOR_YELLOW;
 
-				*pos = 0;
-				snprintf(t, sizeof(t), "%s%snoroot=yes%s%s", sb,
-					COLOR_GREEN, COLOR_RESET,
-					pos + strlen("noroot=yes"));
-				strncpy(sb, t, sizeof(sb));
-				sb[sizeof(sb)-1] = 0;
-			}
+			if (strcmp(noroot, "yes") == 0)
+				noroot_color = COLOR_GREEN;
+			else if (strcmp(noroot, "no") == 0)
+				noroot_color = COLOR_YELLOW;
 
-			if ((pos = strstr(sb, "keep_caps=yes"))) {
-				char t[512];
+			if (strcmp(locked, "yes") == 0)
+				locked_color = COLOR_GREEN;
+			else if (strcmp(locked, "no") == 0)
+				locked_color = COLOR_YELLOW;
 
-				*pos = 0;
-				snprintf(t, sizeof(t), "%s%skeep_caps=yes%s%s", sb,
-					COLOR_YELLOW, COLOR_RESET,
-					pos + strlen("keep_caps=yes"));
-				strncpy(sb, t, sizeof(sb));
-				sb[sizeof(sb)-1] = 0;
-			}
-
-			if ((pos = strstr(sb, "no_setuid_fixup=yes"))) {
-				char t[512];
-
-				*pos = 0;
-				snprintf(t, sizeof(t), "%s%sno_setuid_fixup=yes%s%s", sb,
-					COLOR_YELLOW, COLOR_RESET,
-					pos + strlen("no_setuid_fixup=yes"));
-				strncpy(sb, t, sizeof(sb));
-				sb[sizeof(sb)-1] = 0;
-			}
+			snprintf(sb_color, sizeof(sb_color),
+				"keep_caps=%s%s%s no_setuid_fixup=%s%s%s noroot=%s%s%s "
+				"(locked: %s%s%s)",
+				keep_color, keep_caps,
+				keep_color[0] ? COLOR_RESET : "",
+				fixup_color, fixup,
+				fixup_color[0] ? COLOR_RESET : "",
+				noroot_color, noroot,
+				noroot_color[0] ? COLOR_RESET : "",
+				locked_color, locked,
+				locked_color[0] ? COLOR_RESET : "");
+			snprintf(def_buf[def_n], sizeof(def_buf[def_n]),
+				"securebits: %s", sb_color);
+		} else {
+			snprintf(def_buf[def_n], sizeof(def_buf[def_n]),
+				"securebits: %s", sb_plain);
 		}
-		snprintf(def_buf[def_n], sizeof(def_buf[def_n]),
-			"securebits: %s", sb);
-		def_nodes[def_n] = def_buf[def_n];
-		def_n++;
-
-		if (use_color && strcmp(p->defenses.securebits_locked, "yes") == 0)
-			snprintf(def_buf[def_n], sizeof(def_buf[def_n]),
-				"securebits_locked: %syes%s", COLOR_GREEN, COLOR_RESET);
-		else if (use_color && strcmp(p->defenses.securebits_locked, "no") == 0)
-			snprintf(def_buf[def_n], sizeof(def_buf[def_n]),
-				"securebits_locked: %sno%s", COLOR_YELLOW, COLOR_RESET);
-		else
-			snprintf(def_buf[def_n], sizeof(def_buf[def_n]),
-				"securebits_locked: %s", p->defenses.securebits_locked);
 		def_nodes[def_n] = def_buf[def_n];
 		def_n++;
 	}
