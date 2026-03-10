@@ -215,11 +215,16 @@ static inline int test_cap(unsigned int cap)
 static void init_lib(void) __attribute__ ((constructor));
 static void init_lib(void)
 {
-       // This is so dynamic libraries don't re-init
-       static unsigned int run_once = 0;
-       if (run_once)
-               return;
-       run_once = 1;
+	/* This is so that dynamic or static libraries don't re-init */
+	static unsigned int run_once;
+
+	if (__atomic_load_n(&run_once, __ATOMIC_ACQUIRE) == 2)
+		return;
+	if (!__sync_bool_compare_and_swap(&run_once, 0, 1)) {
+		while (__atomic_load_n(&run_once, __ATOMIC_ACQUIRE) != 2)
+			;
+		return;
+	}
 
 #ifdef HAVE_PTHREAD_H
 	pthread_atfork(NULL, NULL, deinit);
@@ -291,6 +296,7 @@ fail:
 	if (!errno)
 		HAVE_PR_CAP_AMBIENT = 1;
 #endif
+	__atomic_store_n(&run_once, 2, __ATOMIC_RELEASE);
 }
 
 static void init(void)
@@ -1506,4 +1512,3 @@ void capng_restore_state(void **state)
 		*state = NULL;
 	}
 }
-
