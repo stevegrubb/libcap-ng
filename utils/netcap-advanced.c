@@ -1041,6 +1041,64 @@ static char *read_first_line(const char *path)
 }
 
 /*
+ * sanitize_untrusted_field - escape terminal control bytes in untrusted text.
+ * @src: source text gathered from procfs/cgroup metadata.
+ *
+ * Returns caller-owned sanitized text, or NULL on allocation failure.
+ * Side effects/assumptions: Operates on in-memory data and may read
+ * procfs/netns state; it does not change kernel configuration.
+ */
+static char *sanitize_untrusted_field(const char *src)
+{
+	size_t in_len;
+	char *dst;
+	char *out;
+	size_t i;
+
+	if (!src)
+		return NULL;
+	in_len = strlen(src);
+	dst = malloc(in_len * 4 + 1);
+	if (!dst)
+		return NULL;
+	out = dst;
+	for (i = 0; i < in_len; i++) {
+		unsigned char c = (unsigned char)src[i];
+
+		if (c < 0x20 || c == 0x7f) {
+			snprintf(out, 5, "\\x%02X", c);
+			out += 4;
+		} else {
+			*out++ = (char)c;
+		}
+	}
+	*out = '\0';
+	return dst;
+}
+
+/*
+ * sanitize_untrusted_owned - replace owned string with sanitized version.
+ * @s: pointer to owned string pointer that will be replaced in place.
+ *
+ * Returns 0 on success, -1 on allocation failure.
+ * Side effects/assumptions: Operates on in-memory data and may read
+ * procfs/netns state; it does not change kernel configuration.
+ */
+static int sanitize_untrusted_owned(char **s)
+{
+	char *safe;
+
+	if (!s || !*s)
+		return 0;
+	safe = sanitize_untrusted_field(*s);
+	if (!safe)
+		return -1;
+	free(*s);
+	*s = safe;
+	return 0;
+}
+
+/*
  * extract_unit_from_cgroup - best-effort unit name lookup for @pid.
  * @pid: process ID whose /proc/<pid>/cgroup is inspected.
  *
@@ -1254,6 +1312,10 @@ static void parse_status_defenses(int pid, int uid, struct defense_info *d,
 
 	snprintf(path, sizeof(path), "/proc/%d/attr/current", pid);
 	d->lsm_label = read_first_line(path);
+	if (sanitize_untrusted_owned(&d->lsm_label) < 0) {
+		free(d->lsm_label);
+		d->lsm_label = NULL;
+	}
 
 	if (sf->seen_secbits)
 		*secbits_raw = sf->secbits;
@@ -1339,6 +1401,8 @@ static struct process_info *add_process(struct model *m, int pid)
 	p->pid = pid;
 	p->uid = uid;
 	p->comm = xstrdup(comm[0] ? comm : "?");
+	if (sanitize_untrusted_owned(&p->comm) < 0)
+		goto fail;
 	snprintf(path, sizeof(path), "/proc/%d/exe", pid);
 	exelen = readlink(path, exepath, sizeof(exepath) - 1);
 	if (exelen >= 0) {
@@ -1350,8 +1414,12 @@ static struct process_info *add_process(struct model *m, int pid)
 			" (deleted)") == 0)
 			exepath[exelen - deleted_len] = '\0';
 		p->exe = xstrdup(exepath);
+		if (sanitize_untrusted_owned(&p->exe) < 0)
+			goto fail;
 	}
 	p->unit = extract_unit_from_cgroup(pid);
+	if (sanitize_untrusted_owned(&p->unit) < 0)
+		goto fail;
 	p->caps = caps_summary_for_pid(pid, &p->has_privileged_caps,
 		&has_amb, &has_bnd, &amb_list);
 	p->ambient_caps = amb_list;
