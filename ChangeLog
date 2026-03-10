@@ -1,6 +1,7 @@
 0.9.2
 - Added netcap --advanced option for attack surface discovery and inventory
 - Added acct name to pscap --tree output
+- Code cleanups
 
 0.9.1
 - Deprecate captest
