@@ -1453,39 +1453,62 @@ if (HAVE_PR_CAP_AMBIENT) {
 
 char *capng_print_caps_text(capng_print_t where, capng_type_t which)
 {
-	unsigned int i, once = 0, cnt = 0;
+	unsigned int i, cnt = 0;
+	size_t total = 1;
+	int found = 0;
 	char *ptr = NULL;
 
 	if (m.state < CAPNG_INIT)
 		return ptr;
 
+	if (where == CAPNG_PRINT_BUFFER) {
+		for (i=0; i<=last_cap; i++) {
+			if (capng_have_capability(which, i)) {
+				const char *n = capng_capability_to_name(i);
+				size_t len;
+
+				if (n == NULL)
+					n = "unknown";
+				len = strlen(n);
+				total += len;
+				if (found)
+					total += 2;
+				found = 1;
+			}
+		}
+		if (found) {
+			ptr = malloc(total);
+			if (ptr == NULL)
+				return ptr;
+		}
+		found = 0;
+	}
+
 	for (i=0; i<=last_cap; i++) {
 		if (capng_have_capability(which, i)) {
 			const char *n = capng_capability_to_name(i);
+			size_t len;
+
 			if (n == NULL)
 				n = "unknown";
+			len = strlen(n);
 			if (where == CAPNG_PRINT_STDOUT) {
-				if (once == 0) {
+				if (found == 0)
 					printf("%s", n);
-					once++;
-				} else
+				else
 					printf(", %s", n);
 			} else if (where == CAPNG_PRINT_BUFFER) {
-				int len;
-				if (once == 0) {
-					ptr = malloc(last_cap*20);
-					if (ptr == NULL)
-						return ptr;
-					len = sprintf(ptr+cnt, "%s", n);
-					once++;
-				} else
-					len = sprintf(ptr+cnt, ", %s", n);
-				if (len > 0)
-					cnt+=len;
+				if (found) {
+					ptr[cnt++] = ',';
+					ptr[cnt++] = ' ';
+				}
+				memcpy(ptr + cnt, n, len + 1);
+				cnt += len;
 			}
+			found = 1;
 		}
 	}
-	if (once == 0) {
+	if (found == 0) {
 		if (where == CAPNG_PRINT_STDOUT)
 			printf("none");
 		else

@@ -56,6 +56,7 @@ int main(void)
 	int rc;
 	unsigned int i, len, last = get_last_cap();
 	char *text;
+	const char *name;
 	void *saved;
 
 	puts("Doing basic bit tests...");
@@ -105,7 +106,6 @@ int main(void)
 	}
 	printf("Doing advanced bit tests for %d capabilities...\n", last);
 	for (i=0; i<=last; i++) {
-		const char *name;
 		capng_clear(CAPNG_SELECT_BOTH);
 		rc = capng_update(CAPNG_ADD, CAPNG_EFFECTIVE, i);
 		if (rc) {
@@ -188,6 +188,38 @@ int main(void)
 			abort();
 		}
 	}
+	// Verify text formatting when many capabilities are present
+	capng_clear(CAPNG_SELECT_BOTH);
+	for (i=0; i<=last; i++) {
+		rc = capng_update(CAPNG_ADD, CAPNG_EFFECTIVE, i);
+		if (rc) {
+			puts("Failed setup test for print buffer length");
+			abort();
+		}
+	}
+	text = capng_print_caps_text(CAPNG_PRINT_BUFFER, CAPNG_EFFECTIVE);
+	if (text == NULL) {
+		puts("Failed getting full print text to buffer");
+		abort();
+	}
+	len = 0;
+	for (i=0; i<=last; i++) {
+		if (capng_have_capability(CAPNG_EFFECTIVE, i)) {
+			name = capng_capability_to_name(i);
+			if (name == NULL)
+				name = "unknown";
+			if (len)
+				len += 2;
+			len += strlen(name);
+		}
+	}
+	if (strlen(text) != len) {
+		puts("Failed print text length comparison");
+		printf("%zu != %u\n", strlen(text), len);
+		abort();
+	}
+	free(text);
+
 	// Now test the updatev function
 	capng_clear(CAPNG_SELECT_BOTH);
 	rc = capng_updatev(CAPNG_ADD, CAPNG_EFFECTIVE,
