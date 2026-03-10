@@ -558,7 +558,8 @@ int main(int argc, char *argv[])
 				uid = euid;
 				if (p)
 					name = p->pw_name;
-				// If not taking this branch, use last val
+				else
+					name = NULL;
 			}
 
 			if (name) {
