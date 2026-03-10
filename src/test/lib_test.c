@@ -61,6 +61,12 @@ int main(void)
 
 	puts("Doing basic bit tests...");
 	capng_clear(CAPNG_SELECT_BOTH);
+	errno = 0;
+	rc = capng_apply(0);
+	if (rc != -1 || errno != EINVAL) {
+		puts("Failed apply empty selection test");
+		abort();
+	}
 	if (capng_have_permitted_capabilities() != CAPNG_NONE) {
 		puts("Failed permitted capabilities none test");
 		abort();

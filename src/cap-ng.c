@@ -795,6 +795,10 @@ int capng_apply(capng_select_t set)
 	// Before updating, we expect that the data is initialized to something
 	if (m.state < CAPNG_INIT)
 		return -1;
+	if (set == 0) {
+		errno = EINVAL;
+		return -1;
+	}
 
 	if (set & CAPNG_SELECT_BOUNDS) {
 #ifdef PR_CAPBSET_DROP
