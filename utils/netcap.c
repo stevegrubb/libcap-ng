@@ -435,9 +435,14 @@ static int read_diag_messages(int fd, int proto, const char *type)
 {
 	char buf[8192];
 	ssize_t len;
+	struct sockaddr_nl nladdr;
+	socklen_t nladdr_len;
 
 	while (1) {
-		len = recv(fd, buf, sizeof(buf), 0);
+		nladdr_len = sizeof(nladdr);
+		memset(&nladdr, 0, sizeof(nladdr));
+		len = recvfrom(fd, buf, sizeof(buf), 0,
+				(struct sockaddr *)&nladdr, &nladdr_len);
 		if (len < 0) {
 			if (errno == EINTR)
 				continue;
@@ -445,6 +450,8 @@ static int read_diag_messages(int fd, int proto, const char *type)
 		}
 		if (len == 0)
 			return -1;
+		if (nladdr_len < sizeof(nladdr) || nladdr.nl_pid != 0)
+			continue;
 
 		struct nlmsghdr *nlh;
 		unsigned int rem;
@@ -551,9 +558,14 @@ static int read_vsock_diag_messages(int fd)
 {
 	char buf[8192];
 	ssize_t len;
+	struct sockaddr_nl nladdr;
+	socklen_t nladdr_len;
 
 	while (1) {
-		len = recv(fd, buf, sizeof(buf), 0);
+		nladdr_len = sizeof(nladdr);
+		memset(&nladdr, 0, sizeof(nladdr));
+		len = recvfrom(fd, buf, sizeof(buf), 0,
+				(struct sockaddr *)&nladdr, &nladdr_len);
 		if (len < 0) {
 			if (errno == EINTR)
 				continue;
@@ -561,6 +573,8 @@ static int read_vsock_diag_messages(int fd)
 		}
 		if (len == 0)
 			return -1;
+		if (nladdr_len < sizeof(nladdr) || nladdr.nl_pid != 0)
+			continue;
 
 		struct nlmsghdr *nlh;
 		unsigned int rem;
