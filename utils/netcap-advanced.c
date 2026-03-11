@@ -325,6 +325,10 @@ static enum cap_severity caps_worst_severity(const char *caps)
 
 	if (!caps)
 		return CAP_SEV_NEUTRAL;
+
+	if (strcmp(caps, "(full)") == 0)
+		return CAP_SEV_ORANGE;
+
 	for (i = 0; i < sizeof(orange_caps) / sizeof(orange_caps[0]); i++) {
 		if (caps_contains_token(caps, orange_caps[i]))
 			return CAP_SEV_ORANGE;
