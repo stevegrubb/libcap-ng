@@ -209,8 +209,9 @@ static inline int test_cap(unsigned int cap)
 	return prctl(PR_CAPBSET_READ, cap) >= 0;
 }
 
-// The maximum cap value is determined by VFS_CAP_U32
-#define MAX_CAP_VALUE (VFS_CAP_U32 * sizeof(__le32) * 8)
+// The capability storage is fixed by VFS_CAP_U32
+#define MAX_CAP_BITS (VFS_CAP_U32 * sizeof(__le32) * 8)
+#define MAX_CAP_VALUE (MAX_CAP_BITS - 1)
 
 static void init_lib(void) __attribute__ ((constructor));
 static void init_lib(void)
@@ -254,12 +255,14 @@ static void init_lib(void)
 fail:
 			close(fd);
 		}
+		if (last_cap >= MAX_CAP_BITS)
+			last_cap = MAX_CAP_VALUE;
 		// Run a binary search over capabilities
 		if (last_cap == 0) {
-			// starting with last_cap=MAX_CAP_VALUE means we always know
+			// starting with last_cap=MAX_CAP_BITS means we always know
 			// that cap1 is invalid after the first iteration
-			last_cap = MAX_CAP_VALUE;
-			unsigned int cap0 = 0, cap1 = MAX_CAP_VALUE;
+			last_cap = MAX_CAP_BITS;
+			unsigned int cap0 = 0, cap1 = MAX_CAP_BITS;
 
 			while (cap0 < last_cap) {
 				if (test_cap(last_cap))
