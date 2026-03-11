@@ -1195,6 +1195,7 @@ static char *caps_summary_for_pid(int pid, int *privileged, int *has_amb,
 		*dst = 0;
 		for (i = 0; i <= CAP_LAST_CAP; i++) {
 			size_t n;
+			size_t sep = first ? 0 : 2;
 
 			if (!capng_have_capability(CAPNG_PERMITTED, i))
 				continue;
@@ -1204,16 +1205,14 @@ static char *caps_summary_for_pid(int pid, int *privileged, int *has_amb,
 			if (strncmp(name, "cap_", 4) == 0)
 				name += 4;
 
+			n = strlen(name);
+			if (left <= sep + n)
+				break;
 			if (!first) {
-				if (left <= 2)
-					break;
 				*dst++ = ',';
 				*dst++ = ' ';
 				left -= 2;
 			}
-			n = strlen(name);
-			if (left <= n)
-				break;
 			memcpy(dst, name, n);
 			dst += n;
 			left -= n;
@@ -1233,6 +1232,7 @@ static char *caps_summary_for_pid(int pid, int *privileged, int *has_amb,
 		*amb_dst = 0;
 		for (i = 0; i <= CAP_LAST_CAP; i++) {
 			size_t n;
+			size_t sep = amb_first ? 0 : 2;
 			const char *name;
 
 			if (!capng_have_capability(CAPNG_AMBIENT, i))
@@ -1243,16 +1243,14 @@ static char *caps_summary_for_pid(int pid, int *privileged, int *has_amb,
 			if (strncmp(name, "cap_", 4) == 0)
 				name += 4;
 
+			n = strlen(name);
+			if (amb_left <= sep + n)
+				break;
 			if (!amb_first) {
-				if (amb_left <= 2)
-					break;
 				*amb_dst++ = ',';
 				*amb_dst++ = ' ';
 				amb_left -= 2;
 			}
-			n = strlen(name);
-			if (amb_left <= n)
-				break;
 			memcpy(amb_dst, name, n);
 			amb_dst += n;
 			amb_left -= n;
