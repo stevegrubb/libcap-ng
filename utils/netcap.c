@@ -47,6 +47,7 @@
 #include "cap-ng.h"
 #include "proc-llist.h"
 #include "netcap-advanced.h"
+#include "proc-sanitize.h"
 
 static llist l;
 static int perm_warn = 0, header = 0, last_uid = -1;
@@ -72,6 +73,7 @@ static int collect_process_info(void)
 		int pid, ppid;
 		capng_results_t caps;
 		char buf[100];
+		char *safe_cmd;
 		char *tmp, cmd[16], state;
 		char *text = NULL, *bounds = NULL, *ambient = NULL;
 		int fd, len, euid = -1;
@@ -236,10 +238,13 @@ static int collect_process_info(void)
 			inode = strtoul(s, NULL, 10);
 			if (errno)
 				continue;
+			safe_cmd = sanitize_untrusted_field(cmd);
+			if (!safe_cmd)
+				continue;
 			node.ppid = ppid;
 			node.pid = pid;
 			node.uid = euid;
-			node.cmd = strdup(cmd);
+			node.cmd = safe_cmd;
 			node.inode = inode;
 			node.capabilities = strdup(text);
 			node.bounds = strdup(bounds);
@@ -337,7 +342,7 @@ static void read_net(const char *proc, const char *type, int use_local_port)
 	fclose(f);
 }
 
-// Caller must have buffer >= 17 bytes
+// Caller must have buffer >= 65 bytes
 static void get_interface(unsigned int iface, char *ifc)
 {
 	unsigned int line = 0;
@@ -361,10 +366,19 @@ static void get_interface(unsigned int iface, char *ifc)
 	while (fgets(buf, sizeof(buf), f)) {
 		if (line == iface) {
 			char *c;
+			char *safe_ifc;
+
 			sscanf(buf, "%16s: %255s\n", ifc, more);
 			c = strchr(ifc, ':');
 			if (c)
 				*c = 0;
+			safe_ifc = sanitize_untrusted_field(ifc);
+			if (safe_ifc) {
+				strncpy(ifc, safe_ifc, 64);
+				ifc[64] = '\0';
+				free(safe_ifc);
+			} else
+				*ifc = 0;
 			fclose(f);
 			return;
 		}
@@ -380,7 +394,7 @@ static void read_packet(void)
 	char buf[256];
 	unsigned long sk, inode;
 	unsigned int ref_cnt, type, proto, iface, r, rmem, uid;
-	char more[256], ifc[32];
+	char more[256], ifc[65];
 
 	f = fopen("/proc/net/packet", "rte");
 	if (f == NULL) {

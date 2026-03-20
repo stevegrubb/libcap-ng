@@ -53,6 +53,7 @@
 #include <unistd.h>
 #include "cap-ng.h"
 #include "netcap-advanced.h"
+#include "proc-sanitize.h"
 
 /*
  * Overview:
@@ -1042,64 +1043,6 @@ static char *read_first_line(const char *path)
 	while (len > 0 && (buf[len - 1] == '\n' || buf[len - 1] == '\r'))
 		buf[--len] = 0;
 	return buf;
-}
-
-/*
- * sanitize_untrusted_field - escape terminal control bytes in untrusted text.
- * @src: source text gathered from procfs/cgroup metadata.
- *
- * Returns caller-owned sanitized text, or NULL on allocation failure.
- * Side effects/assumptions: Operates on in-memory data and may read
- * procfs/netns state; it does not change kernel configuration.
- */
-static char *sanitize_untrusted_field(const char *src)
-{
-	size_t in_len;
-	char *dst;
-	char *out;
-	size_t i;
-
-	if (!src)
-		return NULL;
-	in_len = strlen(src);
-	dst = malloc(in_len * 4 + 1);
-	if (!dst)
-		return NULL;
-	out = dst;
-	for (i = 0; i < in_len; i++) {
-		unsigned char c = (unsigned char)src[i];
-
-		if (c < 0x20 || c == 0x7f) {
-			snprintf(out, 5, "\\x%02X", c);
-			out += 4;
-		} else {
-			*out++ = (char)c;
-		}
-	}
-	*out = '\0';
-	return dst;
-}
-
-/*
- * sanitize_untrusted_owned - replace owned string with sanitized version.
- * @s: pointer to owned string pointer that will be replaced in place.
- *
- * Returns 0 on success, -1 on allocation failure.
- * Side effects/assumptions: Operates on in-memory data and may read
- * procfs/netns state; it does not change kernel configuration.
- */
-static int sanitize_untrusted_owned(char **s)
-{
-	char *safe;
-
-	if (!s || !*s)
-		return 0;
-	safe = sanitize_untrusted_field(*s);
-	if (!safe)
-		return -1;
-	free(*s);
-	*s = safe;
-	return 0;
 }
 
 /*

@@ -36,6 +36,7 @@
 #include <sys/stat.h>
 #include <sys/ioctl.h>
 #include "cap-ng.h"
+#include "proc-sanitize.h"
 
 #define CMD_LEN 16
 #define ACCOUNT_LEN 32
@@ -50,7 +51,7 @@ static void usage(void)
 struct proc_info {
 	pid_t pid;
 	pid_t ppid;
-	char cmd[CMD_LEN + USERNS_MARK_LEN];
+	char *cmd;
 	char account[ACCOUNT_LEN];
 	char *caps_text;
 };
@@ -445,6 +446,7 @@ int main(int argc, char *argv[])
 	while (( ent = readdir(d) )) {
 		int pid, ppid;
 		char buf[100];
+		char *safe_cmd = NULL;
 		char *tmp, cmd[CMD_LEN + USERNS_MARK_LEN], state;
 		int fd, len;
 		struct passwd *p;
@@ -495,15 +497,29 @@ int main(int argc, char *argv[])
 
 		// And print out anything with capabilities
 		caps = capng_have_capabilities(CAPNG_SELECT_CAPS);
-		if (in_child_userns(pid))
-			strcat(cmd, " *");
+		safe_cmd = sanitize_untrusted_field(cmd);
+		if (!safe_cmd)
+			continue;
+		if (in_child_userns(pid)) {
+			char *marked = malloc(strlen(safe_cmd) + 3);
+
+			if (!marked) {
+				free(safe_cmd);
+				continue;
+			}
+			snprintf(marked, strlen(safe_cmd) + 3, "%s *", safe_cmd);
+			free(safe_cmd);
+			safe_cmd = marked;
+		}
 		if (tree_mode) {
 			char *caps_text;
 			bool has_ambient;
 			bool has_bounds;
 
-			if (!show_all && caps <= CAPNG_NONE)
+			if (!show_all && caps <= CAPNG_NONE) {
+				free(safe_cmd);
 				continue;
+			}
 
 			has_ambient = capng_have_capabilities(
 					CAPNG_SELECT_AMBIENT) > CAPNG_NONE;
@@ -511,8 +527,10 @@ int main(int argc, char *argv[])
 					CAPNG_SELECT_BOUNDS) > CAPNG_NONE;
 
 			caps_text = format_caps(caps, has_ambient, has_bounds);
-			if (!caps_text)
+			if (!caps_text) {
+				free(safe_cmd);
 				continue;
+			}
 
 			if (proc_count == proc_capacity) {
 				size_t new_capacity = proc_capacity ?
@@ -523,6 +541,7 @@ int main(int argc, char *argv[])
 					      sizeof(*procs));
 				if (!pi_tmp) {
 					free(caps_text);
+					free(safe_cmd);
 					continue;
 				}
 				procs = pi_tmp;
@@ -531,14 +550,12 @@ int main(int argc, char *argv[])
 
 			procs[proc_count].pid = pid;
 			procs[proc_count].ppid = ppid;
-			strncpy(procs[proc_count].cmd, cmd,
-				sizeof(procs[proc_count].cmd) - 1);
-			procs[proc_count].cmd[
-				sizeof(procs[proc_count].cmd) - 1] = '\0';
+			procs[proc_count].cmd = safe_cmd;
 			get_account_name(pid, procs[proc_count].account,
 					 sizeof(procs[proc_count].account));
 			procs[proc_count].caps_text = caps_text;
 			proc_count++;
+			safe_cmd = NULL;
 		} else if (caps > CAPNG_NONE) {
 			int euid = get_euid(pid);
 
@@ -564,10 +581,10 @@ int main(int argc, char *argv[])
 
 			if (name) {
 				printf("%-7d %-7d %-16s %-15s ", ppid, pid,
-					name, cmd);
+					name, safe_cmd);
 			} else
 				printf("%-7d %-7d %-16d %-15s ", ppid, pid,
-					uid, cmd);
+					uid, safe_cmd);
 			if (caps == CAPNG_PARTIAL) {
 				capng_print_caps_text(CAPNG_PRINT_STDOUT,
 							CAPNG_PERMITTED);
@@ -588,13 +605,19 @@ int main(int argc, char *argv[])
 					printf(" +");
 				printf("\n");
 			}
+			free(safe_cmd);
+			safe_cmd = NULL;
 		}
+		if (safe_cmd)
+			free(safe_cmd);
 	}
 	closedir(d);
 	if (tree_mode) {
 		print_tree(procs, proc_count);
-		for (i = 0; i < proc_count; i++)
+		for (i = 0; i < proc_count; i++) {
+			free(procs[i].cmd);
 			free(procs[i].caps_text);
+		}
 		free(procs);
 	}
 	return 0;
