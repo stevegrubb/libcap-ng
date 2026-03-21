@@ -57,7 +57,7 @@
  * Core design problem:
  * when tracing as root, many capability checks come from kernel-internal
  * work under the same PID rather than from app logic. The tool uses a
- * four-category noise filter pipeline, split between BPF and userspace, to
+ * two-layer noise filter pipeline, split between BPF and userspace, to
  * separate real requirements from incidental checks.
  *
  * Layer 1 - pre-exec noise (BPF phase gate):
@@ -68,31 +68,14 @@
  * capability events until sched_process_exec transitions the PID from
  * phase 1 (pre-exec) to phase 2 (post-exec).
  *
- * Layer 2 - post-exec startup noise (userspace startup gate):
- * immediately after exec and before main(), runtime linker activity
- * (mmap/mprotect) can trigger repeated SYS_ADMIN checks via
- * security_mmap_addr(). Exec credential transitions also emit SYS_ADMIN and
- * SETPCAP from execve itself. handle_cap_event() applies two startup filters:
- * is_always_noise() unconditionally drops execve SYS_ADMIN/SETPCAP, and
- * is_startup_noise() drops mmap/mprotect SYS_ADMIN until a genuine
- * capability event arrives and sets recording_ready.
- *
- * Layer 3 - memory overcommit accounting noise (userspace always-noise):
- * brk triggers cap_vm_enough_memory()->cap_capable(CAP_SYS_ADMIN) as part of
- * kernel memory overcommit accounting. This is advisory resource accounting,
- * not a permission gate, so brk does not require CAP_SYS_ADMIN to succeed.
- * is_always_noise() drops these SYS_ADMIN-from-brk checks unconditionally.
- *
- * Layer 4 - shutdown noise (userspace drain gate):
- * when tracing stops, interpreter/runtime cleanup can recreate the same
- * mmap SYS_ADMIN pattern. During final ring-buffer drain, shutting_down
- * reuses is_startup_noise() to suppress that shutdown-only chatter.
- *
- * The is_always_noise()/is_startup_noise() split is deliberate: always-noise
- * events are dropped without opening recording_ready. That keeps the startup
- * gate closed across shebang re-exec chains (script -> /usr/bin/env ->
- * interpreter), where multiple exec transitions would otherwise open the gate
- * early and let interpreter linker noise leak through.
+ * Layer 2 - userspace always-noise filter:
+ * handle_cap_event() unconditionally drops two classes of kernel-internal
+ * capability checks that never represent real application requirements.
+ * Exec credential transitions emit SYS_ADMIN and SETPCAP from execve
+ * itself, while memory-management syscalls (brk/mmap/mprotect/mremap)
+ * can emit SYS_ADMIN through the kernel's overcommit accounting path.
+ * These checks only affect internal credential or accounting decisions;
+ * they are not permission gates for the traced application.
  *
  * PID filtering remains central: parent registers the child immediately after
  * fork(), BPF follows forks/exits to keep the target set precise, and each
@@ -139,6 +122,7 @@ struct app_caps {
 	int mmap_nr;
 	int brk_nr;
 	int mprotect_nr;
+	int mremap_nr;
 	type_t prog_type;
 	struct cap_check checks[CAP_LAST_CAP + 1];
 	int yama_ptrace_scope;
@@ -164,14 +148,12 @@ struct audit_state {
 	struct cap_audit_bpf *skel;
 	struct ring_buffer *rb;
 	struct app_caps app;
-	int recording_ready;
 	int verbose;
 	int json_output;
 	int yaml_output;
 	int sync_pipe[2];
 	char **target_argv;
 	volatile sig_atomic_t stop;
-	int shutting_down;
 };
 
 static struct audit_state state;
@@ -202,13 +184,11 @@ static int include_cap_in_recommendations(int cap)
  * transitions (install_exec_creds/commit_creds). No application needs these
  * capabilities for exec to succeed.
  *
- * 2) SYS_ADMIN from brk comes from cap_vm_enough_memory() overcommit
- * accounting, not permission enforcement. brk can still succeed without
- * CAP_SYS_ADMIN; this check only changes accounting behavior.
- *
- * Dropping these without setting recording_ready keeps the startup gate closed
- * across shebang re-exec chains, so startup noise filtering still applies in
- * the final interpreter.
+ * 2) SYS_ADMIN from brk/mmap/mprotect/mremap comes from the kernel's
+ * overcommit accounting path (security_vm_enough_memory_mm() ->
+ * cap_vm_enough_memory() -> cap_capable()), not permission enforcement.
+ * The operation still succeeds without CAP_SYS_ADMIN; the check only
+ * changes which accounting reserve is used.
  */
 static int is_always_noise(const struct cap_event *e)
 {
@@ -217,26 +197,19 @@ static int is_always_noise(const struct cap_event *e)
 	    e->capability == CAP_SETPCAP))
 		return 1;
 
+	/*
+	 * Memory management syscalls check CAP_SYS_ADMIN through the
+	 * overcommit accounting path: security_vm_enough_memory_mm() ->
+	 * cap_vm_enough_memory() -> cap_capable(). This determines whether
+	 * the process gets the privileged or conservative memory reserve.
+	 * The operation succeeds regardless; no application needs
+	 * CAP_SYS_ADMIN for memory allocation to function.
+	 */
 	if (e->capability == CAP_SYS_ADMIN &&
-	    e->syscall_nr == state.app.brk_nr)
-		return 1;
-
-	return 0;
-}
-
-/*
- * is_startup_noise - runtime linker noise filtered during startup only.
- *
- * SYS_ADMIN from mmap/mprotect happens when root maps memory via
- * security_mmap_addr(). The runtime linker does this while loading shared
- * libraries. After startup (recording_ready=1), these are not filtered
- * because they could represent legitimate app usage (e.g., MAP_HUGETLB).
- */
-static int is_startup_noise(const struct cap_event *e)
-{
-	if (e->capability == CAP_SYS_ADMIN &&
-	    (e->syscall_nr == state.app.mmap_nr ||
-	     e->syscall_nr == state.app.mprotect_nr))
+	    (e->syscall_nr == state.app.brk_nr ||
+	     e->syscall_nr == state.app.mmap_nr ||
+	     e->syscall_nr == state.app.mprotect_nr ||
+	     e->syscall_nr == state.app.mremap_nr))
 		return 1;
 
 	return 0;
@@ -709,60 +682,22 @@ static int handle_cap_event(void *ctx __attribute__((unused)), void *data,
 
 	/*
 	 * Filter block 1 (always-noise): drop exec credential-transition and
-	 * brk overcommit-accounting checks unconditionally. This must run first
-	 * so these events do not set recording_ready and prematurely open the
-	 * startup gate.
+	 * memory overcommit-accounting checks unconditionally.
 	 */
 	if (is_always_noise(e)) {
 		if (state.verbose) {
-			if (e->syscall_nr == state.app.brk_nr)
+			if (e->syscall_nr == state.app.execve_nr)
+				printf("[CAP] Filtered exec noise: cap=%s syscall=%s\n",
+				       cap_name_safe(e->capability),
+				       syscall_name_from_nr(e->syscall_nr) ?:
+				       "unknown");
+			else
 				printf("[CAP] Filtered memory accounting noise: "
 				       "cap=%s syscall=%s\n",
 				       cap_name_safe(e->capability),
 				       syscall_name_from_nr(e->syscall_nr) ?:
 				       "unknown");
-			else
-				printf("[CAP] Filtered exec noise: cap=%s "
-				       "syscall=%s\n",
-				       cap_name_safe(e->capability),
-				       syscall_name_from_nr(e->syscall_nr) ?:
-				       "unknown");
 		}
-		return 0;
-	}
-
-	/*
-	 * Filter block 2 (startup-noise gate): while recording_ready is still
-	 * closed, drop runtime-linker mmap/mprotect SYS_ADMIN checks.
-	 * First non-noise event opens the gate for normal recording.
-	 */
-	if (!state.recording_ready) {
-		if (is_startup_noise(e)) {
-			if (state.verbose)
-				printf("[CAP] Filtered startup noise: "
-				       "cap=%s syscall=%s\n",
-				       cap_name_safe(e->capability),
-				       syscall_name_from_nr(e->syscall_nr) ?:
-				       "unknown");
-			return 0;
-		}
-		state.recording_ready = 1;
-		if (state.verbose)
-			printf("[CAP] Recording started\n");
-	}
-
-	/*
-	 * Filter block 3 (shutdown-noise drain): after stop is decided,
-	 * reapply startup-noise filtering during final drain because runtime
-	 * teardown can produce the same mmap/mprotect SYS_ADMIN pattern.
-	 */
-	if (state.shutting_down && is_startup_noise(e)) {
-		if (state.verbose)
-			printf("[CAP] Filtered shutdown noise: "
-			       "cap=%s syscall=%s\n",
-				cap_name_safe(e->capability),
-				syscall_name_from_nr(e->syscall_nr) ?:
-				"unknown");
 		return 0;
 	}
 
@@ -1521,6 +1456,7 @@ int main(int argc, char **argv)
 	state.app.brk_nr = audit_name_to_syscall("brk", audit_machine);
 	state.app.mprotect_nr = audit_name_to_syscall("mprotect",
 						      audit_machine);
+	state.app.mremap_nr = audit_name_to_syscall("mremap", audit_machine);
 
 	// Load and attach BPF program before forking so probes are ready.
 	state.skel = cap_audit_bpf__open_and_load();
@@ -1669,7 +1605,6 @@ int main(int argc, char **argv)
 
 	printf("[*] Analyzing results...\n");
 
-	state.shutting_down = 1;
 	usleep(100000);
 	ring_buffer__poll(state.rb, 0);
 
