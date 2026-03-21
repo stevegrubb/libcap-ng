@@ -1096,19 +1096,17 @@ int capng_lock(void)
 {
 	// If either fail, return -1 since something is not right
 #ifdef PR_SET_SECUREBITS
-	int rc = prctl(PR_SET_SECUREBITS,
+	if (prctl(PR_SET_SECUREBITS,
 			1 << SECURE_NOROOT |
 			1 << SECURE_NOROOT_LOCKED |
 			1 << SECURE_NO_SETUID_FIXUP |
-			1 << SECURE_NO_SETUID_FIXUP_LOCKED, 0, 0, 0);
-#ifdef PR_SET_NO_NEW_PRIVS
-	if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0))
+			1 << SECURE_NO_SETUID_FIXUP_LOCKED, 0, 0, 0) < 0)
 		return -1;
 #endif
-	if (rc)
+#ifdef PR_SET_NO_NEW_PRIVS
+	if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) < 0)
 		return -1;
-#endif // PR_SET_SECUREBITS
-
+#endif
 	return 0;
 }
 
