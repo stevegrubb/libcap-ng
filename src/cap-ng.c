@@ -444,9 +444,11 @@ static int get_bounding_set(void)
 		while (fgets(buf, sizeof(buf), f)) {
 			if (strncmp(buf, "CapB", 4))
 				continue;
-			sscanf(buf, "CapBnd:  %08x%08x",
+			int num = sscanf(buf, "CapBnd:  %08x%08x",
 			       &m.bounds[1], &m.bounds[0]);
 			fclose(f);
+			if (num != 2)
+				return -1;
 			return 0;
 		}
 		// Didn't find bounding set, fall through and try prctl way
@@ -489,9 +491,11 @@ static int get_ambient_set(void)
 		while (fgets(buf, sizeof(buf), f)) {
 			if (strncmp(buf, "CapA", 4))
 				continue;
-			sscanf(buf, "CapAmb:  %08x%08x",
+			int num = sscanf(buf, "CapAmb:  %08x%08x",
 			       &m.ambient[1], &m.ambient[0]);
 			fclose(f);
+			if (num != 2)
+				return -1;
 			return 0;
 		}
 		fclose(f);
