@@ -64,12 +64,6 @@ unsigned int last_cap hidden = 0;
 #ifdef PR_CAPBSET_DROP
 static int HAVE_PR_CAPBSET_DROP = 0;
 #endif
-#ifdef PR_SET_SECUREBITS
-static int HAVE_PR_SET_SECUREBITS = 0;
-#endif
-#ifdef PR_SET_NO_NEW_PRIVS
-static int HAVE_PR_SET_NO_NEW_PRIVS = 0;
-#endif
 #ifdef PR_CAP_AMBIENT
 static int HAVE_PR_CAP_AMBIENT = 0;
 #endif
@@ -280,18 +274,6 @@ fail:
 	prctl(PR_CAPBSET_READ, 0, 0, 0, 0);
 	if (!errno)
 		HAVE_PR_CAPBSET_DROP = 1;
-#endif
-#ifdef PR_SET_SECUREBITS
-	errno = 0;
-	prctl(PR_GET_SECUREBITS, 0, 0, 0, 0);
-	if (!errno)
-		HAVE_PR_SET_SECUREBITS = 1;
-#endif
-#ifdef PR_SET_NO_NEW_PRIVS
-	errno = 0;
-	prctl(PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0);
-	if (!errno)
-		HAVE_PR_SET_NO_NEW_PRIVS = 1;
 #endif
 #ifdef PR_CAP_AMBIENT
 	errno = 0;
@@ -1112,22 +1094,18 @@ int capng_lock(void)
 {
 	// If either fail, return -1 since something is not right
 #ifdef PR_SET_SECUREBITS
-if (HAVE_PR_SET_SECUREBITS) {
 	int rc = prctl(PR_SET_SECUREBITS,
 			1 << SECURE_NOROOT |
 			1 << SECURE_NOROOT_LOCKED |
 			1 << SECURE_NO_SETUID_FIXUP |
 			1 << SECURE_NO_SETUID_FIXUP_LOCKED, 0, 0, 0);
 #ifdef PR_SET_NO_NEW_PRIVS
-if (HAVE_PR_SET_NO_NEW_PRIVS) {
 	if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0))
 		return -1;
-}
 #endif
 	if (rc)
 		return -1;
-}
-#endif
+#endif // PR_SET_SECUREBITS
 
 	return 0;
 }
