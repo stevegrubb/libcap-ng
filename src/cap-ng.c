@@ -808,11 +808,11 @@ if (HAVE_PR_CAPBSET_DROP) {
 				    }
 				}
 			}
-			m.state = CAPNG_APPLIED;
 			if (get_bounding_set() < 0) {
 				rc = -3;
 				goto try_caps;
 			}
+			m.state = CAPNG_APPLIED;
 		} else {
 			memcpy(&m, &state, sizeof(m)); /* restore state */
 			rc = -4;
