@@ -272,13 +272,13 @@ fail:
 #ifdef PR_CAPBSET_DROP
 	errno = 0;
 	prctl(PR_CAPBSET_READ, 0, 0, 0, 0);
-	if (!errno)
+	if (errno != EINVAL)
 		HAVE_PR_CAPBSET_DROP = 1;
 #endif
 #ifdef PR_CAP_AMBIENT
 	errno = 0;
-	prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_IS_SET, 0, 0, 0);
-	if (!errno)
+	prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_IS_SET, CAP_CHOWN, 0, 0);
+	if (errno != EINVAL)
 		HAVE_PR_CAP_AMBIENT = 1;
 #endif
 	__atomic_store_n(&run_once, 2, __ATOMIC_RELEASE);
@@ -1169,8 +1169,8 @@ if (HAVE_PR_CAPBSET_DROP) {
 		else
 			return CAPNG_PARTIAL;
 	}
-} else
-	empty = 1;
+} else if (set & CAPNG_SELECT_BOUNDS)
+	empty = 1; // Only report empty if they asked about it
 #endif
 #ifdef PR_CAP_AMBIENT
 if (HAVE_PR_CAP_AMBIENT) {
@@ -1188,8 +1188,8 @@ if (HAVE_PR_CAP_AMBIENT) {
 		else
 			return CAPNG_PARTIAL;
 	}
-} else
-	empty = 1;
+} else if (set & CAPNG_SELECT_AMBIENT)
+	empty = 1; // Only report empty if they asked about it
 #endif
 	if (empty == 1 && full == 0)
 		return CAPNG_NONE;
