@@ -1085,8 +1085,6 @@ if (HAVE_PR_CAPBSET_DROP) {
 	if (rc < 0)
 		return -9;
 
-	// Done
-	m.state = CAPNG_UPDATED;
 	return 0;
 
 err_out:
