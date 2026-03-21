@@ -997,7 +997,7 @@ if (HAVE_PR_CAPBSET_DROP) {
 	}
 
 	// Tell system we want to keep caps across uid change
-	if (prctl(PR_SET_KEEPCAPS, 1, 0, 0, 0))
+	if (prctl(PR_SET_KEEPCAPS, 1, 0, 0, 0) < 0)
 		return -2;
 
 	// Change to the temp capabilities
@@ -1067,7 +1067,7 @@ if (HAVE_PR_CAPBSET_DROP) {
 
 	// Tell it we are done keeping capabilities
 	rc = prctl(PR_SET_KEEPCAPS, 0, 0, 0, 0);
-	if (rc)
+	if (rc < 0)
 		return -7;
 
 	// Now throw away CAP_SETPCAP so no more changes
