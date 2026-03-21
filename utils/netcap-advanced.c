@@ -105,7 +105,6 @@ enum plane_kind {
 enum endpoint_flags {
 	FLAG_WILDCARD_BIND = 1U << 0,
 	FLAG_PRIVILEGED_CAPS = 1U << 2,
-	FLAG_SECUREBITS_LOCKED = 1U << 3,
 	FLAG_HYPERVISOR_PLANE = 1U << 4,
 	FLAG_SSH_VSOCK_22 = 1U << 5,
 	FLAG_REUSEPORT = 1U << 6,
@@ -134,8 +133,6 @@ struct defense_info {
 	char *no_new_privs;
 	char *seccomp;
 	char *lsm_label;
-	char *securebits;
-	char *securebits_locked;
 };
 
 struct process_info {
@@ -149,7 +146,6 @@ struct process_info {
 	int ambient_present;
 	int open_ended_bounding;
 	int has_privileged_caps;
-	int securebits_locked;
 	struct defense_info defenses;
 };
 
@@ -207,10 +203,8 @@ struct pidset {
 struct status_fields {
 	unsigned long no_new_privs;
 	unsigned long seccomp;
-	unsigned long secbits;
 	int seen_no_new_privs;
 	int seen_seccomp;
-	int seen_secbits;
 };
 
 struct endpoint_attrs {
@@ -598,12 +592,16 @@ static void inode_hash_insert(struct model *m, size_t idx)
 static int get_width(void)
 {
 	struct winsize ws;
+	const int fds[] = { STDOUT_FILENO, STDERR_FILENO, STDIN_FILENO };
 	const char *env;
 	char *end = NULL;
 	unsigned long v;
+	size_t i;
 
-	if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col)
-		return ws.ws_col;
+	for (i = 0; i < sizeof(fds) / sizeof(fds[0]); i++) {
+		if (ioctl(fds[i], TIOCGWINSZ, &ws) == 0 && ws.ws_col)
+			return ws.ws_col;
+	}
 	env = getenv("COLUMNS");
 	if (env) {
 		v = strtoul(env, &end, 10);
@@ -803,7 +801,6 @@ static void print_flag_nodes(const char *pfx_flags, int width,
 		{ FLAG_WILDCARD_BIND, "wildcard-bind", COLOR_YELLOW },
 		{ FLAG_REUSEPORT, "reuseport", COLOR_YELLOW },
 		{ FLAG_PRIVILEGED_CAPS, "privileged-caps", NULL },
-		{ FLAG_SECUREBITS_LOCKED, "securebits-locked", NULL },
 	};
 	size_t i;
 	size_t n = 0;
@@ -824,8 +821,6 @@ static void print_flag_nodes(const char *pfx_flags, int width,
 			continue;
 		if (map[i].bit == FLAG_PRIVILEGED_CAPS)
 			color = sev_color(priv_sev);
-		if (map[i].bit == FLAG_SECUREBITS_LOCKED)
-			color = COLOR_YELLOW;
 		if (use_color && color)
 			snprintf(node, sizeof(node), "%s%s%s", color, map[i].name,
 				COLOR_RESET);
@@ -1217,8 +1212,6 @@ static char *caps_summary_for_pid(int pid, int *privileged, int *has_amb,
  * @pid: process ID whose procfs status/attr files are parsed.
  * @uid: process real UID, used for root/non-root interpretation.
  * @d: destination struct receiving caller-freed string fields.
- * @securebits_nondefault: out flag indicating meaningful securebits data.
- * @secbits_raw: out raw securebits value when present.
  * @sf: parsed /proc/<pid>/status fields consumed for hardening decode.
  *
  * Missing fields are tolerated; function leaves best-effort defaults.
@@ -1227,7 +1220,6 @@ static char *caps_summary_for_pid(int pid, int *privileged, int *has_amb,
  * procfs/netns state; it does not change kernel configuration.
  */
 static void parse_status_defenses(int pid, int uid, struct defense_info *d,
-	int *securebits_nondefault, unsigned long *secbits_raw,
 	const struct status_fields *sf)
 {
 	char path[64];
@@ -1236,10 +1228,6 @@ static void parse_status_defenses(int pid, int uid, struct defense_info *d,
 	d->no_new_privs = xstrdup("unknown");
 	d->seccomp = xstrdup("disabled");
 	d->lsm_label = NULL;
-	d->securebits = NULL;
-	d->securebits_locked = NULL;
-	*securebits_nondefault = 0;
-	*secbits_raw = 0;
 
 	if (sf->seen_no_new_privs) {
 		free(d->no_new_privs);
@@ -1262,27 +1250,6 @@ static void parse_status_defenses(int pid, int uid, struct defense_info *d,
 		d->lsm_label = NULL;
 	}
 
-	if (sf->seen_secbits)
-		*secbits_raw = sf->secbits;
-	if (uid == 0 || (sf->seen_secbits && sf->secbits != 0)) {
-		char buf[256];
-		/*
-		 * Keep this decode local and explicit so reviewers can audit each
-		 * bit's textual interpretation without cross-referencing helpers.
-		 */
-		int keep = !!(sf->secbits & 0x10);
-		int nofix = !!(sf->secbits & 0x04);
-		int noroot = !!(sf->secbits & 0x01);
-		int locked = !!(sf->secbits & (0x20 | 0x08 | 0x02));
-		snprintf(buf, sizeof(buf),
-			"keep_caps=%s no_setuid_fixup=%s noroot=%s",
-			keep ? "yes" : "no",
-			nofix ? "yes" : "no",
-			noroot ? "yes" : "no");
-		d->securebits = xstrdup(buf);
-		d->securebits_locked = xstrdup(locked ? "yes" : "no");
-		*securebits_nondefault = 1;
-	}
 }
 
 /*
@@ -1303,8 +1270,6 @@ static struct process_info *add_process(struct model *m, int pid)
 	int uid = -1;
 	int has_amb = 0, has_bnd = 0;
 	char *amb_list = NULL;
-	int secure_nondefault = 0;
-	unsigned long secbits_raw = 0;
 	struct status_fields sf = { 0 };
 	struct process_info *p;
 
@@ -1326,12 +1291,8 @@ static struct process_info *add_process(struct model *m, int pid)
 			sf.seen_seccomp = 1;
 			continue;
 		}
-		if (sscanf(line, "Secbits:\t%lx", &sf.secbits) == 1) {
-			sf.seen_secbits = 1;
-			continue;
-		}
 		if (uid >= 0 && comm[0] && sf.seen_no_new_privs &&
-		    sf.seen_seccomp && sf.seen_secbits)
+		    sf.seen_seccomp)
 			break;
 	}
 	fclose(f);
@@ -1370,10 +1331,7 @@ static struct process_info *add_process(struct model *m, int pid)
 	p->ambient_caps = amb_list;
 	p->ambient_present = has_amb;
 	p->open_ended_bounding = has_bnd;
-	parse_status_defenses(pid, uid, &p->defenses, &secure_nondefault,
-		&secbits_raw, &sf);
-	p->securebits_locked = p->defenses.securebits_locked &&
-		strcmp(p->defenses.securebits_locked, "yes") == 0;
+	parse_status_defenses(pid, uid, &p->defenses, &sf);
 	if (!p->comm || (exelen >= 0 && !p->exe) || !p->caps ||
 	    (has_amb && !p->ambient_caps) ||
 	    !p->defenses.runs_as_nonroot ||
@@ -2823,76 +2781,6 @@ static void render_tree_process_details(const char *prefix,
 		def_nodes[def_n] = def_buf[def_n];
 		def_n++;
 	}
-	if (p->defenses.securebits) {
-		const char *keep_caps = "unknown";
-		const char *fixup = "unknown";
-		const char *noroot = "unknown";
-		const char *locked = p->defenses.securebits_locked ?
-			p->defenses.securebits_locked : "unknown";
-		char sb_color[512];
-		char sb_plain[256];
-		const char *keep_color = "";
-		const char *fixup_color = "";
-		const char *noroot_color = "";
-		const char *locked_color = "";
-
-		if (strstr(p->defenses.securebits, "keep_caps=yes"))
-			keep_caps = "yes";
-		else if (strstr(p->defenses.securebits, "keep_caps=no"))
-			keep_caps = "no";
-
-		if (strstr(p->defenses.securebits, "no_setuid_fixup=yes"))
-			fixup = "yes";
-		else if (strstr(p->defenses.securebits, "no_setuid_fixup=no"))
-			fixup = "no";
-
-		if (strstr(p->defenses.securebits, "noroot=yes"))
-			noroot = "yes";
-		else if (strstr(p->defenses.securebits, "noroot=no"))
-			noroot = "no";
-
-		snprintf(sb_plain, sizeof(sb_plain),
-			"keep_caps=%s no_setuid_fixup=%s noroot=%s (locked: %s)",
-			keep_caps, fixup, noroot, locked);
-
-		if (use_color) {
-			if (strcmp(keep_caps, "yes") == 0)
-				keep_color = COLOR_YELLOW;
-
-			if (strcmp(fixup, "yes") == 0)
-				fixup_color = COLOR_YELLOW;
-
-			if (strcmp(noroot, "yes") == 0)
-				noroot_color = COLOR_GREEN;
-			else if (strcmp(noroot, "no") == 0)
-				noroot_color = COLOR_YELLOW;
-
-			if (strcmp(locked, "yes") == 0)
-				locked_color = COLOR_GREEN;
-			else if (strcmp(locked, "no") == 0)
-				locked_color = COLOR_YELLOW;
-
-			snprintf(sb_color, sizeof(sb_color),
-				"keep_caps=%s%s%s no_setuid_fixup=%s%s%s noroot=%s%s%s "
-				"(locked: %s%s%s)",
-				keep_color, keep_caps,
-				keep_color[0] ? COLOR_RESET : "",
-				fixup_color, fixup,
-				fixup_color[0] ? COLOR_RESET : "",
-				noroot_color, noroot,
-				noroot_color[0] ? COLOR_RESET : "",
-				locked_color, locked,
-				locked_color[0] ? COLOR_RESET : "");
-			snprintf(def_buf[def_n], sizeof(def_buf[def_n]),
-				"securebits: %s", sb_color);
-		} else {
-			snprintf(def_buf[def_n], sizeof(def_buf[def_n]),
-				"securebits: %s", sb_plain);
-		}
-		def_nodes[def_n] = def_buf[def_n];
-		def_n++;
-	}
-
 	print_tree_node(pfx_child, 0, "defenses", width);
 	build_child_prefix(pfx_def, sizeof(pfx_def), pfx_child, 0);
 	for (ai = 0; ai < def_n; ai++)
@@ -2910,8 +2798,6 @@ static void render_tree_process_details(const char *prefix,
 	}
 	if (p->has_privileged_caps)
 		flags |= FLAG_PRIVILEGED_CAPS;
-	if (p->securebits_locked)
-		flags |= FLAG_SECUREBITS_LOCKED;
 
 	print_tree_node(pfx_child, 1, "flags", width);
 	build_child_prefix(pfx_flags, sizeof(pfx_flags), pfx_child, 1);
@@ -2965,12 +2851,6 @@ static void render_json_process(struct process_info *p,
 		printf(", \"lsm\": ");
 		json_escape(p->defenses.lsm_label);
 	}
-	if (p->defenses.securebits) {
-		printf(", \"securebits\": ");
-		json_escape(p->defenses.securebits);
-		printf(", \"securebits_locked\": ");
-		json_escape(p->defenses.securebits_locked);
-	}
 	printf("}, \"flags\": [");
 
 	if (ep->plane == PLANE_VSOCK) {
@@ -2999,11 +2879,6 @@ static void render_json_process(struct process_info *p,
 			printf(", ");
 		json_escape("privileged-caps");
 		firstf = 0;
-	}
-	if (p->securebits_locked) {
-		if (!firstf)
-			printf(", ");
-		json_escape("securebits-locked");
 	}
 	printf("]}");
 }
@@ -3441,8 +3316,6 @@ static void free_process(struct process_info *p)
 	free(p->defenses.no_new_privs);
 	free(p->defenses.seccomp);
 	free(p->defenses.lsm_label);
-	free(p->defenses.securebits);
-	free(p->defenses.securebits_locked);
 	free(p);
 }
 
