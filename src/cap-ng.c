@@ -1107,7 +1107,7 @@ int capng_lock(void)
 #endif
 #ifdef PR_SET_NO_NEW_PRIVS
 	if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) < 0)
-		rc -= -2;
+		rc += -2;
 #endif
 	return rc;
 }
