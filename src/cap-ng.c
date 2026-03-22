@@ -413,11 +413,14 @@ int capng_set_rootid(int rootid)
 	if (m.state == CAPNG_ERROR)
 		return -1;
 
-	if (rootid < 0)
+	if (rootid < 0 && rootid != CAPNG_UNSET_ROOTID)
 		return -1;
 
 	m.rootid = rootid;
-	m.vfs_cap_ver = 3;
+	if (rootid == CAPNG_UNSET_ROOTID)
+		m.vfs_cap_ver = 2;
+	else
+		m.vfs_cap_ver = 3;
 
 	return 0;
 #else
