@@ -1126,13 +1126,9 @@ static char *caps_summary_for_pid(int pid, int *privileged, int *has_amb,
 	if (c == CAPNG_FULL) {
 		strncpy(out, "(full)", sizeof(out));
 		out[sizeof(out) - 1] = 0;
-		dst = out + strlen(out);
-		left = sizeof(out) - (size_t)(dst - out);
 	} else if (c <= CAPNG_NONE) {
 		strncpy(out, "(none)", sizeof(out));
 		out[sizeof(out) - 1] = 0;
-		dst = out + strlen(out);
-		left = sizeof(out) - (size_t)(dst - out);
 	} else {
 		*dst = 0;
 		for (i = 0; i <= CAP_LAST_CAP; i++) {
@@ -1164,8 +1160,6 @@ static char *caps_summary_for_pid(int pid, int *privileged, int *has_amb,
 		if (out[0] == 0) {
 			strncpy(out, "(none)", sizeof(out));
 			out[sizeof(out) - 1] = 0;
-			dst = out + strlen(out);
-			left = sizeof(out) - (size_t)(dst - out);
 		}
 	}
 	if (capng_have_capabilities(CAPNG_SELECT_AMBIENT) > CAPNG_NONE)
@@ -2878,7 +2872,6 @@ static void render_json_process(struct process_info *p,
 		if (!firstf)
 			printf(", ");
 		json_escape("privileged-caps");
-		firstf = 0;
 	}
 	printf("]}");
 }
@@ -2899,7 +2892,8 @@ static void render_tree(struct model *m)
 	size_t plane_n = 0;
 	int width = get_width();
 
-	qsort(m->eps, m->eps_n, sizeof(struct endpoint), endpoint_cmp);
+	if (m->eps_n > 1)
+		qsort(m->eps, m->eps_n, sizeof(struct endpoint), endpoint_cmp);
 	puts("netcap --advanced");
 
 	for (i = 0; i < PLANE_COUNT; i++) {
@@ -3150,7 +3144,8 @@ static void render_json(struct model *m)
 {
 	size_t i, j, k, l;
 
-	qsort(m->eps, m->eps_n, sizeof(struct endpoint), endpoint_cmp);
+	if (m->eps_n > 1)
+		qsort(m->eps, m->eps_n, sizeof(struct endpoint), endpoint_cmp);
 	puts("{");
 	puts("  \"schema_version\": 1,");
 	puts("  \"planes\": [");

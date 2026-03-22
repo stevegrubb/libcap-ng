@@ -355,7 +355,8 @@ static void print_tree(struct proc_info *procs, size_t count)
 	size_t i;
 	int width = get_width();
 
-	qsort(procs, count, sizeof(*procs), compare_pid);
+	if (count > 1)
+		qsort(procs, count, sizeof(*procs), compare_pid);
 	for (i = 0; i < count; i++) {
 		if (!find_proc(procs, count, procs[i].ppid))
 			print_tree_node(procs, count, i, "", true, true, width);
