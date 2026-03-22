@@ -1094,6 +1094,8 @@ err_out:
 
 int capng_lock(void)
 {
+	int rc = 0;
+
 	// If either fail, return -1 since something is not right
 #ifdef PR_SET_SECUREBITS
 	if (prctl(PR_SET_SECUREBITS,
@@ -1101,13 +1103,13 @@ int capng_lock(void)
 			1 << SECURE_NOROOT_LOCKED |
 			1 << SECURE_NO_SETUID_FIXUP |
 			1 << SECURE_NO_SETUID_FIXUP_LOCKED, 0, 0, 0) < 0)
-		return -1;
+		rc = -1;
 #endif
 #ifdef PR_SET_NO_NEW_PRIVS
 	if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) < 0)
-		return -1;
+		rc |= -2;
 #endif
-	return 0;
+	return rc;
 }
 
 // -1 - error, 0 - no caps, 1 partial caps, 2 full caps
