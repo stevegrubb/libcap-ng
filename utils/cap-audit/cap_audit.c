@@ -74,17 +74,18 @@
  *
  * Layer 2 - userspace always-noise filter:
  * handle_cap_event() unconditionally drops two classes of capability
- * checks that never represent real application requirements. The kernel
- * marks advisory probes by passing CAP_OPT_NOAUDIT to cap_capable(): it is
- * asking whether a capability is present so it can choose between code
- * paths, but it will not deny the operation either way. Security-gating
- * checks use CAP_OPT_NONE and do deny access when the capability is absent.
- * cap-audit filters advisory probes by CAP_OPT_NOAUDIT instead of guessing
- * from syscall numbers, which preserves legitimate security-gating checks
- * on the same syscalls. The separate execve filter for SYS_ADMIN and
- * SETPCAP remains because exec credential-transition noise may not carry
- * CAP_OPT_NOAUDIT and still must be suppressed across shebang re-exec
- * chains.
+ * checks that never represent real application requirements. First,
+ * execve-triggered SYS_ADMIN and SETPCAP checks are kernel-internal
+ * credential-transition noise. Second, cap-audit identifies the known
+ * advisory memory overcommit probe by combining syscall, capability, and
+ * CAP_OPT_NOAUDIT: cap_vm_enough_memory checks CAP_SYS_ADMIN on
+ * brk/mmap/mprotect/mremap and the operation succeeds regardless of the
+ * result. CAP_OPT_NOAUDIT means "do not audit", not "advisory", so it
+ * is only a confirming signal here. Other enforcement checks also use
+ * CAP_OPT_NOAUDIT to avoid audit spam, and must still be reported. The
+ * syscall + capability match identifies the specific advisory call site,
+ * while CAP_OPT_NOAUDIT confirms that the event followed the advisory path
+ * rather than a security-gating path on the same syscall.
  *
  * PID filtering remains central: parent registers the child immediately after
  * fork(), BPF follows forks/exits to keep the target set precise, and each
@@ -132,6 +133,7 @@ struct app_caps {
 	int mmap_nr;
 	int brk_nr;
 	int mprotect_nr;
+	int mremap_nr;
 	type_t prog_type;
 	struct cap_check checks[CAP_LAST_CAP + 1];
 	int yama_ptrace_scope;
@@ -189,18 +191,20 @@ static int include_cap_in_recommendations(int cap)
  *
  * Covers two categories:
  *
- * 1) Exec credential transitions: kernel-internal capability set
- * adjustments during install_exec_creds/commit_creds.
+ * 1) Exec credential transitions: SYS_ADMIN and SETPCAP from execve are
+ * kernel-internal capability set adjustments during
+ * install_exec_creds/commit_creds that no application needs.
  *
- * 2) Advisory capability probes: the kernel passes CAP_OPT_NOAUDIT when it
- * is querying whether a capability is present but will not deny the
- * operation either way. The primary example is the memory overcommit
- * accounting path (cap_vm_enough_memory) which checks CAP_SYS_ADMIN to
- * decide whether to apply the privileged or conservative memory reserve.
- * Filtering on the flag rather than on syscall numbers means we correctly
- * suppress advisory checks while preserving legitimate security-gating
- * checks on the same syscalls (e.g., mapping below mmap_min_addr, LSM
- * mprotect hooks).
+ * 2) Memory overcommit accounting: SYS_ADMIN from brk/mmap/mprotect/
+ * mremap via cap_vm_enough_memory. Identified by the combination of a
+ * memory-management syscall, CAP_SYS_ADMIN, and CAP_OPT_NOAUDIT. The dual
+ * condition is necessary because CAP_OPT_NOAUDIT alone means "suppress
+ * audit logging", not "advisory check", and is also used on
+ * enforcement checks that would otherwise spam the audit log. The syscall
+ * + capability match identifies the specific call site, and the NOAUDIT
+ * flag confirms it took the advisory path rather than a security-gating
+ * path on the same syscall (such as cap_mmap_addr for mapping below
+ * mmap_min_addr, which passes CAP_OPT_NONE).
  */
 static int is_always_noise(const struct cap_event *e)
 {
@@ -209,7 +213,22 @@ static int is_always_noise(const struct cap_event *e)
 	    e->capability == CAP_SETPCAP))
 		return 1;
 
-	if (e->cap_opts & CAP_OPT_NOAUDIT)
+	/*
+	 * Memory overcommit accounting: brk/mmap/mprotect/mremap check
+	 * CAP_SYS_ADMIN through cap_vm_enough_memory with CAP_OPT_NOAUDIT.
+	 * Both conditions are required: the syscall number identifies the
+	 * origin and CAP_OPT_NOAUDIT confirms the advisory path. This
+	 * preserves security-gating checks on the same syscalls (e.g.,
+	 * mapping below mmap_min_addr passes CAP_OPT_NONE) and does not
+	 * suppress enforcement checks that use NOAUDIT to avoid audit spam
+	 * (e.g., ptrace_has_cap, cred_guard_mutex checks).
+	 */
+	if ((e->cap_opts & CAP_OPT_NOAUDIT) &&
+	    e->capability == CAP_SYS_ADMIN &&
+	    (e->syscall_nr == state.app.brk_nr ||
+	     e->syscall_nr == state.app.mmap_nr ||
+	     e->syscall_nr == state.app.mprotect_nr ||
+	     e->syscall_nr == state.app.mremap_nr))
 		return 1;
 
 	return 0;
@@ -1457,6 +1476,7 @@ int main(int argc, char **argv)
 	state.app.brk_nr = audit_name_to_syscall("brk", audit_machine);
 	state.app.mprotect_nr = audit_name_to_syscall("mprotect",
 						      audit_machine);
+	state.app.mremap_nr = audit_name_to_syscall("mremap", audit_machine);
 
 	// Load and attach BPF program before forking so probes are ready.
 	state.skel = cap_audit_bpf__open_and_load();

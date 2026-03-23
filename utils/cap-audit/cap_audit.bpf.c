@@ -67,9 +67,11 @@
  * syscall context, namespace inode, the CAP_OPT_* flags passed to
  * cap_capable(), and stack id; tracks per-capability statistics; and
  * streams finalized events to userspace through a ring buffer. The cap_opts
- * field lets userspace distinguish advisory probes (CAP_OPT_NOAUDIT) from
- * security-gating checks. Fork/exit tracepoints keep the PID filter in sync
- * so children are traced and exits are pruned.
+ * field carries the CAP_OPT_* flags so userspace can correlate known
+ * advisory call sites without treating CAP_OPT_NOAUDIT as a standalone
+ * filter. CAP_OPT_NOAUDIT means "do not audit" and is only a confirming
+ * signal alongside syscall and capability matching. Fork/exit tracepoints
+ * keep the PID filter in sync so children are traced and exits are pruned.
  */
 
 #ifndef PERF_MAX_STACK_DEPTH
