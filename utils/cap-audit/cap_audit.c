@@ -1469,7 +1469,8 @@ int main(int argc, char **argv)
 		audit_machine = audit_detect_machine();
 	if (audit_machine < 0) {
 		fprintf(stderr,
-			"Warning: unable to determine hardware architecture for syscall lookup\n");
+			"Error: unable to determine hardware architecture for syscall lookup. Exiting.\n");
+		return 1;
 	}
 	state.app.execve_nr = audit_name_to_syscall("execve", audit_machine);
 	state.app.mmap_nr = audit_name_to_syscall("mmap", audit_machine);
