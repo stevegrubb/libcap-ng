@@ -279,10 +279,12 @@ ATTEMPTED BUT DENIED:
 ----------------------------------------------------------------------
   dac_override (#1)
     Attempts: 2 (all denied)
+    Syscalls: readlink, faccessat2
     Impact: Application may have reduced functionality
 
   bpf (#39)
-    Attempts: 1 (all denied)
+    Attempts: 2 (all denied)
+    Syscalls: prctl
     Impact: Application may have reduced functionality
 
 SUMMARY:

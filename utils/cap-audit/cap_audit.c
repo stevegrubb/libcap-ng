@@ -123,6 +123,9 @@ struct cap_check {
 	unsigned long denied;
 	int needed;
 	char *reason;
+	int *denied_syscalls;
+	size_t denied_syscall_count;
+	size_t denied_syscall_capacity;
 };
 
 // Program global variables
@@ -566,6 +569,39 @@ static const char *syscall_name_from_nr(int nr)
 }
 
 /*
+ * add_denied_syscall - record a denied syscall for a capability.
+ * @check: capability tracking entry to update.
+ * @syscall_nr: syscall number that triggered the denied check.
+ *
+ * Appends syscall_nr to check->denied_syscalls if it has not already been
+ * recorded. Grows storage as needed. On allocation failure, leaves existing
+ * entries untouched.
+ */
+static void add_denied_syscall(struct cap_check *check, int syscall_nr)
+{
+	size_t i;
+	int *tmp;
+	size_t new_cap;
+
+	for (i = 0; i < check->denied_syscall_count; i++) {
+		if (check->denied_syscalls[i] == syscall_nr)
+			return;
+	}
+
+	if (check->denied_syscall_count == check->denied_syscall_capacity) {
+		new_cap = check->denied_syscall_capacity ?
+			  check->denied_syscall_capacity * 2 : 4;
+		tmp = realloc(check->denied_syscalls, new_cap * sizeof(int));
+		if (!tmp)
+			return;
+		check->denied_syscalls = tmp;
+		check->denied_syscall_capacity = new_cap;
+	}
+
+	check->denied_syscalls[check->denied_syscall_count++] = syscall_nr;
+}
+
+/*
  * update_reason - create or refresh the human-readable reason for a cap.
  * @check: capability tracking entry to update.
  * @syscall_nr: syscall that triggered the capability check.
@@ -740,8 +776,10 @@ static int handle_cap_event(void *ctx __attribute__((unused)), void *data,
 		// Track kernel decision outcome for this capability.
 		if (e->result > 0)
 			check->granted++;
-		else if (e->result == 0)
+		else if (e->result == 0) {
 			check->denied++;
+			add_denied_syscall(check, e->syscall_nr);
+		}
 
 		// First access grant marks the capability as required.
 		if (e->result > 0 && check->needed != 1) {
@@ -1010,10 +1048,30 @@ static void analyze_capabilities(void)
 
 		check = &state.app.checks[i];
 		if (check->denied > 0 && check->granted == 0) {
+			size_t j;
+
 			has_denied = 1;
 			printf("  %s (#%d)\n", cap_name_safe(i), i);
 			printf("    Attempts: %lu (all denied)\n",
 			       check->denied);
+			printf("    Syscalls: ");
+			if (check->denied_syscall_count == 0)
+				printf("unknown\n");
+			for (j = 0; j < check->denied_syscall_count; j++) {
+				const char *syscall_name;
+				int syscall_nr;
+
+				syscall_nr = check->denied_syscalls[j];
+				syscall_name = syscall_name_from_nr(syscall_nr);
+				if (j > 0)
+					printf(", ");
+				if (syscall_name)
+					printf("%s", syscall_name);
+				else
+					printf("unknown(#%d)", syscall_nr);
+			}
+			if (check->denied_syscall_count > 0)
+				printf("\n");
 			printf("    Impact: Application may have reduced "
 			       "functionality\n");
 			printf("\n");
@@ -1643,6 +1701,8 @@ int main(int argc, char **argv)
 	for (int i = 0; i <= CAP_LAST_CAP; i++) {
 		if (state.app.checks[i].reason)
 			free(state.app.checks[i].reason);
+		if (state.app.checks[i].denied_syscalls)
+			free(state.app.checks[i].denied_syscalls);
 	}
 
 	return 0;
