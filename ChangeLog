@@ -2,6 +2,7 @@
 - In cap-audit, split capability analysis across init and runtime phases
 - If vm_sockets.h and others are not available, remove "netcap --advanced"
 - Add netcap --list-interfaces & --interface to restrict output to 1 interface
+- Put bash completions in /usr/share/bash-completion/completions/
 
 0.9.2
 - Added netcap --advanced option for attack surface discovery and inventory
