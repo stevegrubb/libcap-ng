@@ -37,6 +37,7 @@ AM_CFLAGS = -W -Wall -Wshadow ${WFLAGS} -Wundef -D_GNU_SOURCE
 NETCAP_ADVANCED_ENABLED = @NETCAP_ADVANCED_ENABLED@
 bin_PROGRAMS = pscap netcap filecap
 man_MANS = pscap.8 netcap.8 filecap.8
+bashcompletiondir = ${datadir}/bash-completion/completions
 
 pscap_SOURCES = pscap.c proc-sanitize.c proc-sanitize.h
 netcap_SOURCES = netcap.c netcap-advanced.h proc-llist.c \
@@ -53,9 +54,9 @@ captest_SOURCES = captest.c
 endif
 
 install-exec-hook:
-	mkdir -p ${DESTDIR}${sysconfdir}/bash_completion.d
-	$(INSTALL_SCRIPT) -D -m 644 ${srcdir}/libcap-ng.bash_completion \
-		${DESTDIR}${sysconfdir}/bash_completion.d/libcap-ng.bash_completion
+	$(MKDIR_P) ${DESTDIR}${bashcompletiondir}
+	$(INSTALL_DATA) ${srcdir}/libcap-ng.bash_completion \
+		${DESTDIR}${bashcompletiondir}/libcap-ng.bash_completion
 
 uninstall-hook:
-	rm -f ${DESTDIR}${sysconfdir}/bash_completion.d/libcap-ng.bash_completion
+	rm -f ${DESTDIR}${bashcompletiondir}/libcap-ng.bash_completion
