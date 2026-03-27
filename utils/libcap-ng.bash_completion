@@ -23,7 +23,7 @@ _pscap()
 _netcap()
 {
 	local cur
-	local opts="--advanced --json"
+	local opts="--advanced --list-interfaces --json --no-color"
 
 	COMPREPLY=()
 	cur="${COMP_WORDS[COMP_CWORD]}"

@@ -186,6 +186,10 @@ built. There is also a spec file to use if you are on a rpm based
 distribution. To do that, run "make dist" instead of make in the above
 instructions. Then use the resulting tar file with the spec file.
 
+When advanced mode is available, `netcap --advanced --list-interfaces` prints
+the current network namespace interface names. Add `--json` to get a
+machine-readable list of names.
+
 NOTE: to distributions
 ----------------------
 There is a "make check" target. It only works if the available kernel headers

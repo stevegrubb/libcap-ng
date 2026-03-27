@@ -5,6 +5,7 @@ netcap \- a program to review network capability posture
 .B netcap
 .\" BEGIN_ADVANCED
 .RI [ --advanced
+.RI [ --list-interfaces ]
 .RI [ --json ]
 .RI [ --no-color ]]
 .\" END_ADVANCED
@@ -42,9 +43,14 @@ Enable the posture/tree view. This mode inventories reachable binds in
 the current network namespace and shows per-process capabilities, defenses,
 and flags.
 .TP
+.B \-\-list\-interfaces
+With \fB\-\-advanced\fP, list the current network namespace interface names
+instead of the exposure tree.
+.TP
 .B \-\-json
 With \fB\-\-advanced\fP, emit machine-readable JSON instead of the tree
-view.
+view. When combined with \fB\-\-list\-interfaces\fP, emit machine-readable
+interface inventory JSON instead of text.
 .TP
 .B \-\-no\-color
 Suppress colored output. By default, when stdout is a terminal, keywords are
@@ -57,6 +63,10 @@ state.
 Advanced mode is an attack-surface and posture inventory for the current
 network namespace. It is intended for administrators who need a structured
 view of bind ownership and process hardening state.
+
+With \fB\-\-advanced --list\-interfaces\fP, the advanced-mode interface
+snapshot is rendered directly without enumerating listeners. This is intended
+as a simple interface enumeration step before later per-interface analysis.
 
 The tree layout is:
 
@@ -177,6 +187,11 @@ started as root and later changed only effective UID via setuid still reports
 If a plane has no discovered binds, it appears with an empty list. If a
 consumer does not receive a given plane, treat it as none found or omitted by
 the producer.
+
+When \fB\-\-advanced --list\-interfaces --json\fP is used, the top-level
+object
+contains \fBschema_version\fP (integer) and \fBinterfaces\fP (array of
+interface-name strings).
 .\" END_ADVANCED
 
 .SH INTERPRETATION

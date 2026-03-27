@@ -27,6 +27,7 @@
 
 struct netcap_opts {
 	int advanced;
+	int list_interfaces;
 	int json;
 	int no_color;
 };

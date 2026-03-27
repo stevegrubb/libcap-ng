@@ -57,7 +57,8 @@ static char *tacct = NULL;
 
 static void usage(void)
 {
-	fprintf(stderr, "usage: netcap [--advanced [--json] [--no-color]]\n");
+	fprintf(stderr, "usage: netcap [--advanced "
+		"[--list-interfaces] [--json] [--no-color]]\n");
 	exit(1);
 }
 
@@ -761,12 +762,14 @@ static void read_vsock(void)
 
 int main(int argc, char **argv)
 {
-	struct netcap_opts opts = { 0, 0, 0 };
+	struct netcap_opts opts = { 0, 0, 0, 0 };
 	int i;
 
 	for (i = 1; i < argc; i++) {
 		if (strcmp(argv[i], "--advanced") == 0)
 			opts.advanced = 1;
+		else if (strcmp(argv[i], "--list-interfaces") == 0)
+			opts.list_interfaces = 1;
 		else if (strcmp(argv[i], "--json") == 0)
 			opts.json = 1;
 		else if (strcmp(argv[i], "--no-color") == 0)
@@ -779,6 +782,11 @@ int main(int argc, char **argv)
 
 	if (opts.json && !opts.advanced) {
 		fputs("--json is only valid with --advanced\n", stderr);
+		usage();
+	}
+	if (opts.list_interfaces && !opts.advanced) {
+		fputs("--list-interfaces is only valid with --advanced\n",
+			stderr);
 		usage();
 	}
 

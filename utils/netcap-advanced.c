@@ -341,6 +341,58 @@ static void print_tree_node(const char *prefix, int is_last,
 	const char *txt, int width);
 static int bind_sort_cmp(const char *a, const char *b);
 static struct inode_proc *lookup_inode(struct model *m, unsigned long inode);
+static void render_interfaces_text(struct model *m);
+static void render_interfaces_json(struct model *m);
+
+/*
+ * iface_addr_cmp - order interface addresses by family then text.
+ * @av/@bv: qsort pointers to struct iface_addr elements.
+ *
+ * Returns strcmp-style ordering suitable for qsort().
+ */
+static int iface_addr_cmp(const void *av, const void *bv)
+{
+	const struct iface_addr *a = av;
+	const struct iface_addr *b = bv;
+
+	if (a->af != b->af)
+		return a->af - b->af;
+	return strcmp(a->addr, b->addr);
+}
+
+/*
+ * iface_info_cmp - order interfaces by name for stable output.
+ * @av/@bv: qsort pointers to struct iface_info elements.
+ *
+ * Returns strcmp-style ordering suitable for qsort().
+ */
+static int iface_info_cmp(const void *av, const void *bv)
+{
+	const struct iface_info *a = av;
+	const struct iface_info *b = bv;
+
+	return strcmp(a->name, b->name);
+}
+
+/*
+ * sort_interfaces - sort interfaces and per-interface addresses in place.
+ * @m: model containing interface inventory from getifaddrs().
+ *
+ * Returns no value.
+ */
+static void sort_interfaces(struct model *m)
+{
+	size_t i;
+
+	if (m->ifaces_n > 1)
+		qsort(m->ifaces, m->ifaces_n, sizeof(struct iface_info),
+			iface_info_cmp);
+	for (i = 0; i < m->ifaces_n; i++) {
+		if (m->ifaces[i].addrs_n > 1)
+			qsort(m->ifaces[i].addrs, m->ifaces[i].addrs_n,
+				sizeof(struct iface_addr), iface_addr_cmp);
+	}
+}
 
 /*
  * str_hash - hash a string key for open-addressed set placement.
@@ -3107,6 +3159,22 @@ static void render_tree(struct model *m)
 }
 
 /*
+ * render_interfaces_text - print interface inventory in human-readable form.
+ * @m: model whose interface inventory is rendered.
+ *
+ * Returns no value.
+ */
+static void render_interfaces_text(struct model *m)
+{
+	size_t i;
+
+	sort_interfaces(m);
+	puts("netcap --advanced --list-interfaces");
+	for (i = 0; i < m->ifaces_n; i++)
+		printf("%s\n", m->ifaces[i].name);
+}
+
+/*
  * json_escape - write @s as a quoted JSON string to stdout.
  * @s: UTF-8/text string to emit as one JSON string literal.
  *
@@ -3291,6 +3359,29 @@ static void render_json(struct model *m)
 }
 
 /*
+ * render_interfaces_json - print interface inventory as JSON.
+ * @m: model whose interface inventory is rendered.
+ *
+ * Returns no value.
+ */
+static void render_interfaces_json(struct model *m)
+{
+	size_t i;
+
+	sort_interfaces(m);
+	puts("{");
+	puts("  \"schema_version\": 1,");
+	puts("  \"interfaces\": [");
+	for (i = 0; i < m->ifaces_n; i++) {
+		printf("    ");
+		json_escape(m->ifaces[i].name);
+		printf("%s\n", i + 1 == m->ifaces_n ? "" : ",");
+	}
+	puts("  ]");
+	puts("}");
+}
+
+/*
  * free_process - free one process_info and all owned dynamic fields.
  * @p: process entry pointer, or NULL.
  *
@@ -3369,6 +3460,14 @@ int netcap_advanced_main(const struct netcap_opts *opts)
 	memset(&m, 0, sizeof(m));
 	if (collect_interfaces(&m) != 0) {
 		fprintf(stderr, "warning: failed to enumerate interfaces\n");
+	}
+	if (opts->list_interfaces) {
+		if (opts->json)
+			render_interfaces_json(&m);
+		else
+			render_interfaces_text(&m);
+		free_model(&m);
+		return 0;
 	}
 	collect_proc_inodes(&m);
 	collect_endpoints(&m);
