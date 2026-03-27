@@ -58,7 +58,8 @@ static char *tacct = NULL;
 static void usage(void)
 {
 	fprintf(stderr, "usage: netcap [--advanced "
-		"[--list-interfaces] [--json] [--no-color]]\n");
+		"[--interface IFACE] [--list-interfaces] [--json] "
+		"[--no-color]]\n");
 	exit(1);
 }
 
@@ -762,12 +763,27 @@ static void read_vsock(void)
 
 int main(int argc, char **argv)
 {
-	struct netcap_opts opts = { 0, 0, 0, 0 };
+	struct netcap_opts opts = { 0, 0, 0, 0, NULL };
 	int i;
 
 	for (i = 1; i < argc; i++) {
 		if (strcmp(argv[i], "--advanced") == 0)
 			opts.advanced = 1;
+		else if (strcmp(argv[i], "--interface") == 0) {
+			if (i + 1 >= argc) {
+				fputs("--interface requires an argument\n",
+					stderr);
+				usage();
+			}
+			opts.interface = argv[++i];
+		} else if (strncmp(argv[i], "--interface=", 12) == 0) {
+			if (argv[i][12] == 0) {
+				fputs("--interface requires an argument\n",
+					stderr);
+				usage();
+			}
+			opts.interface = argv[i] + 12;
+		}
 		else if (strcmp(argv[i], "--list-interfaces") == 0)
 			opts.list_interfaces = 1;
 		else if (strcmp(argv[i], "--json") == 0)
@@ -787,6 +803,10 @@ int main(int argc, char **argv)
 	if (opts.list_interfaces && !opts.advanced) {
 		fputs("--list-interfaces is only valid with --advanced\n",
 			stderr);
+		usage();
+	}
+	if (opts.interface && !opts.advanced) {
+		fputs("--interface is only valid with --advanced\n", stderr);
 		usage();
 	}
 

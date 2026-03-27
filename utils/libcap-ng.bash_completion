@@ -22,11 +22,20 @@ _pscap()
 
 _netcap()
 {
-	local cur
-	local opts="--advanced --list-interfaces --json --no-color"
+	local cur prev
+	local opts="--advanced --interface --list-interfaces --json --no-color"
 
 	COMPREPLY=()
 	cur="${COMP_WORDS[COMP_CWORD]}"
+	prev="${COMP_WORDS[COMP_CWORD-1]}"
+
+	case "$prev" in
+	--interface)
+		COMPREPLY=( $(compgen -W "$(command ls /sys/class/net \
+			2>/dev/null)" -- "$cur") )
+		return 0
+		;;
+	esac
 
 	if [[ "$cur" == -* ]]; then
 		COMPREPLY=( $(compgen -W "$opts" -- "$cur") )

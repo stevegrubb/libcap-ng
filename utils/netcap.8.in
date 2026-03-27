@@ -5,6 +5,7 @@ netcap \- a program to review network capability posture
 .B netcap
 .\" BEGIN_ADVANCED
 .RI [ --advanced
+.RI [ --interface " IFACE ]
 .RI [ --list-interfaces ]
 .RI [ --json ]
 .RI [ --no-color ]]
@@ -43,6 +44,12 @@ Enable the posture/tree view. This mode inventories reachable binds in
 the current network namespace and shows per-process capabilities, defenses,
 and flags.
 .TP
+.BI \-\-interface " IFACE"
+With \fB\-\-advanced\fP, limit the report to the named interface. Output
+format and wrapping are unchanged; only interface-scoped rows for that
+interface are kept. This also filters \fB\-\-list\-interfaces\fP output to
+the named interface.
+.TP
 .B \-\-list\-interfaces
 With \fB\-\-advanced\fP, list the current network namespace interface names
 instead of the exposure tree.
@@ -67,6 +74,9 @@ view of bind ownership and process hardening state.
 With \fB\-\-advanced --list\-interfaces\fP, the advanced-mode interface
 snapshot is rendered directly without enumerating listeners. This is intended
 as a simple interface enumeration step before later per-interface analysis.
+With \fB\-\-advanced --interface IFACE\fP, the same inventory and tree/JSON
+renderers are used, but only endpoints projected onto that interface are
+retained.
 
 The tree layout is:
 

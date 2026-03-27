@@ -213,6 +213,7 @@ struct endpoint_attrs {
 };
 
 static void free_process(struct process_info *p);
+static void free_endpoint(struct endpoint *e);
 
 static int use_color;
 
@@ -3382,6 +3383,64 @@ static void render_interfaces_json(struct model *m)
 }
 
 /*
+ * free_endpoint - free one endpoint and all owned dynamic fields.
+ * @e: endpoint entry pointer, or NULL.
+ *
+ * Returns no value.
+ */
+static void free_endpoint(struct endpoint *e)
+{
+	if (!e)
+		return;
+	free(e->proto);
+	free(e->bind);
+	free(e->label);
+	free(e->ifname);
+	free(e->ifaddr);
+	free(e->procs);
+}
+
+/*
+ * filter_model_interface - keep only one named interface in @m.
+ * @m: model container to prune in place.
+ * @ifname: interface name to retain.
+ *
+ * Returns no value.
+ */
+static void filter_model_interface(struct model *m, const char *ifname)
+{
+	size_t i, out;
+
+	if (!m || !ifname)
+		return;
+
+	for (i = 0, out = 0; i < m->ifaces_n; i++) {
+		if (strcmp(m->ifaces[i].name, ifname) == 0) {
+			if (out != i)
+				m->ifaces[out] = m->ifaces[i];
+			out++;
+			continue;
+		}
+		free(m->ifaces[i].name);
+		for (size_t j = 0; j < m->ifaces[i].addrs_n; j++)
+			free(m->ifaces[i].addrs[j].addr);
+		free(m->ifaces[i].addrs);
+	}
+	m->ifaces_n = out;
+
+	for (i = 0, out = 0; i < m->eps_n; i++) {
+		if (strcmp(m->eps[i].ifname, ifname) == 0) {
+			if (out != i)
+				m->eps[out] = m->eps[i];
+			out++;
+			continue;
+		}
+		free_endpoint(&m->eps[i]);
+	}
+	m->eps_n = out;
+}
+
+/*
  * free_process - free one process_info and all owned dynamic fields.
  * @p: process entry pointer, or NULL.
  *
@@ -3430,14 +3489,8 @@ static void free_model(struct model *m)
 		free(m->inode_map[i].procs);
 	free(m->inode_map);
 	free(m->inode_slots);
-	for (i = 0; i < m->eps_n; i++) {
-		free(m->eps[i].proto);
-		free(m->eps[i].bind);
-		free(m->eps[i].label);
-		free(m->eps[i].ifname);
-		free(m->eps[i].ifaddr);
-		free(m->eps[i].procs);
-	}
+	for (i = 0; i < m->eps_n; i++)
+		free_endpoint(&m->eps[i]);
 	free(m->eps);
 }
 
@@ -3461,6 +3514,8 @@ int netcap_advanced_main(const struct netcap_opts *opts)
 	if (collect_interfaces(&m) != 0) {
 		fprintf(stderr, "warning: failed to enumerate interfaces\n");
 	}
+	if (opts->interface)
+		filter_model_interface(&m, opts->interface);
 	if (opts->list_interfaces) {
 		if (opts->json)
 			render_interfaces_json(&m);
@@ -3471,6 +3526,8 @@ int netcap_advanced_main(const struct netcap_opts *opts)
 	}
 	collect_proc_inodes(&m);
 	collect_endpoints(&m);
+	if (opts->interface)
+		filter_model_interface(&m, opts->interface);
 	use_color = !opts->json && !opts->no_color && isatty(STDOUT_FILENO);
 	if (opts->json)
 		render_json(&m);
