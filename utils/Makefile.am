@@ -22,6 +22,7 @@
 # 
 
 CONFIG_CLEAN_FILES = *.loT *.rej *.orig
+DISTCLEANFILES = netcap.8
 AUTOMAKE_OPTIONS = no-dependencies
 if BUILD_CAP_AUDIT
 SUBDIRS = cap-audit
