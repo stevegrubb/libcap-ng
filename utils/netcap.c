@@ -26,14 +26,16 @@
 
 #include "config.h"
 #include <arpa/inet.h>
+#ifdef HAVE_NETCAP_ADVANCED
 #include <linux/inet_diag.h>
 #include <linux/netlink.h>
 #include <linux/sock_diag.h>
 #include <linux/vm_sockets.h>
-#include <limits.h>
 #ifdef HAVE_LINUX_VM_SOCKETS_DIAG_H
 #include <linux/vm_sockets_diag.h>
 #endif
+#endif
+#include <limits.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <stdio.h>
@@ -421,6 +423,7 @@ static void read_packet(void)
 	fclose(f);
 }
 
+#ifdef HAVE_NETCAP_ADVANCED
 static int parse_u32_hex_or_dec(const char *s, unsigned int *out)
 {
 	char *end;
@@ -754,6 +757,7 @@ static void read_vsock(void)
 	if (read_vsock_diag() < 0)
 		read_vsock_proc();
 }
+#endif
 
 int main(int argc, char **argv)
 {
@@ -778,8 +782,17 @@ int main(int argc, char **argv)
 		usage();
 	}
 
-	if (opts.advanced)
+	if (opts.advanced) {
+#ifdef HAVE_NETCAP_ADVANCED
 		return netcap_advanced_main(&opts);
+#else
+		fputs("netcap --advanced was disabled at configure time\n",
+			stderr);
+		fputs("because required kernel headers were not available\n",
+			stderr);
+		return 1;
+#endif
+	}
 
 	if (argc > 1) {
 		fputs("Too many arguments\n", stderr);
@@ -807,8 +820,10 @@ int main(int argc, char **argv)
 	read_packet();
 
 	// Add listeners from protocols supported in advanced mode
+#ifdef HAVE_NETCAP_ADVANCED
 	read_diag_listeners();
 	read_vsock();
+#endif
 
 	// Could also do icmp,netlink,unix
 
