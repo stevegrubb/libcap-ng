@@ -28,6 +28,7 @@
 #include <stdio.h>
 #include <stdio_ext.h>
 #include <stdlib.h>
+#include <limits.h>
 #include <sys/prctl.h>
 #include <pwd.h>
 #include <grp.h>
@@ -179,6 +180,8 @@ struct cap_ng
 	__le32 rootid;
 	__u32 bounds[VFS_CAP_U32];
 	__u32 ambient[VFS_CAP_U32];
+	gid_t *supp_groups;
+	size_t supp_group_cnt;
 };
 
 // Global variables with per thread uniqueness
@@ -187,13 +190,118 @@ static __thread struct cap_ng m =	{ 1, 1,
 					{ {0, 0, 0} },
 					CAPNG_NEW, CAPNG_UNSET_ROOTID,
 					{0, 0},
-					{0, 0} };
+					{0, 0},
+					NULL, 0 };
+
+static void clear_staged_supp_groups(struct cap_ng *c)
+{
+	free(c->supp_groups);
+	c->supp_groups = NULL;
+	c->supp_group_cnt = 0;
+}
+
+static int copy_staged_supp_groups(struct cap_ng *dst, const struct cap_ng *src)
+{
+	size_t len;
+
+	dst->supp_groups = NULL;
+	dst->supp_group_cnt = 0;
+	if (src->supp_group_cnt == 0)
+		return 0;
+
+	len = src->supp_group_cnt * sizeof(gid_t);
+	dst->supp_groups = malloc(len);
+	if (dst->supp_groups == NULL)
+		return -1;
+
+	memcpy(dst->supp_groups, src->supp_groups, len);
+	dst->supp_group_cnt = src->supp_group_cnt;
+	return 0;
+}
+
+static int gid_in_list(const gid_t *gids, size_t count, gid_t gid)
+{
+	size_t i;
+
+	for (i = 0; i < count; i++) {
+		if (gids[i] == gid)
+			return 1;
+	}
+	return 0;
+}
+
+static int get_supp_groups(const struct passwd *pw, gid_t gid, gid_t **gids,
+							size_t *count)
+{
+	gid_t *list;
+	int ngroups = 1;
+	int rc;
+
+	*gids = NULL;
+	*count = 0;
+
+	list = malloc(sizeof(gid_t));
+	if (list == NULL)
+		return -1;
+
+	rc = getgrouplist(pw->pw_name, gid, list, &ngroups);
+	if (rc == -1) {
+		gid_t *tmp;
+
+		tmp = realloc(list, sizeof(gid_t) * ngroups);
+		if (tmp == NULL) {
+			free(list);
+			return -1;
+		}
+		list = tmp;
+		rc = getgrouplist(pw->pw_name, gid, list, &ngroups);
+	}
+	if (rc == -1) {
+		free(list);
+		return -1;
+	}
+
+	*gids = list;
+	*count = ngroups;
+	return 0;
+}
+
+static int merge_supp_groups(const gid_t *base, size_t base_cnt,
+		const gid_t *extra, size_t extra_cnt, gid_t **merged,
+		size_t *merged_cnt)
+{
+	gid_t *list;
+	size_t i, count = 0, total = base_cnt + extra_cnt;
+
+	*merged = NULL;
+	*merged_cnt = 0;
+	if (total == 0)
+		return 0;
+
+	list = malloc(sizeof(gid_t) * total);
+	if (list == NULL)
+		return -1;
+
+	for (i = 0; i < base_cnt; i++) {
+		if (gid_in_list(list, count, base[i]) == 0)
+			list[count++] = base[i];
+	}
+	for (i = 0; i < extra_cnt; i++) {
+		if (gid_in_list(list, count, extra[i]) == 0)
+			list[count++] = extra[i];
+	}
+
+	*merged = list;
+	*merged_cnt = count;
+	return 0;
+}
 
 /*
  * Reset the state so that init gets called to erase everything
  */
 static void deinit(void)
 {
+	clear_staged_supp_groups(&m);
 	m.state = CAPNG_NEW;
 }
 
@@ -426,6 +534,34 @@ int capng_set_rootid(int rootid)
 #else
 	return -1;
 #endif
+}
+
+int capng_stage_supplementary_groups(const gid_t *gids, size_t count)
+{
+	gid_t *list = NULL;
+
+	if (count && gids == NULL) {
+		errno = EINVAL;
+		return -1;
+	}
+	if (count > NGROUPS_MAX) {
+		errno = EINVAL;
+		return -1;
+	}
+
+	if (count) {
+		size_t len = count * sizeof(gid_t);
+
+		list = malloc(len);
+		if (list == NULL)
+			return -1;
+		memcpy(list, gids, len);
+	}
+
+	clear_staged_supp_groups(&m);
+	m.supp_groups = list;
+	m.supp_group_cnt = count;
+	return 0;
 }
 
 #ifdef PR_CAPBSET_DROP
@@ -968,13 +1104,29 @@ int capng_apply_caps_fd(int fd)
 // flag to drop supp groups
 int capng_change_id(int uid, int gid, capng_flags_t flag)
 {
-	int rc, ret, added_setgid, added_setuid, added_setpcap=0;
+	int rc, ret, added_setgid, added_setuid, added_setpcap = 0;
+	struct passwd *pw = NULL;
+	gid_t *gids = NULL, *merged = NULL;
+	size_t gid_cnt = 0, merged_cnt = 0;
 
 	// Before updating, we expect that the data is initialized to something
-	if (m.state < CAPNG_INIT)
-		return -1;
+	if (m.state < CAPNG_INIT) {
+		ret = -1;
+		goto out;
+	}
+	// Validate mutually exclusive staged-group combinations up front.
+	if ((flag & CAPNG_APPLY_STAGED_SUPP_GRP) &&
+			(flag & CAPNG_DROP_SUPP_GRP)) {
+		ret = -12;
+		goto out;
+	}
+	// Staged application only makes sense when a list was staged earlier.
+	if ((flag & CAPNG_APPLY_STAGED_SUPP_GRP) && m.supp_group_cnt == 0) {
+		ret = -13;
+		goto out;
+	}
 
-	// Check the current capabilities
+	// Make sure the temporary transition caps we may need are present.
 #ifdef PR_CAPBSET_DROP
 if (HAVE_PR_CAPBSET_DROP) {
 	// If newer kernel, we need setpcap to change the bounding set
@@ -1001,11 +1153,13 @@ if (HAVE_PR_CAPBSET_DROP) {
 				CAP_SETUID);
 	}
 
-	// Tell system we want to keep caps across uid change
-	if (prctl(PR_SET_KEEPCAPS, 1, 0, 0, 0) < 0)
-		return -2;
+	// Enable keepcaps before changing credentials so final caps survive.
+	if (prctl(PR_SET_KEEPCAPS, 1, 0, 0, 0) < 0) {
+		ret = -2;
+		goto out;
+	}
 
-	// Change to the temp capabilities
+	// Apply the temporary working set before touching ids or groups.
 	rc = capng_apply(CAPNG_SELECT_CAPS);
 	if (rc < 0) {
 		ret = -3;
@@ -1026,7 +1180,8 @@ if (HAVE_PR_CAPBSET_DROP) {
 		}
 	}
 
-	// Change gid
+	// Change gid before supplementary groups so kernel permission checks
+	// see the target primary group.
 	if (gid != -1) {
 		rc = setresgid(gid, gid, gid);
 		if (rc) {
@@ -1035,28 +1190,59 @@ if (HAVE_PR_CAPBSET_DROP) {
 		}
 	}
 
-	// See if we need to init supplemental groups
+	// Resolve the passwd entry once when natural group setup is requested.
 	if ((flag & CAPNG_INIT_SUPP_GRP) && uid != -1) {
-		struct passwd *pw = getpwuid(uid);
+		pw = getpwuid(uid);
 		if (pw == NULL) {
 			ret = -10;
 			goto err_out;
 		}
-		if (gid != -1) {
-			if (initgroups(pw->pw_name, gid)) {
-				ret = -5;
+	}
+
+	// There are four supplementary-group modes:
+	// init+staged merge, init only, drop only, or staged only.
+	if ((flag & CAPNG_INIT_SUPP_GRP) &&
+			(flag & CAPNG_APPLY_STAGED_SUPP_GRP)) {
+		if (uid != -1) {
+			gid_t base_gid = gid != -1 ? (gid_t)gid : pw->pw_gid;
+
+			// Build the natural target account group list first.
+			rc = get_supp_groups(pw, base_gid, &gids, &gid_cnt);
+			if (rc) {
+				ret = -15;
 				goto err_out;
 			}
-		} else if (initgroups(pw->pw_name, pw->pw_gid)) {
+		}
+		// Then append staged gids without duplicates and apply the result.
+		rc = merge_supp_groups(gids, gid_cnt, m.supp_groups,
+					m.supp_group_cnt, &merged,
+					&merged_cnt);
+		if (rc) {
+			ret = -16;
+			goto err_out;
+		}
+		if (setgroups(merged_cnt, merged)) {
+			ret = -14;
+			goto err_out;
+		}
+	} else if ((flag & CAPNG_INIT_SUPP_GRP) && uid != -1) {
+		gid_t base_gid = gid != -1 ? (gid_t)gid : pw->pw_gid;
+
+		// Preserve the long-standing initgroups-only behavior.
+		if (initgroups(pw->pw_name, base_gid)) {
 			ret = -5;
 			goto err_out;
 		}
-	}
-
-	// See if we need to unload supplemental groups
-	if ((flag & CAPNG_DROP_SUPP_GRP) && gid != -1) {
+	} else if ((flag & CAPNG_DROP_SUPP_GRP) && gid != -1) {
+		// Drop all supplementary groups for the target identity.
 		if (setgroups(0, NULL)) {
-			ret = -5;
+			ret = -11;
+			goto err_out;
+		}
+	} else if (flag & CAPNG_APPLY_STAGED_SUPP_GRP) {
+		// Apply exactly the caller-staged gid list.
+		if (setgroups(m.supp_group_cnt, m.supp_groups)) {
+			ret = -14;
 			goto err_out;
 		}
 	}
@@ -1070,10 +1256,12 @@ if (HAVE_PR_CAPBSET_DROP) {
 		}
 	}
 
-	// Tell it we are done keeping capabilities
+	// Credential changes are complete, so disable keepcaps again.
 	rc = prctl(PR_SET_KEEPCAPS, 0, 0, 0, 0);
-	if (rc < 0)
-		return -7;
+	if (rc < 0) {
+		ret = -7;
+		goto out;
+	}
 
 	// Now throw away CAP_SETPCAP so no more changes
 	if (added_setgid)
@@ -1083,18 +1271,26 @@ if (HAVE_PR_CAPBSET_DROP) {
 		capng_update(CAPNG_DROP, CAPNG_EFFECTIVE|CAPNG_PERMITTED,
 				CAP_SETUID);
 
-	// Now drop setpcap & apply
+	// Drop any temporary transition caps and install the final sets.
 	if (added_setpcap)
 		capng_update(CAPNG_DROP, CAPNG_EFFECTIVE|CAPNG_PERMITTED,
 				CAP_SETPCAP);
 	rc = capng_apply(CAPNG_SELECT_CAPS|CAPNG_SELECT_AMBIENT);
-	if (rc < 0)
-		return -9;
+	if (rc < 0) {
+		ret = -9;
+		goto out;
+	}
 
-	return 0;
+	ret = 0;
+	goto out;
 
 err_out:
 	prctl(PR_SET_KEEPCAPS, 0, 0, 0, 0);
+out:
+	// Staged gids are one-shot state, so always clear them before return.
+	free(gids);
+	free(merged);
+	clear_staged_supp_groups(&m);
 	return ret;
 }
 
@@ -1515,17 +1711,27 @@ char *capng_print_caps_text(capng_print_t where, capng_type_t which)
 void *capng_save_state(void)
 {
 	void *ptr = malloc(sizeof(m));
-	if (ptr)
+	if (ptr) {
 		memcpy(ptr, &m, sizeof(m));
+		if (copy_staged_supp_groups(ptr, &m)) {
+			free(ptr);
+			ptr = NULL;
+		}
+	}
 	return ptr;
 }
 
 void capng_restore_state(void **state)
 {
 	if (state) {
-		void *ptr = *state;
-		if (ptr)
+		struct cap_ng *ptr = *state;
+		if (ptr) {
+			clear_staged_supp_groups(&m);
 			memcpy(&m, ptr, sizeof(m));
+			if (copy_staged_supp_groups(&m, ptr))
+				m.state = CAPNG_ERROR;
+			clear_staged_supp_groups(ptr);
+		}
 		free(ptr);
 		*state = NULL;
 	}

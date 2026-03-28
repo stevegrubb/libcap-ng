@@ -27,6 +27,20 @@ After changing id, initialize any supplement groups that may come with the new a
 .B CAPNG_DROP_SUPP_GRP
 it will have no effect.
 .TP
+.B CAPNG_APPLY_STAGED_SUPP_GRP
+Available in libcap-ng 0.9.3 and later.
+Apply supplementary groups previously staged with
+.BR capng_stage_supplementary_groups (3).
+If used by itself, the staged list is applied exactly. If combined with
+.B CAPNG_INIT_SUPP_GRP
+the account's natural supplementary groups are initialized first and the
+staged gids are then merged in without duplicates. If combined with
+.B CAPNG_DROP_SUPP_GRP
+the call fails. If this flag is set and no staged gids are present, the
+call fails. Staged gids are one-shot state and are always cleared before
+.B capng_change_id
+returns, even when the flag is omitted or the call fails.
+.TP
 .B CAPNG_CLEAR_BOUNDING
 Clear the bounding set regardless to the internal representation already setup prior to changing the uid/gid.
 .TP
@@ -47,7 +61,7 @@ This returns 0 on success and a negative number on failure.
 .TP
 -4 means changing gid failed
 .TP
--5 means dropping supplemental groups failed
+-5 means initializing supplemental groups failed
 .TP
 -6 means changing the uid failed
 .TP
@@ -57,8 +71,27 @@ This returns 0 on success and a negative number on failure.
 .TP
 -9 means dropping CAP_SETPCAP or ambient capabilities failed
 .TP
--10 means initializing supplemental groups failed
+-10 means resolving the target account for supplementary groups failed
+.TP
+-11 means dropping supplemental groups failed
+.TP
+-12 means CAPNG_DROP_SUPP_GRP and CAPNG_APPLY_STAGED_SUPP_GRP were both set
+.TP
+-13 means CAPNG_APPLY_STAGED_SUPP_GRP was requested with no staged gids
+.TP
+-14 means applying staged supplementary groups failed
+.TP
+-15 means looking up the target account supplementary groups failed
+.TP
+-16 means merging initialized and staged supplementary groups failed
 .RE
+
+Applications that need to support libcap-ng releases older than 0.9.3
+should detect the availability of
+.B CAPNG_APPLY_STAGED_SUPP_GRP
+and
+.BR capng_stage_supplementary_groups (3)
+before using this flow.
 
 Note: the only safe action to do upon failure of this function is to probably exit. This is because you are likely in a situation with partial permissions and not what you intended.
 
@@ -66,6 +99,7 @@ Note: the only safe action to do upon failure of this function is to probably ex
 
 .BR capng_update (3),
 .BR capng_apply (3),
+.BR capng_stage_supplementary_groups (3),
 .BR prctl (2),
 .BR capabilities (7)
 
