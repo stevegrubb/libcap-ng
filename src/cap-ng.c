@@ -968,7 +968,7 @@ int capng_apply_caps_fd(int fd)
 // flag to drop supp groups
 int capng_change_id(int uid, int gid, capng_flags_t flag)
 {
-	int rc, ret, need_setgid, need_setuid, need_setpcap=0;
+	int rc, ret, added_setgid, added_setuid, added_setpcap=0;
 
 	// Before updating, we expect that the data is initialized to something
 	if (m.state < CAPNG_INIT)
@@ -980,23 +980,23 @@ if (HAVE_PR_CAPBSET_DROP) {
 	// If newer kernel, we need setpcap to change the bounding set
 	if (capng_have_capability(CAPNG_EFFECTIVE, CAP_SETPCAP) == 0 &&
 					flag & CAPNG_CLEAR_BOUNDING) {
-		need_setpcap = 1;
+		added_setpcap = 1;
 		capng_update(CAPNG_ADD,
 				CAPNG_EFFECTIVE|CAPNG_PERMITTED, CAP_SETPCAP);
 	}
 }
 #endif
 	if (gid == -1 || capng_have_capability(CAPNG_EFFECTIVE, CAP_SETGID))
-		need_setgid = 0;
+		added_setgid = 0;
 	else {
-		need_setgid = 1;
+		added_setgid = 1;
 		capng_update(CAPNG_ADD, CAPNG_EFFECTIVE|CAPNG_PERMITTED,
 				CAP_SETGID);
 	}
 	if (uid == -1 || capng_have_capability(CAPNG_EFFECTIVE, CAP_SETUID))
-		need_setuid = 0;
+		added_setuid = 0;
 	else {
-		need_setuid = 1;
+		added_setuid = 1;
 		capng_update(CAPNG_ADD, CAPNG_EFFECTIVE|CAPNG_PERMITTED,
 				CAP_SETUID);
 	}
@@ -1076,15 +1076,15 @@ if (HAVE_PR_CAPBSET_DROP) {
 		return -7;
 
 	// Now throw away CAP_SETPCAP so no more changes
-	if (need_setgid)
+	if (added_setgid)
 		capng_update(CAPNG_DROP, CAPNG_EFFECTIVE|CAPNG_PERMITTED,
 				CAP_SETGID);
-	if (need_setuid)
+	if (added_setuid)
 		capng_update(CAPNG_DROP, CAPNG_EFFECTIVE|CAPNG_PERMITTED,
 				CAP_SETUID);
 
 	// Now drop setpcap & apply
-	if (need_setpcap)
+	if (added_setpcap)
 		capng_update(CAPNG_DROP, CAPNG_EFFECTIVE|CAPNG_PERMITTED,
 				CAP_SETPCAP);
 	rc = capng_apply(CAPNG_SELECT_CAPS|CAPNG_SELECT_AMBIENT);
