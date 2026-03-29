@@ -20,7 +20,7 @@ This function also takes a flag parameter that helps to tailor the exact actions
 Simply change uid and retain specified capabilities and that's all.
 .TP
 .B CAPNG_DROP_SUPP_GRP
-After changing id, remove any supplemental groups that may still be in effect from the old uid.
+After changing the primary group ID, remove all supplementary groups. If no new primary group ID is supplied (gid == -1), this flag has no effect.
 .TP
 .B CAPNG_INIT_SUPP_GRP
 After changing id, initialize any supplemental groups that may come with the new account. If given with
