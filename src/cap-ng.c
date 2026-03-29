@@ -1124,7 +1124,16 @@ int capng_apply_caps_fd(int fd)
 // Change uids keeping/removing only certain capabilities
 int capng_change_id(int uid, int gid, capng_flags_t flag)
 {
-	int rc, ret, added_setgid, added_setuid, added_setpcap = 0;
+	enum {
+		TMP_SETPCAP_E = 1 << 0,
+		TMP_SETPCAP_P = 1 << 1,
+		TMP_SETUID_E  = 1 << 2,
+		TMP_SETUID_P  = 1 << 3,
+		TMP_SETGID_E  = 1 << 4,
+		TMP_SETGID_P  = 1 << 5,
+	};
+	unsigned int tmp_caps = 0;
+	int rc, ret;
 	struct passwd *pw = NULL;
 	gid_t *gids = NULL, *merged = NULL;
 	size_t gid_cnt = 0, merged_cnt = 0;
@@ -1156,29 +1165,43 @@ int capng_change_id(int uid, int gid, capng_flags_t flag)
 #ifdef PR_CAPBSET_DROP
 if (HAVE_PR_CAPBSET_DROP) {
 	// If newer kernel, we need setpcap to change the bounding set
-	if (capng_have_capability(CAPNG_EFFECTIVE, CAP_SETPCAP) == 0 &&
-			((flag & CAPNG_CLEAR_BOUNDING) ||
+	if ((flag & CAPNG_CLEAR_BOUNDING) ||
 			((flag & CAPNG_APPLY_BOUNDING) &&
-			m.bounds_state_changed))) {
-		added_setpcap = 1;
-		capng_update(CAPNG_ADD,
-				CAPNG_EFFECTIVE|CAPNG_PERMITTED, CAP_SETPCAP);
+			m.bounds_state_changed)) {
+		if (capng_have_capability(CAPNG_EFFECTIVE,
+					CAP_SETPCAP) == 0) {
+			tmp_caps |= TMP_SETPCAP_E;
+			capng_update(CAPNG_ADD, CAPNG_EFFECTIVE,
+					CAP_SETPCAP);
+		}
+		if (capng_have_capability(CAPNG_PERMITTED,
+					CAP_SETPCAP) == 0) {
+			tmp_caps |= TMP_SETPCAP_P;
+			capng_update(CAPNG_ADD, CAPNG_PERMITTED,
+					CAP_SETPCAP);
+		}
 	}
 }
 #endif
-	if (gid == -1 || capng_have_capability(CAPNG_EFFECTIVE, CAP_SETGID))
-		added_setgid = 0;
-	else {
-		added_setgid = 1;
-		capng_update(CAPNG_ADD, CAPNG_EFFECTIVE|CAPNG_PERMITTED,
-				CAP_SETGID);
+	if (gid != -1) {
+		if (capng_have_capability(CAPNG_EFFECTIVE, CAP_SETGID) == 0) {
+			tmp_caps |= TMP_SETGID_E;
+			capng_update(CAPNG_ADD, CAPNG_EFFECTIVE, CAP_SETGID);
+		}
+		if (capng_have_capability(CAPNG_PERMITTED, CAP_SETGID) == 0) {
+			tmp_caps |= TMP_SETGID_P;
+			capng_update(CAPNG_ADD, CAPNG_PERMITTED, CAP_SETGID);
+		}
 	}
-	if (uid == -1 || capng_have_capability(CAPNG_EFFECTIVE, CAP_SETUID))
-		added_setuid = 0;
-	else {
-		added_setuid = 1;
-		capng_update(CAPNG_ADD, CAPNG_EFFECTIVE|CAPNG_PERMITTED,
-				CAP_SETUID);
+	if (uid != -1) {
+		if (capng_have_capability(CAPNG_EFFECTIVE, CAP_SETUID) == 0) {
+			tmp_caps |= TMP_SETUID_E;
+			capng_update(CAPNG_ADD, CAPNG_EFFECTIVE, CAP_SETUID);
+		}
+		if (capng_have_capability(CAPNG_PERMITTED, CAP_SETUID) == 0) {
+			tmp_caps |= TMP_SETUID_P;
+			capng_update(CAPNG_ADD, CAPNG_PERMITTED, CAP_SETUID);
+		}
 	}
 
 	// Enable keepcaps before changing credentials so final caps survive.
@@ -1301,17 +1324,20 @@ if (HAVE_PR_CAPBSET_DROP) {
 	}
 
 	// Now throw away CAP_SETPCAP so no more changes
-	if (added_setgid)
-		capng_update(CAPNG_DROP, CAPNG_EFFECTIVE|CAPNG_PERMITTED,
-				CAP_SETGID);
-	if (added_setuid)
-		capng_update(CAPNG_DROP, CAPNG_EFFECTIVE|CAPNG_PERMITTED,
-				CAP_SETUID);
+	if (tmp_caps & TMP_SETGID_E)
+		capng_update(CAPNG_DROP, CAPNG_EFFECTIVE, CAP_SETGID);
+	if (tmp_caps & TMP_SETGID_P)
+		capng_update(CAPNG_DROP, CAPNG_PERMITTED, CAP_SETGID);
+	if (tmp_caps & TMP_SETUID_E)
+		capng_update(CAPNG_DROP, CAPNG_EFFECTIVE, CAP_SETUID);
+	if (tmp_caps & TMP_SETUID_P)
+		capng_update(CAPNG_DROP, CAPNG_PERMITTED, CAP_SETUID);
 
 	// Drop any temporary transition caps and install the final sets.
-	if (added_setpcap)
-		capng_update(CAPNG_DROP, CAPNG_EFFECTIVE|CAPNG_PERMITTED,
-				CAP_SETPCAP);
+	if (tmp_caps & TMP_SETPCAP_E)
+		capng_update(CAPNG_DROP, CAPNG_EFFECTIVE, CAP_SETPCAP);
+	if (tmp_caps & TMP_SETPCAP_P)
+		capng_update(CAPNG_DROP, CAPNG_PERMITTED, CAP_SETPCAP);
 	rc = capng_apply(CAPNG_SELECT_CAPS|CAPNG_SELECT_AMBIENT);
 	if (rc < 0) {
 		ret = -9;

@@ -447,6 +447,35 @@ static void test_apply_bounding_preserves_requested_helper_cap(void)
 		fail("Unexpected helper capability cleanup return code");
 }
 
+static void test_apply_bounding_preserves_permitted_only_helper_cap(void)
+{
+	static const int allowed[] = { -2, -3, -8, -9 };
+	unsigned int cap;
+	int rc;
+
+	if (capng_get_caps_process())
+		fail("Failed to initialize libcap-ng state");
+	if (find_drop_test_bounding_cap(&cap))
+		return;
+	if (capng_have_capability(CAPNG_PERMITTED, CAP_SETPCAP) == 0)
+		return;
+	if (capng_update(CAPNG_DROP, CAPNG_EFFECTIVE, CAP_SETPCAP))
+		fail("Failed to clear effective CAP_SETPCAP request");
+	if (capng_update(CAPNG_ADD, CAPNG_PERMITTED, CAP_SETPCAP))
+		fail("Failed to request permitted CAP_SETPCAP");
+	if (capng_update(CAPNG_DROP, CAPNG_BOUNDING_SET, cap))
+		fail("Failed to prepare bounding set change");
+
+	rc = capng_change_id(-1, -1, CAPNG_APPLY_BOUNDING);
+	if (rc == 0) {
+		if (capng_have_capability(CAPNG_EFFECTIVE, CAP_SETPCAP))
+			fail("Permitted-only CAP_SETPCAP became effective");
+		if (capng_have_capability(CAPNG_PERMITTED, CAP_SETPCAP) == 0)
+			fail("Permitted-only CAP_SETPCAP was removed");
+	} else if (rc_in_list(rc, allowed, sizeof(allowed) / sizeof(int)) == 0)
+		fail("Unexpected permitted-only helper cleanup return code");
+}
+
 static void test_bounding_state_ignored_without_flag(void)
 {
 	static const int allowed[] = { -2, -3 };
@@ -513,6 +542,8 @@ int main(void)
 			test_invalid_apply_and_clear_bounding);
 	run_test("helper cleanup keeps requested capability",
 			test_apply_bounding_preserves_requested_helper_cap);
+	run_test("helper cleanup keeps permitted-only capability",
+			test_apply_bounding_preserves_permitted_only_helper_cap);
 	run_test("prepared bounding state ignored without flag",
 			test_bounding_state_ignored_without_flag);
 	return EXIT_SUCCESS;
