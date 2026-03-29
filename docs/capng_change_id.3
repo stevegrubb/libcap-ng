@@ -20,24 +20,24 @@ This function also takes a flag parameter that helps to tailor the exact actions
 Simply change uid and retain specified capabilities and that's all.
 .TP
 .B CAPNG_DROP_SUPP_GRP
-After changing id, remove any supplement groups that may still be in effect from the old uid.
+After changing id, remove any supplemental groups that may still be in effect from the old uid.
 .TP
 .B CAPNG_INIT_SUPP_GRP
-After changing id, initialize any supplement groups that may come with the new account. If given with
+After changing id, initialize any supplemental groups that may come with the new account. If given with
 .B CAPNG_DROP_SUPP_GRP
 it will have no effect.
 .TP
-.B CAPNG_APPLY_STAGED_SUPP_GRP
+.B CAPNG_APPLY_STAGED_GROUPS
 Available in libcap-ng 0.9.3 and later.
-Apply supplementary groups previously staged with
-.BR capng_stage_supplementary_groups (3).
+Apply additional groups previously staged with
+.BR capng_stage_additional_groups (3).
 If used by itself, the staged list is applied exactly. If combined with
 .B CAPNG_INIT_SUPP_GRP
-the account's natural supplementary groups are initialized first and the
+the account's natural supplemental groups are initialized first and the
 staged gids are then merged in without duplicates. If combined with
 .B CAPNG_DROP_SUPP_GRP
 the call fails. If this flag is set and no staged gids are present, the
-call fails. Staged gids are one-shot state and are always cleared before
+call fails. Staged gids are intended to be used once and are always cleared before
 .B capng_change_id
 returns, even when the flag is omitted or the call fails.
 .TP
@@ -87,19 +87,19 @@ This returns 0 on success and a negative number on failure.
 .TP
 -9 means dropping CAP_SETPCAP or ambient capabilities failed
 .TP
--10 means resolving the target account for supplementary groups failed
+-10 means resolving the target account for supplemental groups failed
 .TP
 -11 means dropping supplemental groups failed
 .TP
--12 means CAPNG_DROP_SUPP_GRP and CAPNG_APPLY_STAGED_SUPP_GRP were both set
+-12 means CAPNG_DROP_SUPP_GRP and CAPNG_APPLY_STAGED_GROUPS were both set
 .TP
--13 means CAPNG_APPLY_STAGED_SUPP_GRP was requested with no staged gids
+-13 means CAPNG_APPLY_STAGED_GROUPS was requested with no staged gids
 .TP
--14 means applying staged supplementary groups failed
+-14 means applying staged additional groups failed
 .TP
--15 means looking up the target account supplementary groups failed
+-15 means looking up a group account in additional groups failed
 .TP
--16 means merging initialized and staged supplementary groups failed
+-16 means merging initialized and staged additional groups failed
 .TP
 -17 means CAPNG_APPLY_BOUNDING and CAPNG_CLEAR_BOUNDING were both set
 .RE
@@ -110,7 +110,7 @@ should detect the availability of
 and
 .B CAPNG_APPLY_STAGED_SUPP_GRP
 and
-.BR capng_stage_supplementary_groups (3)
+.BR capng_stage_additional_groups (3)
 before using this flow. Callers that need the prepared bounding-set
 behavior must request it explicitly with
 .B CAPNG_APPLY_BOUNDING
@@ -124,7 +124,7 @@ Note: the only safe action to do upon failure of this function is to probably ex
 
 .BR capng_update (3),
 .BR capng_apply (3),
-.BR capng_stage_supplementary_groups (3),
+.BR capng_stage_additional_groups (3),
 .BR prctl (2),
 .BR capabilities (7)
 

@@ -1,4 +1,4 @@
-/* change_id_test.c -- capng_change_id supplementary group tests
+/* change_id_test.c -- capng_change_id additional group tests
  * Copyright 2026 Red Hat Inc.
  * All Rights Reserved.
  *
@@ -160,12 +160,12 @@ static void check_groups(const gid_t *expected, size_t expected_cnt)
 	size_t i;
 
 	if (get_current_groups(&actual, &actual_cnt))
-		fail("Failed to get current supplementary groups");
+		fail("Failed to get current additional groups");
 	if (actual_cnt != expected_cnt)
-		fail("Unexpected supplementary group count");
+		fail("Unexpected additional group count");
 	for (i = 0; i < expected_cnt; i++) {
 		if (actual[i] != expected[i])
-			fail("Unexpected supplementary group value");
+			fail("Unexpected additional group value");
 	}
 	free(actual);
 }
@@ -246,10 +246,10 @@ static void test_staged_only(void)
 		staged_cnt = 2;
 	free(natural);
 
-	rc = capng_stage_supplementary_groups(staged, staged_cnt);
+	rc = capng_stage_additional_groups(staged, staged_cnt);
 	if (rc)
-		fail("Failed to stage supplementary groups");
-	rc = capng_change_id(-1, -1, CAPNG_APPLY_STAGED_SUPP_GRP);
+		fail("Failed to stage additional groups");
+	rc = capng_change_id(-1, -1, CAPNG_APPLY_STAGED_GROUPS);
 	if (rc == 0)
 		check_groups(staged, staged_cnt);
 	else if (rc_in_list(rc, allowed, sizeof(allowed) / sizeof(int)) == 0)
@@ -295,14 +295,14 @@ static void test_init_and_staged(void)
 		staged_cnt = 2;
 	if (merge_groups(natural, natural_cnt, staged, staged_cnt,
 				&merged, &merged_cnt))
-		fail("Failed to merge expected supplementary groups");
+		fail("Failed to merge expected additional groups");
 
-	rc = capng_stage_supplementary_groups(staged, staged_cnt);
+	rc = capng_stage_additional_groups(staged, staged_cnt);
 	if (rc)
-		fail("Failed to stage supplementary groups");
+		fail("Failed to stage additional groups");
 	rc = capng_change_id(getuid(), -1,
 			CAPNG_INIT_SUPP_GRP |
-			CAPNG_APPLY_STAGED_SUPP_GRP);
+			CAPNG_APPLY_STAGED_GROUPS);
 	if (rc == 0)
 		check_groups(merged, merged_cnt);
 	else if (rc_in_list(rc, allowed, sizeof(allowed) / sizeof(int)) == 0)
@@ -319,12 +319,12 @@ static void test_invalid_drop_and_staged(void)
 
 	if (capng_get_caps_process())
 		fail("Failed to initialize libcap-ng state");
-	rc = capng_stage_supplementary_groups(&gid, 1);
+	rc = capng_stage_additional_groups(&gid, 1);
 	if (rc)
-		fail("Failed to stage supplementary groups");
+		fail("Failed to stage additional groups");
 	rc = capng_change_id(-1, -1,
 			CAPNG_DROP_SUPP_GRP |
-			CAPNG_APPLY_STAGED_SUPP_GRP);
+			CAPNG_APPLY_STAGED_GROUPS);
 	if (rc != -12)
 		fail("Unexpected drop+staged return code");
 }
@@ -337,13 +337,13 @@ static void test_staged_ignored_without_flag(void)
 
 	if (capng_get_caps_process())
 		fail("Failed to initialize libcap-ng state");
-	rc = capng_stage_supplementary_groups(&gid, 1);
+	rc = capng_stage_additional_groups(&gid, 1);
 	if (rc)
-		fail("Failed to stage supplementary groups");
+		fail("Failed to stage additional groups");
 	rc = capng_change_id(-1, -1, CAPNG_NO_FLAG);
 	if (rc && rc_in_list(rc, allowed, sizeof(allowed) / sizeof(int)) == 0)
 		fail("Unexpected return code when staged groups are ignored");
-	rc = capng_change_id(-1, -1, CAPNG_APPLY_STAGED_SUPP_GRP);
+	rc = capng_change_id(-1, -1, CAPNG_APPLY_STAGED_GROUPS);
 	if (rc != -13)
 		fail("Staged groups were not cleared when ignored");
 }
@@ -356,13 +356,13 @@ static void test_staged_cleared_after_use(void)
 
 	if (capng_get_caps_process())
 		fail("Failed to initialize libcap-ng state");
-	rc = capng_stage_supplementary_groups(&gid, 1);
+	rc = capng_stage_additional_groups(&gid, 1);
 	if (rc)
-		fail("Failed to stage supplementary groups");
-	rc = capng_change_id(-1, -1, CAPNG_APPLY_STAGED_SUPP_GRP);
+		fail("Failed to stage additional groups");
+	rc = capng_change_id(-1, -1, CAPNG_APPLY_STAGED_GROUPS);
 	if (rc && rc_in_list(rc, allowed, sizeof(allowed) / sizeof(int)) == 0)
 		fail("Unexpected return code when consuming staged groups");
-	rc = capng_change_id(-1, -1, CAPNG_APPLY_STAGED_SUPP_GRP);
+	rc = capng_change_id(-1, -1, CAPNG_APPLY_STAGED_GROUPS);
 	if (rc != -13)
 		fail("Staged groups were not cleared after use");
 }
@@ -495,10 +495,10 @@ static void run_test(const char *name, void (*test)(void))
 
 int main(void)
 {
-	puts("Doing capng_change_id supplementary group tests...");
-	run_test("staged-only supplementary groups", test_staged_only);
-	run_test("init-only supplementary groups", test_init_only);
-	run_test("init+staged supplementary groups", test_init_and_staged);
+	puts("Doing capng_change_id additional group tests...");
+	run_test("staged-only additional groups", test_staged_only);
+	run_test("init-only additional groups", test_init_only);
+	run_test("init+staged additional groups", test_init_and_staged);
 	run_test("invalid drop+staged combination",
 			test_invalid_drop_and_staged);
 	run_test("staged groups ignored without flag",
