@@ -180,6 +180,7 @@ struct cap_ng
 	__le32 rootid;
 	__u32 bounds[VFS_CAP_U32];
 	__u32 ambient[VFS_CAP_U32];
+	unsigned char bounds_state_changed;
 	gid_t *supp_groups;
 	size_t supp_group_cnt;
 };
@@ -191,6 +192,7 @@ static __thread struct cap_ng m =	{ 1, 1,
 					CAPNG_NEW, CAPNG_UNSET_ROOTID,
 					{0, 0},
 					{0, 0},
+					0,
 					NULL, 0 };
 
 static void clear_staged_supp_groups(struct cap_ng *c)
@@ -198,6 +200,16 @@ static void clear_staged_supp_groups(struct cap_ng *c)
 	free(c->supp_groups);
 	c->supp_groups = NULL;
 	c->supp_group_cnt = 0;
+}
+
+static inline void mark_bounding_set_changed(struct cap_ng *c)
+{
+	c->bounds_state_changed = 1;
+}
+
+static inline void clear_bounding_set_changed(struct cap_ng *c)
+{
+	c->bounds_state_changed = 0;
 }
 
 static int copy_staged_supp_groups(struct cap_ng *dst, const struct cap_ng *src)
@@ -439,8 +451,10 @@ void capng_clear(capng_select_t set)
 		memset(&m.data, 0, sizeof(cap_data_t));
 #ifdef PR_CAPBSET_DROP
 if (HAVE_PR_CAPBSET_DROP) {
-	if (set & CAPNG_SELECT_BOUNDS)
+	if (set & CAPNG_SELECT_BOUNDS) {
 		memset(m.bounds, 0, sizeof(m.bounds));
+		mark_bounding_set_changed(&m);
+	}
 }
 #endif
 #ifdef PR_CAP_AMBIENT
@@ -479,6 +493,7 @@ if (HAVE_PR_CAPBSET_DROP) {
 		unsigned i;
 		for (i=0; i<sizeof(m.bounds)/sizeof(__u32); i++)
 			m.bounds[i] = 0xFFFFFFFFU;
+		mark_bounding_set_changed(&m);
 	}
 }
 #endif
@@ -588,6 +603,7 @@ static int get_bounding_set(void)
 			fclose(f);
 			if (num != 2)
 				return -1;
+			clear_bounding_set_changed(&m);
 			return 0;
 		}
 		// Didn't find bounding set, fall through and try prctl way
@@ -607,6 +623,7 @@ static int get_bounding_set(void)
 		i++;
 	} while (cap_valid(i));
 
+	clear_bounding_set_changed(&m);
 	return 0;
 }
 #endif
@@ -880,6 +897,8 @@ int capng_update(capng_act_t action, capng_type_t type, unsigned int capability)
 		if (CAPNG_AMBIENT & type)
 			update_ambient_set(action, capability, idx);
 	}
+	if (CAPNG_BOUNDING_SET & type)
+		mark_bounding_set_changed(&m);
 
 	m.state = CAPNG_UPDATED;
 	return 0;
@@ -951,6 +970,7 @@ if (HAVE_PR_CAPBSET_DROP) {
 				rc = -3;
 				goto try_caps;
 			}
+			clear_bounding_set_changed(&m);
 			m.state = CAPNG_APPLIED;
 		} else {
 			memcpy(&m, &state, sizeof(m)); /* restore state */
@@ -1120,6 +1140,12 @@ int capng_change_id(int uid, int gid, capng_flags_t flag)
 		ret = -12;
 		goto out;
 	}
+	// Validate mutually exclusive bounding-set operations up front.
+	if ((flag & CAPNG_APPLY_BOUNDING) &&
+			(flag & CAPNG_CLEAR_BOUNDING)) {
+		ret = -17;
+		goto out;
+	}
 	// Staged application only makes sense when a list was staged earlier.
 	if ((flag & CAPNG_APPLY_STAGED_SUPP_GRP) && m.supp_group_cnt == 0) {
 		ret = -13;
@@ -1131,7 +1157,9 @@ int capng_change_id(int uid, int gid, capng_flags_t flag)
 if (HAVE_PR_CAPBSET_DROP) {
 	// If newer kernel, we need setpcap to change the bounding set
 	if (capng_have_capability(CAPNG_EFFECTIVE, CAP_SETPCAP) == 0 &&
-					flag & CAPNG_CLEAR_BOUNDING) {
+			((flag & CAPNG_CLEAR_BOUNDING) ||
+			((flag & CAPNG_APPLY_BOUNDING) &&
+			m.bounds_state_changed))) {
 		added_setpcap = 1;
 		capng_update(CAPNG_ADD,
 				CAPNG_EFFECTIVE|CAPNG_PERMITTED, CAP_SETPCAP);
@@ -1173,6 +1201,14 @@ if (HAVE_PR_CAPBSET_DROP) {
 	// Clear bounding set if needed while we have CAP_SETPCAP
 	if (flag & CAPNG_CLEAR_BOUNDING) {
 		capng_clear(CAPNG_SELECT_BOUNDS);
+		rc = capng_apply(CAPNG_SELECT_BOUNDS);
+		if (rc) {
+			ret = -8;
+			goto err_out;
+		}
+	}
+	// Apply a caller-prepared bounding set only when it is explicitly dirty.
+	if ((flag & CAPNG_APPLY_BOUNDING) && m.bounds_state_changed) {
 		rc = capng_apply(CAPNG_SELECT_BOUNDS);
 		if (rc) {
 			ret = -8;

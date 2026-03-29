@@ -24,6 +24,7 @@
 #include <pwd.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/prctl.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -185,6 +186,47 @@ static int choose_extra_gid(const gid_t *skip, size_t skip_cnt, gid_t *gid)
 	return -1;
 }
 
+static int read_bounding_cap(unsigned int cap)
+{
+#ifdef PR_CAPBSET_READ
+	return prctl(PR_CAPBSET_READ, cap, 0, 0, 0);
+#else
+	(void)cap;
+	return -1;
+#endif
+}
+
+static int find_drop_test_bounding_cap(unsigned int *cap)
+{
+	unsigned int i;
+
+	for (i = 0; cap_valid(i); i++) {
+		int rc;
+
+		if (i == CAP_SETPCAP || i == CAP_SETUID || i == CAP_SETGID)
+			continue;
+		rc = read_bounding_cap(i);
+		if (rc < 0)
+			return -1;
+		if (rc == 1) {
+			*cap = i;
+			return 0;
+		}
+	}
+	for (i = 0; cap_valid(i); i++) {
+		int rc;
+
+		rc = read_bounding_cap(i);
+		if (rc < 0)
+			return -1;
+		if (rc == 1) {
+			*cap = i;
+			return 0;
+		}
+	}
+	return -1;
+}
+
 static void test_staged_only(void)
 {
 	static const int allowed[] = { -2, -3, -14 };
@@ -325,6 +367,107 @@ static void test_staged_cleared_after_use(void)
 		fail("Staged groups were not cleared after use");
 }
 
+static void test_apply_bounding_during_change_id(void)
+{
+	static const int allowed[] = { -2, -3, -8, -9 };
+	unsigned int cap;
+	int rc;
+
+	if (capng_get_caps_process())
+		fail("Failed to initialize libcap-ng state");
+	if (find_drop_test_bounding_cap(&cap))
+		return;
+	if (capng_update(CAPNG_DROP, CAPNG_BOUNDING_SET, cap))
+		fail("Failed to prepare bounding set change");
+
+	rc = capng_change_id(-1, -1, CAPNG_APPLY_BOUNDING);
+	if (rc == 0) {
+		if (read_bounding_cap(cap) != 0)
+			fail("Prepared bounding set was not applied");
+	} else if (rc_in_list(rc, allowed, sizeof(allowed) / sizeof(int)) == 0)
+		fail("Unexpected apply-bounding return code");
+}
+
+static void test_apply_bounding_noop_without_state(void)
+{
+	static const int allowed[] = { -2, -3 };
+	unsigned int cap;
+	int before, rc;
+
+	if (capng_get_caps_process())
+		fail("Failed to initialize libcap-ng state");
+	if (find_drop_test_bounding_cap(&cap))
+		return;
+	before = read_bounding_cap(cap);
+	if (before != 1)
+		fail("Expected selected bounding capability to be present");
+
+	rc = capng_change_id(-1, -1, CAPNG_APPLY_BOUNDING);
+	if (rc == 0) {
+		if (read_bounding_cap(cap) != before)
+			fail("Unprepared bounding set should be a no-op");
+	} else if (rc_in_list(rc, allowed, sizeof(allowed) / sizeof(int)) == 0)
+		fail("Unexpected no-op apply-bounding return code");
+}
+
+static void test_invalid_apply_and_clear_bounding(void)
+{
+	if (capng_get_caps_process())
+		fail("Failed to initialize libcap-ng state");
+	if (capng_change_id(-1, -1,
+			CAPNG_APPLY_BOUNDING | CAPNG_CLEAR_BOUNDING) != -17)
+		fail("Unexpected apply+clear bounding return code");
+}
+
+static void test_apply_bounding_preserves_requested_helper_cap(void)
+{
+	static const int allowed[] = { -2, -3, -8, -9 };
+	unsigned int cap;
+	int rc;
+
+	if (capng_get_caps_process())
+		fail("Failed to initialize libcap-ng state");
+	if (find_drop_test_bounding_cap(&cap))
+		return;
+	if (capng_have_capability(CAPNG_PERMITTED, CAP_SETPCAP) == 0)
+		return;
+	if (capng_update(CAPNG_ADD, CAPNG_EFFECTIVE|CAPNG_PERMITTED,
+				CAP_SETPCAP))
+		fail("Failed to request CAP_SETPCAP");
+	if (capng_update(CAPNG_DROP, CAPNG_BOUNDING_SET, cap))
+		fail("Failed to prepare bounding set change");
+
+	rc = capng_change_id(-1, -1, CAPNG_APPLY_BOUNDING);
+	if (rc == 0) {
+		if (capng_have_capability(CAPNG_EFFECTIVE, CAP_SETPCAP) == 0)
+			fail("Requested CAP_SETPCAP was removed from effective");
+		if (capng_have_capability(CAPNG_PERMITTED, CAP_SETPCAP) == 0)
+			fail("Requested CAP_SETPCAP was removed from permitted");
+	} else if (rc_in_list(rc, allowed, sizeof(allowed) / sizeof(int)) == 0)
+		fail("Unexpected helper capability cleanup return code");
+}
+
+static void test_bounding_state_ignored_without_flag(void)
+{
+	static const int allowed[] = { -2, -3 };
+	unsigned int cap;
+	int rc;
+
+	if (capng_get_caps_process())
+		fail("Failed to initialize libcap-ng state");
+	if (find_drop_test_bounding_cap(&cap))
+		return;
+	if (capng_update(CAPNG_DROP, CAPNG_BOUNDING_SET, cap))
+		fail("Failed to prepare bounding set change");
+
+	rc = capng_change_id(-1, -1, CAPNG_NO_FLAG);
+	if (rc == 0) {
+		if (read_bounding_cap(cap) != 1)
+			fail("Bounding set changed without CAPNG_APPLY_BOUNDING");
+	} else if (rc_in_list(rc, allowed, sizeof(allowed) / sizeof(int)) == 0)
+		fail("Unexpected backward compatibility return code");
+}
+
 static void run_test(const char *name, void (*test)(void))
 {
 	pid_t pid;
@@ -362,5 +505,15 @@ int main(void)
 			test_staged_ignored_without_flag);
 	run_test("staged state cleared after use",
 			test_staged_cleared_after_use);
+	run_test("apply prepared bounding set",
+			test_apply_bounding_during_change_id);
+	run_test("apply bounding is no-op without prepared state",
+			test_apply_bounding_noop_without_state);
+	run_test("invalid apply+clear bounding combination",
+			test_invalid_apply_and_clear_bounding);
+	run_test("helper cleanup keeps requested capability",
+			test_apply_bounding_preserves_requested_helper_cap);
+	run_test("prepared bounding state ignored without flag",
+			test_bounding_state_ignored_without_flag);
 	return EXIT_SUCCESS;
 }

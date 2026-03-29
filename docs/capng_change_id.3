@@ -44,6 +44,22 @@ returns, even when the flag is omitted or the call fails.
 .B CAPNG_CLEAR_BOUNDING
 Clear the bounding set regardless to the internal representation already setup prior to changing the uid/gid.
 .TP
+.B CAPNG_APPLY_BOUNDING
+Available in libcap-ng 0.9.3 and later.
+Apply the internally prepared bounding set during
+.BR capng_change_id .
+This only acts on bounding-set state explicitly prepared with
+.BR capng_clear (3),
+.BR capng_fill (3),
+or
+.BR capng_update (3)
+using
+.BR CAPNG_BOUNDING_SET .
+If no prepared bounding-set state exists, this flag is a no-op. If
+combined with
+.B CAPNG_CLEAR_BOUNDING
+the call fails.
+.TP
 .B CAPNG_CLEAR_AMBIENT
 Clear ambient capabilities regardless of the internal representation already setup prior to changing the uid/gid.
 
@@ -84,14 +100,23 @@ This returns 0 on success and a negative number on failure.
 -15 means looking up the target account supplementary groups failed
 .TP
 -16 means merging initialized and staged supplementary groups failed
+.TP
+-17 means CAPNG_APPLY_BOUNDING and CAPNG_CLEAR_BOUNDING were both set
 .RE
 
 Applications that need to support libcap-ng releases older than 0.9.3
 should detect the availability of
+.B CAPNG_APPLY_BOUNDING
+and
 .B CAPNG_APPLY_STAGED_SUPP_GRP
 and
 .BR capng_stage_supplementary_groups (3)
-before using this flow.
+before using this flow. Callers that need the prepared bounding-set
+behavior must request it explicitly with
+.B CAPNG_APPLY_BOUNDING
+so older callers continue to see the historical
+.B capng_change_id
+behavior.
 
 Note: the only safe action to do upon failure of this function is to probably exit. This is because you are likely in a situation with partial permissions and not what you intended.
 
