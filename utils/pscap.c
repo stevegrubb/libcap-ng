@@ -121,7 +121,8 @@ static int get_width(void)
 
 		errno = 0;
 		c = strtol(e, &endptr, 10);
-		if (errno == 0 && endptr != e && *endptr == '\0' && c > 0)
+		if (errno == 0 && endptr != e && *endptr == '\0' && c > 0 &&
+		    c < 400)
 			return (int)c;
 	}
 

@@ -658,7 +658,7 @@ static int get_width(void)
 	env = getenv("COLUMNS");
 	if (env) {
 		v = strtoul(env, &end, 10);
-		if (end != env && *end == '\0' && v > 0)
+		if (end != env && *end == '\0' && v > 0 && v < 400)
 			return (int)v;
 	}
 	return 80;
