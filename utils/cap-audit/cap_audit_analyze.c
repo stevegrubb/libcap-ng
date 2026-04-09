@@ -712,4 +712,7 @@ void analyze_capabilities(void)
 				   "Run as an unprivileged user with no special capabilities.");
 		printf("\n");
 	}
+
+	print_wrapped_text("EXPERIMENTAL NOTICE: ",
+			   "cap-audit output is experimental, but very close.");
 }
