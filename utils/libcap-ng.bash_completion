@@ -70,7 +70,7 @@ _filecap()
 _cap_audit()
 {
 	local cur prev
-	local opts="-v --verbose -j --json -y --yaml --"
+	local opts="-h --help -v --verbose -j --json -y --yaml --"
 
 	COMPREPLY=()
 	cur="${COMP_WORDS[COMP_CWORD]}"
