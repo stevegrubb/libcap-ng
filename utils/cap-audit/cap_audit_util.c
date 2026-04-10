@@ -359,14 +359,19 @@ type_t classify_app(const char *exe)
 	close(fd);
 	if (rc > 0) {
 		buf[rc] = 0;
-		if (buf[0] == '#' && buf[1] == '!') {
+		/*
+		 * Only inspect signatures that fully fit in the bytes we read.
+		 * Short reads happen on tiny files and should not consult
+		 * uninitialized stack data past rc.
+		 */
+		if (rc >= 2 && buf[0] == '#' && buf[1] == '!') {
 			char *ptr = strchr(buf, '\n');
 
 			if (ptr)
 				*ptr = 0;
 			if (strstr(buf, "python"))
 				return PYTHON;
-		} else if (strncmp(buf, ELFMAGIC, 4) == 0)
+		} else if (rc >= 4 && strncmp(buf, ELFMAGIC, 4) == 0)
 			return ELF;
 	}
 
