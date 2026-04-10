@@ -36,6 +36,7 @@
 #include <sys/stat.h>
 #include <sys/ioctl.h>
 #include "cap-ng.h"
+#include "proc-account.h"
 #include "proc-sanitize.h"
 
 #define CMD_LEN 16
@@ -86,30 +87,10 @@ static int get_euid(int pid)
 
 static void get_account_name(int pid, char *account, size_t account_len)
 {
-	struct passwd *p;
 	int euid;
 
 	euid = get_euid(pid);
-	if (euid < 0) {
-		/* Avoid reporting an unreadable proc entry as root-owned. */
-		strncpy(account, "unknown", account_len - 1);
-		account[account_len - 1] = '\0';
-		return;
-	}
-	if (euid == 0) {
-		strncpy(account, "root", account_len - 1);
-		account[account_len - 1] = '\0';
-		return;
-	}
-
-	p = getpwuid(euid);
-	if (p && p->pw_name) {
-		strncpy(account, p->pw_name, account_len - 1);
-		account[account_len - 1] = '\0';
-		return;
-	}
-
-	snprintf(account, account_len, "%d", euid);
+	proc_format_account_name_from_euid(euid, account, account_len);
 }
 
 static int get_width(void)

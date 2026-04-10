@@ -47,6 +47,7 @@
 #include <fcntl.h>
 #include <pwd.h>
 #include "cap-ng.h"
+#include "proc-account.h"
 #include "proc-llist.h"
 #include "netcap-advanced.h"
 #include "proc-sanitize.h"
@@ -271,7 +272,6 @@ static int collect_process_info(void)
 
 static void report_finding(unsigned int port, const char *type, const char *ifc)
 {
-	struct passwd *p;
 	lnode *n = list_get_cur(&l);
 
 	// And print out anything with capabilities
@@ -281,22 +281,7 @@ static void report_finding(unsigned int port, const char *type, const char *ifc)
 			"capabilities");
 		header = 1;
 	}
-	if (n->uid == 0) {
-		// Take short cut for this one
-		tacct = "root";
-		last_uid = 0;
-	} else if (n->uid == (uid_t)-1) {
-		/* Keep unknown owners explicit instead of reusing stale data. */
-		tacct = "unknown";
-		last_uid = -1;
-	} else if (last_uid != (int)n->uid) {
-		// Only look up if name changed
-		p = getpwuid(n->uid);
-		last_uid = n->uid;
-		tacct = NULL;
-		if (p)
-			tacct = p->pw_name;
-	}
+	netcap_update_account_cache(n->uid, &last_uid, (const char **)&tacct);
 	if (tacct) {
 		printf("%-7d %-7d %-16s", n->ppid, n->pid, tacct);
 	} else

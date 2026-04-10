@@ -25,11 +25,11 @@ CONFIG_CLEAN_FILES = *.loT *.rej *.orig
 DISTCLEANFILES = netcap.8
 AUTOMAKE_OPTIONS = no-dependencies
 if BUILD_CAP_AUDIT
-SUBDIRS = cap-audit
+SUBDIRS = test cap-audit
 else
-SUBDIRS =
+SUBDIRS = test cap-audit/test
 endif
-DIST_SUBDIRS = cap-audit
+DIST_SUBDIRS = test cap-audit cap-audit/test
 EXTRA_DIST = pscap.8 filecap.8 netcap.8.in captest.c captest.8 \
 	libcap-ng.bash_completion
 AM_CPPFLAGS = -I${top_srcdir} -I${top_srcdir}/src
@@ -40,13 +40,15 @@ bin_PROGRAMS = pscap netcap filecap
 man_MANS = pscap.8 netcap.8 filecap.8
 bashcompletiondir = ${datadir}/bash-completion/completions
 
-pscap_SOURCES = pscap.c proc-sanitize.c proc-sanitize.h
+pscap_SOURCES = pscap.c proc-account.c proc-account.h \
+	proc-sanitize.c proc-sanitize.h
 netcap_SOURCES = netcap.c netcap-advanced.h proc-llist.c \
-	proc-llist.h proc-sanitize.c proc-sanitize.h
+	proc-llist.h proc-account.c proc-account.h \
+	proc-sanitize.c proc-sanitize.h
 if BUILD_NETCAP_ADVANCED
 netcap_SOURCES += netcap-advanced.c
 endif
-filecap_SOURCES = filecap.c
+filecap_SOURCES = filecap.c filecap-path.c filecap-path.h
 
 if BUILD_DEPRECATED
 bin_PROGRAMS += captest

@@ -298,7 +298,8 @@ AC_CONFIG_FILES([Makefile src/Makefile src/libcap-ng.pc src/test/Makefile
 bindings/Makefile
 bindings/python3/Makefile bindings/src/Makefile
 bindings/python3/test/Makefile bindings/test/Makefile utils/Makefile
-utils/cap-audit/Makefile m4/Makefile docs/Makefile])
+utils/test/Makefile utils/cap-audit/Makefile \
+utils/cap-audit/test/Makefile m4/Makefile docs/Makefile])
 AC_CONFIG_COMMANDS([utils/netcap.8], [
 	if test "x$NETCAP_ADVANCED_ENABLED" = xyes; then
 		sed '/^.\\" BEGIN_ADVANCED$/d; /^.\\" END_ADVANCED$/d' \

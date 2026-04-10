@@ -28,6 +28,7 @@
 #include <string.h>
 #include <errno.h>
 #include "cap-ng.h"
+#include "filecap-path.h"
 #include <fcntl.h>
 #include <ftw.h>
 
@@ -108,31 +109,24 @@ static int check_file(const char *fpath,
  * them, which makes the default filecap scan disagree with normal PATH
  * lookup semantics.
  */
+struct path_scan_ctx {
+	int nftw_flags;
+};
+
+static int scan_path_entry(const char *entry, void *data)
+{
+	struct path_scan_ctx *ctx = data;
+
+	nftw(entry, check_file, 1024, ctx->nftw_flags);
+	return 0;
+}
+
 static int scan_path_env(const char *path_env, int nftw_flags)
 {
-	const char *start = path_env;
+	struct path_scan_ctx ctx;
 
-	while (start) {
-		const char *end = strchr(start, ':');
-		size_t len = end ? (size_t)(end - start) : strlen(start);
-		char *dir;
-
-		if (len == 0) {
-			nftw(".", check_file, 1024, nftw_flags);
-		} else {
-			dir = strndup(start, len);
-			if (!dir)
-				return -1;
-			nftw(dir, check_file, 1024, nftw_flags);
-			free(dir);
-		}
-
-		if (!end)
-			break;
-		start = end + 1;
-	}
-
-	return 0;
+	ctx.nftw_flags = nftw_flags;
+	return filecap_foreach_path(path_env, scan_path_entry, &ctx);
 }
 
 

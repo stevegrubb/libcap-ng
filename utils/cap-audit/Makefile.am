@@ -17,6 +17,8 @@
 #   Steve Grubb <sgrubb@redhat.com>
 #
 
+SUBDIRS = test
+
 AM_CPPFLAGS = -I${top_srcdir} -I${top_srcdir}/src ${LIBBPF_CFLAGS} ${LIBAUDIT_CFLAGS}
 AM_CFLAGS = -W -Wall -Wshadow ${WFLAGS} -Wundef -D_GNU_SOURCE
 
@@ -25,6 +27,8 @@ cap_audit_SOURCES = cap_audit.c \
 	cap_audit_analyze.c \
 	cap_audit_event.c \
 	cap_audit_json.c \
+	classify_app.c \
+	classify_app.h \
 	cap_audit_util.c \
 	cap_audit_yaml.c \
 	cap_audit.h

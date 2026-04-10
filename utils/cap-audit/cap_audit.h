@@ -32,15 +32,12 @@
 #include <sys/types.h>
 
 #include "cap-ng.h"
+#include "classify_app.h"
 #include "cap_audit.skel.h"
 
 #ifndef CAP_OPT_NOAUDIT
 #define CAP_OPT_NOAUDIT 0x2
 #endif
-
-#define ELFMAGIC "\177ELF"
-
-typedef enum { UNSUPPORTED, ELF, PYTHON } type_t;
 
 struct cap_event {
 	__u64 timestamp_ns;
