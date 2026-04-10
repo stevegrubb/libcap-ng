@@ -58,6 +58,6 @@ void list_clear(llist* l);
 
 /* Given a message type, find the matching node */
 lnode *list_find_inode(llist *l, unsigned long i);
+lnode *list_next_inode(llist *l, unsigned long i);
 
 #endif
-

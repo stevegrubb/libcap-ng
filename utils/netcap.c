@@ -276,10 +276,9 @@ static int collect_process_info(void)
 	return 0;
 }
 
-static void report_finding(unsigned int port, const char *type, const char *ifc)
+static void report_finding(const lnode *n, unsigned int port, const char *type,
+			   const char *ifc)
 {
-	lnode *n = list_get_cur(&l);
-
 	// And print out anything with capabilities
 	if (header == 0) {
 		printf("%-7s %-7s %-16s %-15s %-8s %-15s %s\n",
@@ -298,6 +297,20 @@ static void report_finding(unsigned int port, const char *type, const char *ifc)
 	else
 		printf(" %-15u", port);
 	printf(" %s %s%s\n", n->capabilities, n->ambient, n->bounds);
+}
+
+/*
+ * Multiple processes can legitimately hold descriptors for the same socket
+ * inode. Report every owner so preforked or reuseport listeners are not
+ * collapsed into a single row.
+ */
+static void report_inode_findings(unsigned long inode, unsigned int port,
+				  const char *type, const char *ifc)
+{
+	lnode *n;
+
+	for (n = list_find_inode(&l, inode); n; n = list_next_inode(&l, inode))
+		report_finding(n, port, type, ifc);
 }
 
 static void read_net(const char *proc, const char *type, int use_local_port)
@@ -330,9 +343,8 @@ static void read_net(const char *proc, const char *type, int use_local_port)
 			&state, &txq, &rxq, &timer_run, &time_len, &retr,
 			&uid, &timeout, &inode, more) < 14)
 			continue;
-		if (list_find_inode(&l, inode))
-			report_finding(use_local_port ? local_port : 0,
-					type, NULL);
+		report_inode_findings(inode, use_local_port ? local_port : 0,
+				      type, NULL);
 	}
 	fclose(f);
 }
@@ -410,8 +422,7 @@ static void read_packet(void)
 			&r, &rmem, &uid, &inode, more) < 9)
 			continue;
 		get_interface(iface, ifc);
-		if (list_find_inode(&l, inode))
-			report_finding(0, "pkt", ifc);
+		report_inode_findings(inode, 0, "pkt", ifc);
 	}
 	fclose(f);
 }
@@ -500,7 +511,8 @@ static int read_diag_messages(int fd, int proto, const char *type)
 				continue;
 
 			if (proto == IPPROTO_SCTP || proto == IPPROTO_DCCP)
-				report_finding(port, type, NULL);
+				report_inode_findings(r->idiag_inode, port,
+						      type, NULL);
 		}
 	}
 }
@@ -625,7 +637,9 @@ static int read_vsock_diag_messages(int fd)
 			if (r->vdiag_src_port == 0)
 				continue;
 
-			report_finding(r->vdiag_src_port, "vsock", NULL);
+			report_inode_findings(r->vdiag_ino,
+					      r->vdiag_src_port, "vsock",
+					      NULL);
 		}
 	}
 }
@@ -740,7 +754,7 @@ static void read_vsock_proc(void)
 			continue;
 
 		(void)cid;
-		report_finding(port, "vsock", NULL);
+		report_inode_findings(inode, port, "vsock", NULL);
 	}
 	fclose(f);
 }
