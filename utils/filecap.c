@@ -101,6 +101,40 @@ static int check_file(const char *fpath,
 	return ret;
 }
 
+/*
+ * scan_path_env - walk each PATH element while preserving empty entries.
+ *
+ * Empty PATH components mean the current working directory. strtok() drops
+ * them, which makes the default filecap scan disagree with normal PATH
+ * lookup semantics.
+ */
+static int scan_path_env(const char *path_env, int nftw_flags)
+{
+	const char *start = path_env;
+
+	while (start) {
+		const char *end = strchr(start, ':');
+		size_t len = end ? (size_t)(end - start) : strlen(start);
+		char *dir;
+
+		if (len == 0) {
+			nftw(".", check_file, 1024, nftw_flags);
+		} else {
+			dir = strndup(start, len);
+			if (!dir)
+				return -1;
+			nftw(dir, check_file, 1024, nftw_flags);
+			free(dir);
+		}
+
+		if (!end)
+			break;
+		start = end + 1;
+	}
+
+	return 0;
+}
+
 
 // Use cases:
 //  filecap
@@ -187,14 +221,8 @@ int main(int argc, char *argv[])
 	if (path == NULL && dir == NULL && show_all == 0) {
 		path_env = getenv("PATH");
 		if (path_env != NULL) {
-			path = strdup(path_env);
-			if (!path)
+			if (scan_path_env(path_env, nftw_flags) < 0)
 				return 1;
-			for (dir=strtok(path,":"); dir!=NULL;
-						dir=strtok(NULL,":")) {
-				nftw(dir, check_file, 1024, nftw_flags);
-			}
-			free(path);
 		}
 	} else if (path == NULL && dir == NULL && show_all == 1) {
 		// Find files
