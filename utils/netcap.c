@@ -56,6 +56,12 @@ static llist l;
 static int perm_warn = 0, header = 0, last_uid = -1;
 static char *tacct = NULL;
 
+#ifdef NETCAP_TEST
+#define NETCAP_TESTABLE
+#else
+#define NETCAP_TESTABLE static
+#endif
+
 static void usage(void)
 {
 	fprintf(stderr, "usage: netcap [--advanced "
@@ -411,7 +417,7 @@ static void read_packet(void)
 }
 
 #ifdef HAVE_NETCAP_ADVANCED
-static int parse_u32_hex_or_dec(const char *s, unsigned int *out)
+NETCAP_TESTABLE int parse_u32_hex_or_dec(const char *s, unsigned int *out)
 {
 	char *end;
 	unsigned long v;
@@ -746,6 +752,7 @@ static void read_vsock(void)
 }
 #endif
 
+#ifndef NETCAP_NO_MAIN
 int main(int argc, char **argv)
 {
 	struct netcap_opts opts = { 0, 0, 0, 0, NULL };
@@ -843,3 +850,4 @@ int main(int argc, char **argv)
 	list_clear(&l);
 	return 0;
 }
+#endif

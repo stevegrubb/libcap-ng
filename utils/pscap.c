@@ -43,6 +43,12 @@
 #define ACCOUNT_LEN 32
 #define USERNS_MARK_LEN 3	// two characters plus '\0'.
 
+#ifdef PSCAP_TEST
+#define PSCAP_TESTABLE
+#else
+#define PSCAP_TESTABLE static
+#endif
+
 static void usage(void)
 {
 	fprintf(stderr, "usage: pscap [-a] [-p pid] [--tree]\n");
@@ -116,7 +122,7 @@ static int get_width(void)
 	return 80;
 }
 
-static size_t wrap_to(const char *text, size_t max)
+PSCAP_TESTABLE size_t wrap_to(const char *text, size_t max)
 {
 	size_t len = strlen(text);
 	size_t i;
@@ -379,6 +385,7 @@ static bool in_child_userns(int pid)
 	return statbuf.st_ino != own_ns_inode || statbuf.st_dev != own_ns_dev;
 }
 
+#ifndef PSCAP_NO_MAIN
 int main(int argc, char *argv[])
 {
 	char *endptr = NULL;
@@ -614,3 +621,4 @@ int main(int argc, char *argv[])
 	}
 	return 0;
 }
+#endif

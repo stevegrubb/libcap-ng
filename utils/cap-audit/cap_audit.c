@@ -200,6 +200,7 @@ static void usage(FILE *out, const char *prog)
 	fprintf(out, "  -y, --yaml       YAML output\n");
 }
 
+#ifndef CAP_AUDIT_NO_MAIN
 int main(int argc, char **argv)
 {
 	int err;
@@ -438,3 +439,4 @@ int main(int argc, char **argv)
 
 	return 0;
 }
+#endif
