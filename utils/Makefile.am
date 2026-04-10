@@ -23,13 +23,8 @@
 
 CONFIG_CLEAN_FILES = *.loT *.rej *.orig
 DISTCLEANFILES = netcap.8
-AUTOMAKE_OPTIONS = no-dependencies
-if BUILD_CAP_AUDIT
 SUBDIRS = test cap-audit
-else
-SUBDIRS = test cap-audit/test
-endif
-DIST_SUBDIRS = test cap-audit cap-audit/test
+DIST_SUBDIRS = test cap-audit
 EXTRA_DIST = pscap.8 filecap.8 netcap.8.in captest.c captest.8 \
 	libcap-ng.bash_completion
 AM_CPPFLAGS = -I${top_srcdir} -I${top_srcdir}/src
