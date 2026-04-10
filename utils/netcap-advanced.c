@@ -1969,6 +1969,12 @@ static int parse_u32_hex_or_dec(const char *s, unsigned int *out)
 	v = strtoul(s, &end, base);
 	if (end == s || *end)
 		return -1;
+	/*
+	 * The caller stores CIDs, ports, and similar procfs fields in u32s.
+	 * Reject oversized text values so they cannot wrap into a false match.
+	 */
+	if (v > UINT_MAX)
+		return -1;
 	*out = (unsigned int)v;
 	return 0;
 }

@@ -448,6 +448,12 @@ NETCAP_TESTABLE int parse_u32_hex_or_dec(const char *s, unsigned int *out)
 	v = strtoul(s, &end, base);
 	if (end == s || *end)
 		return -1;
+	/*
+	 * /proc and diag inputs are meant to fit in u32 fields. Reject values
+	 * above that range instead of silently truncating them into new ids.
+	 */
+	if (v > UINT_MAX)
+		return -1;
 	*out = (unsigned int)v;
 	return 0;
 }

@@ -47,6 +47,8 @@ static void test_parse_u32_hex_or_dec(void)
 		fail("hex parse with leading zero failed");
 	if (parse_u32_hex_or_dec("G1", &out) == 0)
 		fail("invalid parse should fail");
+	if (parse_u32_hex_or_dec("4294967296", &out) == 0)
+		fail("overflow parse should fail");
 }
 
 static void test_list_inode_iteration(void)
