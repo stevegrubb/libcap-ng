@@ -65,7 +65,7 @@ static int get_euid(int pid)
 	snprintf(path, sizeof(path), "/proc/%d/status", pid);
 	f = fopen(path, "rte");
 	if (f == NULL)
-		return 0;
+		return -1;
 
 	__fsetlocking(f, FSETLOCKING_BYCALLER);
 	while (fgets(buf, sizeof(buf), f)) {
@@ -79,7 +79,7 @@ static int get_euid(int pid)
 	fclose(f);
 
 	if (euid < 0)
-		return 0;
+		return -1;
 
 	return euid;
 }
@@ -90,6 +90,12 @@ static void get_account_name(int pid, char *account, size_t account_len)
 	int euid;
 
 	euid = get_euid(pid);
+	if (euid < 0) {
+		/* Avoid reporting an unreadable proc entry as root-owned. */
+		strncpy(account, "unknown", account_len - 1);
+		account[account_len - 1] = '\0';
+		return;
+	}
 	if (euid == 0) {
 		strncpy(account, "root", account_len - 1);
 		account[account_len - 1] = '\0';
@@ -571,6 +577,9 @@ int main(int argc, char *argv[])
 				// Take short cut for this one
 				name = "root";
 				uid = 0;
+			} else if (euid < 0) {
+				name = "unknown";
+				uid = -1;
 			} else if (euid != uid) {
 				// Only look up if name changed
 				p = getpwuid(euid);

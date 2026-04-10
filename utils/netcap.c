@@ -142,9 +142,7 @@ static int collect_process_info(void)
 		// Get the effective uid
 		snprintf(buf, sizeof(buf), "/proc/%d/status", pid);
 		sf = fopen(buf, "rte");
-		if (sf == NULL)
-			euid = 0;
-		else {
+		if (sf != NULL) {
 			int line = 0;
 			__fsetlocking(sf, FSETLOCKING_BYCALLER);
 			while (fgets(buf, sizeof(buf), sf)) {
@@ -160,8 +158,6 @@ static int collect_process_info(void)
 				}
 			}
 			fclose(sf);
-			if (euid == -1)
-				euid = 0;
 		}
 
 		caps = capng_have_capabilities(CAPNG_SELECT_AMBIENT);
@@ -289,13 +285,17 @@ static void report_finding(unsigned int port, const char *type, const char *ifc)
 		// Take short cut for this one
 		tacct = "root";
 		last_uid = 0;
+	} else if (n->uid == (uid_t)-1) {
+		/* Keep unknown owners explicit instead of reusing stale data. */
+		tacct = "unknown";
+		last_uid = -1;
 	} else if (last_uid != (int)n->uid) {
 		// Only look up if name changed
 		p = getpwuid(n->uid);
 		last_uid = n->uid;
+		tacct = NULL;
 		if (p)
 			tacct = p->pw_name;
-		// If not taking this branch, use last val
 	}
 	if (tacct) {
 		printf("%-7d %-7d %-16s", n->ppid, n->pid, tacct);
