@@ -1,4 +1,5 @@
 0.9.4
+- Add bluetooth collection to netcap --advanced
 
 0.9.3
 - In cap-audit, split capability analysis across init and runtime phases
