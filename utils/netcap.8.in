@@ -18,11 +18,14 @@ will be in the report. If the process has partial capabilities, it is further
 examined to see if it has an open-ended bounding set. If this is found to be
 true, a '+' symbol is added. If the process has ambient capabilities, a '@'
 symbol is added.
+Bluetooth sockets are not discovered in this historical filtered mode; use
+\fB\-\-advanced\fP when Bluetooth listener discovery is needed.
 
 .\" BEGIN_ADVANCED
 With \fB\-\-advanced\fP, \fBnetcap\fP switches to bind/listener inventory
 mode for the current network namespace. In this mode, reachable binds/listeners
-are reported regardless of whether the owning process has capabilities.
+are reported regardless of whether the owning process has capabilities,
+including Bluetooth listeners that are not visible in classic mode.
 .\" END_ADVANCED
 
 Some directories in the /proc file system are readonly by root. The program
@@ -85,14 +88,15 @@ Planes \-> interface \-> protocol \-> bind \-> port \-> process \->
 caps/defenses/flags
 .RE
 
-For VSOCK planes, the interface/address hierarchy is skipped and rendered as:
+For BLUETOOTH and VSOCK planes, the interface/address hierarchy is skipped
+and rendered as:
 
 .RS
 Planes \-> endpoint \-> process \-> caps/defenses/flags
 .RE
 
-Planes are grouped as INET (external), INET (loopback), VSOCK, and
-LINK-LAYER. These names match the tree output exactly.
+Planes are grouped as INET (external), INET (loopback), LINK-LAYER,
+BLUETOOTH, and VSOCK. These names match the tree output exactly.
 
 The console tree is a causal exposure chain: protocol, then bind address,
 then port, then owning process. Wildcard binds are printed as \fB*\fP. In
@@ -119,6 +123,11 @@ Socket selection is protocol-specific:
 TCP: LISTEN sockets only.
 .IP \[bu] 2
 UDP/UDPLITE: bound sockets.
+.IP \[bu] 2
+Bluetooth: RFCOMM listener sockets, plus L2CAP listener sockets and bound
+datagram sockets. These are discovered from the owning process socket
+descriptors, so they may be absent when procfs visibility or pidfd access is
+restricted.
 .IP \[bu] 2
 SCTP/DCCP: listener sockets only; established flows are not shown.
 These protocols are discovered via \fBNETLINK_SOCK_DIAG\fP, which requires
@@ -165,13 +174,16 @@ Each plane object contains \fBname\fP, optional \fBscope\fP
 .IP \[bu] 2
 \fBifaces\fP (INET/LINK-LAYER planes), or
 .IP \[bu] 2
-\fBendpoints\fP (VSOCK planes).
+\fBendpoints\fP (BLUETOOTH/VSOCK planes).
 
 Under \fBifaces\fP: each interface has \fBname\fP and \fBaddrs\fP
 (array). Each addr object has \fBaddr\fP and \fBendpoints\fP (array).
 
 For INET and LINK-LAYER planes, each endpoint object has \fBlabel\fP,
 \fBproto\fP, \fBbind\fP, \fBport\fP, and \fBprocesses\fP (array).
+For BLUETOOTH planes, endpoint objects also use \fBlabel\fP, \fBproto\fP,
+\fBbind\fP, \fBport\fP, and \fBprocesses\fP; \fBport\fP is the RFCOMM
+channel or the L2CAP PSM/CID that was bound.
 For VSOCK planes, endpoint objects use \fBlabel\fP, \fBvsock_type\fP
 (socket type string: \fBstream\fP/\fBdgram\fP/\fBseqpacket\fP), \fBcid\fP
 (source CID or the string \fBANY\fP), \fBport\fP, and \fBprocesses\fP;

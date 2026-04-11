@@ -28,3 +28,8 @@ TESTS = $(check_PROGRAMS)
 lib_test_LDADD = ${top_builddir}/src/libcap-ng.la
 thread_test_LDADD = ${top_builddir}/src/libcap-ng.la -lpthread
 change_id_test_LDADD = ${top_builddir}/src/libcap-ng.la
+
+clean-local:
+	rm -f utils_test$(EXEEXT) utils_test.log utils_test.trs \
+		cap_audit_util_test$(EXEEXT) cap_audit_util_test.log \
+		cap_audit_util_test.trs
