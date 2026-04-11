@@ -88,15 +88,18 @@ Planes \-> interface \-> protocol \-> bind \-> port \-> process \->
 caps/defenses/flags
 .RE
 
-For BLUETOOTH and VSOCK planes, the interface/address hierarchy is skipped
-and rendered as:
+For VSOCK, the interface/address hierarchy is skipped and rendered as:
 
 .RS
 Planes \-> endpoint \-> process \-> caps/defenses/flags
 .RE
 
-Planes are grouped as INET (external), INET (loopback), LINK-LAYER,
-BLUETOOTH, and VSOCK. These names match the tree output exactly.
+For BLUETOOTH, the interface is the HCI adapter (for example \fBhci0\fP).
+Bluetooth bind nodes are the local controller address or \fB*\fP for
+wildcard binds.
+
+Planes are grouped as INET (external), INET (loopback), BLUETOOTH, VSOCK,
+and LINK-LAYER. These names match the tree output exactly.
 
 The console tree is a causal exposure chain: protocol, then bind address,
 then port, then owning process. Wildcard binds are printed as \fB*\fP. In
@@ -124,10 +127,12 @@ TCP: LISTEN sockets only.
 .IP \[bu] 2
 UDP/UDPLITE: bound sockets.
 .IP \[bu] 2
-Bluetooth: RFCOMM listener sockets, plus L2CAP listener sockets and bound
-datagram sockets. These are discovered from the owning process socket
-descriptors, so they may be absent when procfs visibility or pidfd access is
-restricted.
+RFCOMM: LISTEN sockets only.
+.IP \[bu] 2
+L2CAP: LISTEN sockets only.
+.IP \[bu] 2
+HCI: all bound raw management sockets; semantics differ from port listeners
+and are analogous to packet sockets.
 .IP \[bu] 2
 SCTP/DCCP: listener sockets only; established flows are not shown.
 These protocols are discovered via \fBNETLINK_SOCK_DIAG\fP, which requires
@@ -151,6 +156,9 @@ Flags annotate notable conditions:
 .IP \[bu] 2
 \fBhypervisor-plane\fP: bind is in the VSOCK communication plane.
 .IP \[bu] 2
+\fBproximity-plane\fP: bind is reachable by any Bluetooth device within
+radio range.
+.IP \[bu] 2
 \fBssh-on-vsock-port-22\fP: VSOCK bind uses port 22.
 .IP \[bu] 2
 \fBprivileged-caps\fP: process has capabilities considered privileged for
@@ -172,18 +180,18 @@ When \fB\-\-advanced --json\fP is used, the top-level object contains:
 Each plane object contains \fBname\fP, optional \fBscope\fP
 (\fBexternal\fP or \fBloopback\fP), and either:
 .IP \[bu] 2
-\fBifaces\fP (INET/LINK-LAYER planes), or
+\fBifaces\fP (INET/LINK-LAYER/BLUETOOTH planes), or
 .IP \[bu] 2
-\fBendpoints\fP (BLUETOOTH/VSOCK planes).
+\fBendpoints\fP (VSOCK plane).
 
 Under \fBifaces\fP: each interface has \fBname\fP and \fBaddrs\fP
 (array). Each addr object has \fBaddr\fP and \fBendpoints\fP (array).
 
-For INET and LINK-LAYER planes, each endpoint object has \fBlabel\fP,
-\fBproto\fP, \fBbind\fP, \fBport\fP, and \fBprocesses\fP (array).
-For BLUETOOTH planes, endpoint objects also use \fBlabel\fP, \fBproto\fP,
-\fBbind\fP, \fBport\fP, and \fBprocesses\fP; \fBport\fP is the RFCOMM
-channel or the L2CAP PSM/CID that was bound.
+For INET, LINK-LAYER, and BLUETOOTH planes, each endpoint object has
+\fBlabel\fP, \fBproto\fP, \fBbind\fP, \fBport\fP, and \fBprocesses\fP
+(array). For BLUETOOTH planes, interface names are HCI adapter names (for
+example \fBhci0\fP); \fBport\fP is the RFCOMM channel, the L2CAP PSM, or 0
+for HCI.
 For VSOCK planes, endpoint objects use \fBlabel\fP, \fBvsock_type\fP
 (socket type string: \fBstream\fP/\fBdgram\fP/\fBseqpacket\fP), \fBcid\fP
 (source CID or the string \fBANY\fP), \fBport\fP, and \fBprocesses\fP;
@@ -257,12 +265,19 @@ indicates non-UID-0 execution.
 
 Flags provide reachability and interception context: \fBwildcard-bind\fP means
 the daemon listens on every interface, \fBhypervisor-plane\fP indicates host/
-guest boundary exposure (VSOCK), and \fBreuseport\fP means another process with
-the same UID could bind and potentially intercept traffic.
+guest boundary exposure (VSOCK), \fBproximity-plane\fP indicates that the
+bind is reachable by Bluetooth devices within radio range, and \fBreuseport\fP
+means another process with the same UID could bind and potentially intercept
+traffic.
 
 \fBraw\fP/\fBraw6\fP and \fBpacket\fP protocol nodes denote sockets with IP- or
 link-layer packet craft/sniff capabilities, significantly expanding what an
 attacker can do post-compromise.
+Bluetooth protocol nodes denote proximity-based attack surface. \fBhci\fP
+nodes provide raw controller management access and are shown in yellow.
+\fBrfcomm\fP and \fBl2cap\fP listeners are reachable by nearby devices without
+prior host access and, unless the adapter is configured to require pairing,
+may be reachable without authentication.
 .\" END_ADVANCED
 
 .SH "SEE ALSO"
