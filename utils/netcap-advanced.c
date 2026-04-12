@@ -24,9 +24,11 @@
 
 #include "config.h"
 #include <arpa/inet.h>
+#if defined(HAVE_BLUETOOTH_BLUETOOTH_H) && defined(HAVE_BLUETOOTH_HCI_H)
 #include <bluetooth/bluetooth.h>
-#include <bluetooth/l2cap.h>
-#include <bluetooth/rfcomm.h>
+#include <bluetooth/hci.h>
+#define HAVE_NETCAP_BLUETOOTH 1
+#endif
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -70,8 +72,9 @@
  *
  * For internet sockets, wildcard binds are expanded onto concrete interface
  * addresses so the rendered tree/JSON can be consumed as an exposure map.
- * Bluetooth listeners are collected from /proc/net/rfcomm,
- * /proc/net/bluetooth/l2cap, and /proc/net/hci, with ownership stitched back
+ * Bluetooth listeners are collected from /proc/net/rfcomm and /proc/net/hci,
+ * with adapter names discovered via /sys/class/bluetooth and controller
+ * addresses resolved through HCI ioctls before ownership is stitched back
  * through socket inodes gathered from /proc/<pid>/fd.
  * VSOCK listeners are collected via sock_diag when available and fall back to
  * /proc parsing when not, with ownership stitched back through socket inodes.
@@ -110,9 +113,9 @@ enum plane_kind {
 #define PLANE_BLUETOOTH_NAME	"BLUETOOTH"
 /* Keep user-facing key name centralized to avoid legacy regressions. */
 #define DEFENSES_RUNS_AS_KEY	"runs_as_nonroot"
-#define BT_ADDR_ANY_STR		"00:00:00:00:00:00"
 #define BT_ADAPTER_UNKNOWN	"unknown"
-#define BT_ADAPTER_CACHE_MAX	8
+#define BT_ADAPTER_HEURISTIC	"hci?"
+#define BT_ADDR_UNKNOWN		"*"
 
 enum endpoint_flags {
 	FLAG_WILDCARD_BIND = 1U << 0,
@@ -225,17 +228,23 @@ struct endpoint_attrs {
 	int reuseport;
 };
 
+#ifdef HAVE_NETCAP_BLUETOOTH
+#define BT_ADAPTER_CACHE_MAX	8
+
 struct bt_adapter_info {
 	char name[IF_NAMESIZE];
+	int dev_id;
 	char addr[18];
 };
 
 static struct bt_adapter_info bt_adapters[BT_ADAPTER_CACHE_MAX];
 static size_t bt_adapters_n;
 static int bt_adapters_loaded;
+#endif
 
 static void free_process(struct process_info *p);
 static void free_endpoint(struct endpoint *e);
+static int str_is_bdaddr(const char *s);
 
 static int use_color;
 
@@ -1658,7 +1667,7 @@ static int add_endpoint(struct model *m, const char *proto, const char *bind,
 	struct endpoint *e;
 	char label[256];
 
-	if (strchr(bind, ':'))
+	if (strchr(bind, ':') && !str_is_bdaddr(bind))
 		snprintf(label, sizeof(label), "%s:[%s]:%u", proto, bind, port);
 	else
 		snprintf(label, sizeof(label), "%s:%s:%u", proto, bind, port);
@@ -2021,27 +2030,14 @@ static int parse_u32_hex_or_dec(const char *s, unsigned int *out)
 }
 
 /*
- * bt_addr_is_any - test whether textual @addr is the Bluetooth wildcard bind.
- * @addr: Bluetooth address string to classify.
- *
- * Returns non-zero when @addr is BDADDR_ANY, else zero.
- * Side effects/assumptions: Operates on in-memory data and may read
- * procfs/netns state; it does not change kernel configuration.
- */
-static int bt_addr_is_any(const char *addr)
-{
-	return addr && strcasecmp(addr, BT_ADDR_ANY_STR) == 0;
-}
-
-/*
- * bt_token_is_bdaddr - validate one procfs token as a Bluetooth address.
- * @s: token from a Bluetooth procfs line.
+ * str_is_bdaddr - validate one string as a Bluetooth device address.
+ * @s: text to classify.
  *
  * Returns non-zero for XX:XX:XX:XX:XX:XX tokens, else zero.
  * Side effects/assumptions: Operates on in-memory data and may read
  * procfs/netns state; it does not change kernel configuration.
  */
-static int bt_token_is_bdaddr(const char *s)
+static int str_is_bdaddr(const char *s)
 {
 	size_t i;
 
@@ -2063,41 +2059,61 @@ static int bt_token_is_bdaddr(const char *s)
 	return 1;
 }
 
+#ifdef HAVE_NETCAP_BLUETOOTH
 /*
- * bt_tokenize_line - split one Bluetooth procfs line into whitespace tokens.
- * @line: mutable line buffer that will be modified in-place.
- * @tok: output token array.
- * @tok_cap: capacity of @tok in elements.
+ * bt_format_addr - render one controller address into XX:XX:XX:XX:XX:XX.
+ * @bdaddr: kernel Bluetooth address to stringify.
+ * @addr: destination buffer.
+ * @addr_sz: size of @addr in bytes.
  *
- * Returns the number of tokens stored in @tok.
- * Side effects/assumptions: Modifies @line via strtok_r tokenization.
+ * Returns no value.
+ * Side effects/assumptions: Writes a formatted controller address into @addr.
  */
-static int bt_tokenize_line(char *line, char **tok, size_t tok_cap)
+static void bt_format_addr(const bdaddr_t *bdaddr, char *addr, size_t addr_sz)
 {
-	int n = 0;
-	char *save = NULL;
-	char *s;
-
-	for (s = strtok_r(line, " \t\r\n", &save);
-	     s && n < (int)tok_cap;
-	     s = strtok_r(NULL, " \t\r\n", &save))
-		tok[n++] = s;
-	return n;
+	snprintf(addr, addr_sz, "%02X:%02X:%02X:%02X:%02X:%02X",
+		bdaddr->b[5], bdaddr->b[4], bdaddr->b[3],
+		bdaddr->b[2], bdaddr->b[1], bdaddr->b[0]);
 }
 
 /*
- * bt_load_adapters - cache Bluetooth adapter names and controller addresses.
+ * bt_parse_adapter_dev_id - convert one sysfs adapter name into a device id.
+ * @name: adapter name such as hci0.
+ * @dev_id: destination device index.
  *
- * Adapters are discovered from /sys/class/bluetooth/<adapter>/address once
- * because
- * advanced-mode runs are short-lived and machines usually expose 1-2 entries.
+ * Returns 0 on success, -1 when @name is not an HCI adapter name.
+ * Side effects/assumptions: Operates on in-memory data and does not change
+ * system state.
+ */
+static int bt_parse_adapter_dev_id(const char *name, int *dev_id)
+{
+	unsigned int id;
+	char tail;
+
+	if (sscanf(name, "hci%u%c", &id, &tail) != 1 || id > UINT16_MAX)
+		return -1;
+	*dev_id = (int)id;
+	return 0;
+}
+
+/*
+ * bt_load_adapters - populate the adapter cache from sysfs and HCI ioctls.
+ *
+ * Adapter names come from /sys/class/bluetooth. Each name is resolved to its
+ * BD_ADDR with HCIGETDEVINFO so later procfs parsing can map a single visible
+ * adapter onto HCI and RFCOMM sockets. If the HCI socket or any ioctl fails,
+ * the cache remains empty and lookups fall back to "unknown".
  * Returns no value.
- * Side effects/assumptions: Reads sysfs but does not change system state.
+ * Side effects/assumptions: Reads sysfs and issues HCI ioctls; it does not
+ * change kernel configuration.
  */
 static void bt_load_adapters(void)
 {
 	DIR *d;
 	struct dirent *ent;
+	struct bt_adapter_info tmp[BT_ADAPTER_CACHE_MAX];
+	size_t tmp_n = 0;
+	int fd;
 
 	if (bt_adapters_loaded)
 		return;
@@ -2107,70 +2123,73 @@ static void bt_load_adapters(void)
 	if (!d)
 		return;
 
+	fd = socket(AF_BLUETOOTH, SOCK_RAW, BTPROTO_HCI);
+	if (fd < 0)
+		goto out;
+
 	while ((ent = readdir(d))) {
-		char path[PATH_MAX];
-		FILE *f;
+		struct hci_dev_info di;
+		int dev_id;
 
 		if (ent->d_name[0] == '.')
 			continue;
-		if (bt_adapters_n == BT_ADAPTER_CACHE_MAX)
+		if (tmp_n == BT_ADAPTER_CACHE_MAX)
 			break;
-
-		snprintf(path, sizeof(path), "/sys/class/bluetooth/%s/address",
-			ent->d_name);
-		f = fopen(path, "rte");
-		if (!f)
+		if (bt_parse_adapter_dev_id(ent->d_name, &dev_id))
 			continue;
-		__fsetlocking(f, FSETLOCKING_BYCALLER);
-		if (!fgets(bt_adapters[bt_adapters_n].addr,
-			   sizeof(bt_adapters[bt_adapters_n].addr), f)) {
-			fclose(f);
-			continue;
-		}
-		fclose(f);
-		bt_adapters[bt_adapters_n].addr[
-			strcspn(bt_adapters[bt_adapters_n].addr, "\r\n")] = '\0';
-		snprintf(bt_adapters[bt_adapters_n].name,
-			sizeof(bt_adapters[bt_adapters_n].name), "%s",
+		memset(&di, 0, sizeof(di));
+		di.dev_id = (uint16_t)dev_id;
+		if (ioctl(fd, HCIGETDEVINFO, &di) < 0)
+			goto fail;
+		snprintf(tmp[tmp_n].name, sizeof(tmp[tmp_n].name), "%s",
 			ent->d_name);
-		bt_adapters_n++;
+		tmp[tmp_n].dev_id = dev_id;
+		bt_format_addr(&di.bdaddr, tmp[tmp_n].addr,
+			sizeof(tmp[tmp_n].addr));
+		tmp_n++;
 	}
 
+	if (tmp_n) {
+		memcpy(bt_adapters, tmp, tmp_n * sizeof(tmp[0]));
+		bt_adapters_n = tmp_n;
+	}
+	close(fd);
+out:
+	closedir(d);
+	return;
+fail:
+	close(fd);
+	bt_adapters_n = 0;
 	closedir(d);
 }
 
 /*
- * resolve_bt_adapter - resolve @bdaddr to an HCI adapter name.
- * @bdaddr: textual Bluetooth controller address from procfs.
+ * resolve_bt_adapter_name - map one HCI device index to an adapter name.
+ * @dev_id: HCI device index.
  * @name: destination buffer for adapter name or "unknown".
  * @name_sz: size of @name in bytes.
  *
- * Returns 0 on match, -1 when @bdaddr is wildcard or no adapter matches.
+ * Returns 0 on match, -1 when the cache has no matching adapter.
  * Side effects/assumptions: Reads sysfs adapter cache but does not change
  * system state.
  */
-static int resolve_bt_adapter(const char *bdaddr, char *name, size_t name_sz)
+static int resolve_bt_adapter_name(int dev_id, char *name, size_t name_sz)
 {
 	size_t i;
 
 	bt_load_adapters();
-	if (!bdaddr || bt_addr_is_any(bdaddr))
-		goto unknown;
-
 	for (i = 0; i < bt_adapters_n; i++) {
-		if (strcasecmp(bt_adapters[i].addr, bdaddr) != 0)
+		if (bt_adapters[i].dev_id != dev_id)
 			continue;
 		snprintf(name, name_sz, "%s", bt_adapters[i].name);
 		return 0;
 	}
-
-unknown:
 	snprintf(name, name_sz, "%s", BT_ADAPTER_UNKNOWN);
 	return -1;
 }
 
 /*
- * bt_adapter_addr_by_name - copy the cached controller address for @name.
+ * resolve_bt_adapter_addr - copy the cached controller address for @name.
  * @name: adapter name such as hci0.
  * @addr: destination buffer.
  * @addr_sz: size of @addr in bytes.
@@ -2179,7 +2198,7 @@ unknown:
  * Side effects/assumptions: Reads sysfs adapter cache but does not change
  * system state.
  */
-static int bt_adapter_addr_by_name(const char *name, char *addr, size_t addr_sz)
+static int resolve_bt_adapter_addr(const char *name, char *addr, size_t addr_sz)
 {
 	size_t i;
 
@@ -2190,44 +2209,44 @@ static int bt_adapter_addr_by_name(const char *name, char *addr, size_t addr_sz)
 		snprintf(addr, addr_sz, "%s", bt_adapters[i].addr);
 		return 0;
 	}
+	snprintf(addr, addr_sz, "%s", BT_ADAPTER_UNKNOWN);
 	return -1;
 }
 
 /*
- * bt_find_inode_token - locate an owned socket inode within @tok.
- * @m: model containing inode ownership map.
- * @tok: tokenized Bluetooth procfs line.
- * @ntok: number of valid entries in @tok.
+ * bt_resolve_single_adapter - pick the only adapter when the cache is unique.
+ * @name: destination buffer for adapter name.
+ * @name_sz: size of @name in bytes.
+ * @addr: destination buffer for adapter BD_ADDR, or "*".
+ * @addr_sz: size of @addr in bytes.
  *
- * Returns the first token that resolves to an owned inode, or 0 if none do.
- * Side effects/assumptions: Operates on in-memory data and may read
- * procfs/netns state; it does not change kernel configuration.
+ * Current /proc/net/hci and /proc/net/rfcomm output does not identify the
+ * bound adapter. When exactly one controller is available, use it; otherwise
+ * report the adapter as hci? and the bind address as *.
+ * Returns no value.
+ * Side effects/assumptions: Reads the in-memory adapter cache and does not
+ * change system state.
  */
-static unsigned long bt_find_inode_token(struct model *m, char **tok, int ntok)
+static void bt_resolve_single_adapter(char *name, size_t name_sz,
+	char *addr, size_t addr_sz)
 {
-	int i;
+	bt_load_adapters();
+	if (bt_adapters_n == 1 &&
+	    resolve_bt_adapter_name(bt_adapters[0].dev_id, name, name_sz) == 0 &&
+	    resolve_bt_adapter_addr(name, addr, addr_sz) == 0)
+		return;
 
-	for (i = 0; i < ntok; i++) {
-		char *end;
-		unsigned long inode;
-
-		inode = strtoul(tok[i], &end, 10);
-		if (end == tok[i] || *end || !inode)
-			continue;
-		if (lookup_inode(m, inode))
-			return inode;
-	}
-	return 0;
+	snprintf(name, name_sz, "%s", BT_ADAPTER_HEURISTIC);
+	snprintf(addr, addr_sz, "%s", BT_ADDR_UNKNOWN);
 }
 
 /*
  * bt_add_endpoint - project one Bluetooth listener into the common endpoint model.
  * @m: model receiving Bluetooth endpoint/process mappings.
- * @proto: Bluetooth protocol label (rfcomm/l2cap/hci).
- * @bdaddr: textual local Bluetooth address, or NULL when not available.
- * @port: RFCOMM channel, L2CAP PSM, or 0 for HCI sockets.
- * @ifname_hint: adapter name override for HCI sockets, or NULL to resolve
- *               from @bdaddr.
+ * @proto: Bluetooth protocol label (rfcomm/hci).
+ * @port: 0 because current Bluetooth procfs data does not expose channels.
+ * @ifname: adapter name such as hci0 or hci?.
+ * @ifaddr: adapter BD_ADDR or "*" when it cannot be resolved.
  * @ip: inode-owner mapping whose process pointers are attached to endpoint.
  *
  * Returns no value.
@@ -2235,35 +2254,11 @@ static unsigned long bt_find_inode_token(struct model *m, char **tok, int ntok)
  * procfs/netns state; it does not change kernel configuration.
  */
 static void bt_add_endpoint(struct model *m, const char *proto,
-	const char *bdaddr, unsigned int port, const char *ifname_hint,
+	unsigned int port, const char *ifname, const char *ifaddr,
 	struct inode_proc *ip)
 {
 	struct endpoint_attrs attrs = { 0, 0 };
-	char ifname[IF_NAMESIZE];
-	char ifaddr[32];
-	char bind[32];
-
-	if (ifname_hint && ifname_hint[0]) {
-		snprintf(ifname, sizeof(ifname), "%s", ifname_hint);
-	} else {
-		resolve_bt_adapter(bdaddr, ifname, sizeof(ifname));
-	}
-
-	if (bdaddr && bt_addr_is_any(bdaddr)) {
-		attrs.wildcard = 1;
-		snprintf(bind, sizeof(bind), "*");
-		snprintf(ifaddr, sizeof(ifaddr), "%s", ifname);
-	} else if (bdaddr && bdaddr[0]) {
-		snprintf(bind, sizeof(bind), "%s", bdaddr);
-		snprintf(ifaddr, sizeof(ifaddr), "%s", bdaddr);
-	} else if (bt_adapter_addr_by_name(ifname, ifaddr, sizeof(ifaddr)) == 0) {
-		snprintf(bind, sizeof(bind), "%s", ifaddr);
-	} else {
-		snprintf(ifaddr, sizeof(ifaddr), "%s", ifname);
-		snprintf(bind, sizeof(bind), "%s", ifaddr);
-	}
-
-	add_endpoint(m, proto, bind, port, PLANE_BLUETOOTH, ifname, ifaddr,
+	add_endpoint(m, proto, ifaddr, port, PLANE_BLUETOOTH, ifname, ifaddr,
 		&attrs, ip);
 }
 
@@ -2271,9 +2266,9 @@ static void bt_add_endpoint(struct model *m, const char *proto,
  * parse_bluetooth_rfcomm - parse /proc/net/rfcomm into Bluetooth endpoints.
  * @m: model receiving Bluetooth RFCOMM listener mappings.
  *
- * procfs prints one socket per line with Bluetooth addresses plus state,
- * channel, and inode fields. The local source address becomes bind/ifaddr,
- * the RFCOMM channel becomes port, and state 4 is BT_LISTEN.
+ * The current kernel RFCOMM table exports only generic socket fields:
+ * sk, RefCnt, Rmem, Wmem, User, Inode, Parent. Adapter, channel, and state
+ * are not exposed, so any owned RFCOMM socket is reported with port 0.
  * Returns no value.
  * Side effects/assumptions: Operates on in-memory data and may read
  * procfs/netns state; it does not change kernel configuration.
@@ -2289,120 +2284,38 @@ static void parse_bluetooth_rfcomm(struct model *m)
 	__fsetlocking(f, FSETLOCKING_BYCALLER);
 
 	while (fgets(line, sizeof(line), f)) {
-		char work[512];
-		char *tok[32];
-		unsigned long inode;
-		unsigned int state, channel;
-		int addr_idx[4];
-		int addr_n = 0;
-		int ntok;
-		int i;
-		int src_idx;
+		unsigned long sk, inode, parent;
+		unsigned int refcnt, rmem, wmem, uid;
+		char ifname[IF_NAMESIZE];
+		char ifaddr[32];
 		struct inode_proc *ip;
 
-		snprintf(work, sizeof(work), "%s", line);
-		ntok = bt_tokenize_line(work, tok, sizeof(tok) / sizeof(tok[0]));
-		if (ntok < 4 || strcmp(tok[0], "sk") == 0)
+		if (strncmp(line, "sk", 2) == 0)
 			continue;
-
-		for (i = 0; i < ntok && addr_n < (int)(sizeof(addr_idx) /
-		     sizeof(addr_idx[0])); i++) {
-			if (bt_token_is_bdaddr(tok[i]))
-				addr_idx[addr_n++] = i;
-		}
-		if (!addr_n)
+		/*
+		 * /proc/net/rfcomm columns are:
+		 * sk RefCnt Rmem Wmem User Inode Parent
+		 */
+		if (sscanf(line, "%lx %u %u %u %u %lu %lu",
+			   &sk, &refcnt, &rmem, &wmem, &uid, &inode, &parent) != 7)
 			continue;
-
-		src_idx = addr_n > 1 ? addr_idx[1] : addr_idx[0];
-		if (src_idx + 2 >= ntok)
-			continue;
-
-		/* /proc/net/rfcomm emits destination, source, state, channel. */
-		if (parse_u32_hex_or_dec(tok[src_idx + 1], &state) ||
-		    state != BT_LISTEN ||
-		    parse_u32_hex_or_dec(tok[src_idx + 2], &channel))
-			continue;
-
-		inode = bt_find_inode_token(m, tok, ntok);
-		if (!inode)
-			continue;
+		(void)sk;
+		(void)refcnt;
+		(void)rmem;
+		(void)wmem;
+		(void)uid;
+		(void)parent;
 		ip = lookup_inode(m, inode);
 		if (!ip)
-			continue;
-
-		bt_add_endpoint(m, "rfcomm", tok[src_idx], channel, NULL, ip);
-	}
-
-	fclose(f);
-}
-
-/*
- * parse_bluetooth_l2cap - parse /proc/net/bluetooth/l2cap into endpoints.
- * @m: model receiving Bluetooth L2CAP listener mappings.
- *
- * The procfs dump includes source/destination addresses plus state and PSM.
- * Source address maps to bind/ifaddr, PSM maps to port, and only BT_LISTEN
- * sockets are reported.
- * Returns no value.
- * Side effects/assumptions: Operates on in-memory data and may read
- * procfs/netns state; it does not change kernel configuration.
- */
-static void parse_bluetooth_l2cap(struct model *m)
-{
-	FILE *f;
-	char line[512];
-
-	f = fopen("/proc/net/bluetooth/l2cap", "rte");
-	if (!f)
-		return;
-	__fsetlocking(f, FSETLOCKING_BYCALLER);
-
-	while (fgets(line, sizeof(line), f)) {
-		char work[512];
-		char *tok[32];
-		unsigned long inode;
-		unsigned int state, psm;
-		int addr_idx[4];
-		int addr_n = 0;
-		int ntok;
-		int i;
-		int src_idx;
-		struct inode_proc *ip;
-
-		snprintf(work, sizeof(work), "%s", line);
-		ntok = bt_tokenize_line(work, tok, sizeof(tok) / sizeof(tok[0]));
-		if (ntok < 4 || strcmp(tok[0], "sk") == 0)
-			continue;
-
-		for (i = 0; i < ntok && addr_n < (int)(sizeof(addr_idx) /
-		     sizeof(addr_idx[0])); i++) {
-			if (bt_token_is_bdaddr(tok[i]))
-				addr_idx[addr_n++] = i;
-		}
-		if (!addr_n)
-			continue;
-
-		src_idx = addr_n > 1 ? addr_idx[1] : addr_idx[0];
-		if (src_idx + 2 >= ntok)
 			continue;
 
 		/*
-		 * /proc/net/bluetooth/l2cap emits destination, source, state, and PSM
-		 * before the remaining CID/MTU/security detail columns.
+		 * /proc/net/rfcomm does not expose channel or state, so report all
+		 * owned RFCOMM sockets with port 0 on the best available adapter.
 		 */
-		if (parse_u32_hex_or_dec(tok[src_idx + 1], &state) ||
-		    state != BT_LISTEN ||
-		    parse_u32_hex_or_dec(tok[src_idx + 2], &psm))
-			continue;
-
-		inode = bt_find_inode_token(m, tok, ntok);
-		if (!inode)
-			continue;
-		ip = lookup_inode(m, inode);
-		if (!ip)
-			continue;
-
-		bt_add_endpoint(m, "l2cap", tok[src_idx], psm, NULL, ip);
+		bt_resolve_single_adapter(ifname, sizeof(ifname),
+			ifaddr, sizeof(ifaddr));
+		bt_add_endpoint(m, "rfcomm", 0, ifname, ifaddr, ip);
 	}
 
 	fclose(f);
@@ -2412,10 +2325,9 @@ static void parse_bluetooth_l2cap(struct model *m)
  * parse_bluetooth_hci - parse /proc/net/hci into raw HCI management endpoints.
  * @m: model receiving Bluetooth HCI socket mappings.
  *
- * HCI procfs output is kernel-version-dependent; newer kernels expose the
- * generic Bluetooth socket columns while older dumps may include adapter
- * identifiers. Any entry with an owned inode is reported as proto=hci port=0,
- * using the discovered adapter index when present or "unknown" otherwise.
+ * The current kernel HCI table exports only generic socket fields:
+ * sk, RefCnt, Rmem, Wmem, User, Inode, Parent. Adapter identity is not
+ * exposed, so the parser falls back to the single-adapter heuristic.
  * Returns no value.
  * Side effects/assumptions: Operates on in-memory data and may read
  * procfs/netns state; it does not change kernel configuration.
@@ -2431,52 +2343,61 @@ static void parse_bluetooth_hci(struct model *m)
 	__fsetlocking(f, FSETLOCKING_BYCALLER);
 
 	while (fgets(line, sizeof(line), f)) {
-		char work[512];
-		char *tok[32];
+		unsigned long sk, inode, parent;
+		unsigned int refcnt, rmem, wmem, uid;
 		char ifname[IF_NAMESIZE];
-		unsigned long inode;
-		int ntok;
-		int i;
+		char ifaddr[32];
 		struct inode_proc *ip;
 
-		snprintf(work, sizeof(work), "%s", line);
-		ntok = bt_tokenize_line(work, tok, sizeof(tok) / sizeof(tok[0]));
-		if (ntok < 2 || strcmp(tok[0], "sk") == 0)
+		if (strncmp(line, "sk", 2) == 0)
 			continue;
-
-		inode = bt_find_inode_token(m, tok, ntok);
-		if (!inode)
+		/*
+		 * /proc/net/hci columns are:
+		 * sk RefCnt Rmem Wmem User Inode Parent
+		 */
+		if (sscanf(line, "%lx %u %u %u %u %lu %lu",
+			   &sk, &refcnt, &rmem, &wmem, &uid, &inode, &parent) != 7)
 			continue;
+		(void)sk;
+		(void)refcnt;
+		(void)rmem;
+		(void)wmem;
+		(void)uid;
+		(void)parent;
 		ip = lookup_inode(m, inode);
 		if (!ip)
 			continue;
 
-		snprintf(ifname, sizeof(ifname), "%s", BT_ADAPTER_UNKNOWN);
-		for (i = 0; i < ntok; i++) {
-			unsigned int index;
-			int n = 0;
-
-			if (sscanf(tok[i], "hci%u%n", &index, &n) == 1 &&
-			    n == (int)strlen(tok[i])) {
-				snprintf(ifname, sizeof(ifname), "hci%u", index);
-				break;
-			}
-		}
-		if (strcmp(ifname, BT_ADAPTER_UNKNOWN) == 0) {
-			bt_load_adapters();
-			if (bt_adapters_n == 1)
-				snprintf(ifname, sizeof(ifname), "%s",
-					bt_adapters[0].name);
-		}
-
-		/* Raw HCI sockets map to controller-level access on one adapter. */
-		bt_add_endpoint(m, "hci", NULL, 0,
-			strcmp(ifname, BT_ADAPTER_UNKNOWN) == 0 ? NULL : ifname,
-			ip);
+		bt_resolve_single_adapter(ifname, sizeof(ifname),
+			ifaddr, sizeof(ifaddr));
+		bt_add_endpoint(m, "hci", 0, ifname, ifaddr, ip);
 	}
 
 	fclose(f);
 }
+#else
+/*
+ * parse_bluetooth_rfcomm - Bluetooth support stub when headers are unavailable.
+ * @m: unused model pointer.
+ *
+ * Returns no value.
+ */
+static void parse_bluetooth_rfcomm(struct model *m)
+{
+	(void)m;
+}
+
+/*
+ * parse_bluetooth_hci - Bluetooth support stub when headers are unavailable.
+ * @m: unused model pointer.
+ *
+ * Returns no value.
+ */
+static void parse_bluetooth_hci(struct model *m)
+{
+	(void)m;
+}
+#endif
 
 /*
  * parse_vsock_file - fallback VSOCK parser using /proc/net/vsock.
@@ -2904,7 +2825,6 @@ static void collect_endpoints(struct model *m)
 		parse_vsock_file(m);
 	}
 	parse_bluetooth_rfcomm(m);
-	parse_bluetooth_l2cap(m);
 	parse_bluetooth_hci(m);
 }
 
@@ -3159,7 +3079,7 @@ static void format_bind_node(char *dst, size_t dst_sz, const char *bind)
 {
 	if (strcmp(bind, "0.0.0.0") == 0 || strcmp(bind, "::") == 0)
 		snprintf(dst, dst_sz, "*");
-	else if (strchr(bind, ':'))
+	else if (strchr(bind, ':') && !str_is_bdaddr(bind))
 		snprintf(dst, dst_sz, "[%s]", bind);
 	else
 		snprintf(dst, dst_sz, "%s", bind);

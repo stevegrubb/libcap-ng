@@ -152,6 +152,7 @@ AC_CHECK_HEADERS(sys/xattr.h, [], [
 	AC_CHECK_HEADERS(attr/xattr.h, [], [AC_MSG_WARN(attr/xattr.h not found, disabling file system capabilities.)])
 	])
 AC_CHECK_HEADERS(linux/securebits.h, [], [])
+AC_CHECK_HEADERS(bluetooth/bluetooth.h bluetooth/hci.h, [], [])
 AC_CHECK_HEADERS(linux/inet_diag.h linux/netlink.h linux/sock_diag.h
 	linux/vm_sockets.h, [], [])
 AC_CHECK_HEADERS(linux/vm_sockets_diag.h, [], [])

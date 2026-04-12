@@ -127,9 +127,8 @@ TCP: LISTEN sockets only.
 .IP \[bu] 2
 UDP/UDPLITE: bound sockets.
 .IP \[bu] 2
-RFCOMM: LISTEN sockets only.
-.IP \[bu] 2
-L2CAP: LISTEN sockets only.
+RFCOMM: all owned RFCOMM sockets (state and channel are not exposed by the
+kernel's proc interface).
 .IP \[bu] 2
 HCI: all bound raw management sockets; semantics differ from port listeners
 and are analogous to packet sockets.
@@ -190,8 +189,8 @@ Under \fBifaces\fP: each interface has \fBname\fP and \fBaddrs\fP
 For INET, LINK-LAYER, and BLUETOOTH planes, each endpoint object has
 \fBlabel\fP, \fBproto\fP, \fBbind\fP, \fBport\fP, and \fBprocesses\fP
 (array). For BLUETOOTH planes, interface names are HCI adapter names (for
-example \fBhci0\fP); \fBport\fP is the RFCOMM channel, the L2CAP PSM, or 0
-for HCI.
+example \fBhci0\fP); \fBport\fP is 0 for HCI sockets and for RFCOMM sockets
+whose channel is not exposed by procfs.
 For VSOCK planes, endpoint objects use \fBlabel\fP, \fBvsock_type\fP
 (socket type string: \fBstream\fP/\fBdgram\fP/\fBseqpacket\fP), \fBcid\fP
 (source CID or the string \fBANY\fP), \fBport\fP, and \fBprocesses\fP;
@@ -275,9 +274,10 @@ link-layer packet craft/sniff capabilities, significantly expanding what an
 attacker can do post-compromise.
 Bluetooth protocol nodes denote proximity-based attack surface. \fBhci\fP
 nodes provide raw controller management access and are shown in yellow.
-\fBrfcomm\fP and \fBl2cap\fP listeners are reachable by nearby devices without
-prior host access and, unless the adapter is configured to require pairing,
-may be reachable without authentication.
+\fBrfcomm\fP sockets are reachable by nearby devices without prior host
+access and, unless the adapter is configured to require pairing, may be
+reachable without authentication. Adapter BD_ADDR resolution requires HCI
+ioctl access; without it, adapter identity is shown as \fBhci?\fP/\fB*\fP.
 .\" END_ADVANCED
 
 .SH "SEE ALSO"
