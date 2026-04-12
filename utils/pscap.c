@@ -49,6 +49,7 @@
 #define PSCAP_TESTABLE static
 #endif
 
+#ifndef PSCAP_NO_MAIN
 static void usage(void)
 {
 	fprintf(stderr, "usage: pscap [-a] [-p pid] [--tree]\n");
@@ -121,6 +122,7 @@ static int get_width(void)
 
 	return 80;
 }
+#endif
 
 PSCAP_TESTABLE size_t wrap_to(const char *text, size_t max)
 {
@@ -142,6 +144,13 @@ PSCAP_TESTABLE size_t wrap_to(const char *text, size_t max)
 
 	return max;
 }
+
+#ifndef PSCAP_NO_MAIN
+/*
+ * utility_logic_test only needs wrap_to(). Keep the rest of the pscap
+ * implementation out of PSCAP_NO_MAIN builds so the test object does not
+ * accumulate main-program helpers that trigger unused-function warnings.
+ */
 
 /*
  * compare_pid - order processes by pid for sorting/bsearch
@@ -621,4 +630,5 @@ int main(int argc, char *argv[])
 	}
 	return 0;
 }
+#endif
 #endif

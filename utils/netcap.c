@@ -52,15 +52,24 @@
 #include "netcap-advanced.h"
 #include "proc-sanitize.h"
 
+#ifndef NETCAP_NO_MAIN
 static llist l;
 static int perm_warn = 0, header = 0, last_uid = -1;
 static char *tacct = NULL;
+#endif
 
 #ifdef NETCAP_TEST
 #define NETCAP_TESTABLE
 #else
 #define NETCAP_TESTABLE static
 #endif
+
+#ifndef NETCAP_NO_MAIN
+/*
+ * utility_logic_test only exercises parse_u32_hex_or_dec(). Keep the rest
+ * of netcap out of NETCAP_NO_MAIN builds so the test object does not carry
+ * main-program helpers that trigger unused-function warnings.
+ */
 
 static void usage(void)
 {
@@ -426,6 +435,7 @@ static void read_packet(void)
 	}
 	fclose(f);
 }
+#endif
 
 #ifdef HAVE_NETCAP_ADVANCED
 NETCAP_TESTABLE int parse_u32_hex_or_dec(const char *s, unsigned int *out)
@@ -458,6 +468,7 @@ NETCAP_TESTABLE int parse_u32_hex_or_dec(const char *s, unsigned int *out)
 	return 0;
 }
 
+#ifndef NETCAP_NO_MAIN
 static int read_diag_messages(int fd, int proto, const char *type)
 {
 	char buf[8192];
@@ -770,6 +781,7 @@ static void read_vsock(void)
 	if (read_vsock_diag() < 0)
 		read_vsock_proc();
 }
+#endif
 #endif
 
 #ifndef NETCAP_NO_MAIN
