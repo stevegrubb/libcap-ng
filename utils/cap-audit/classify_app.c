@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.1-or-later
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * classify_app.c - File type detection helper for cap-audit
  *

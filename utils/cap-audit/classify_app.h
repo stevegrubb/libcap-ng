@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.1-or-later
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 #ifndef CAP_AUDIT_CLASSIFY_APP_H
 #define CAP_AUDIT_CLASSIFY_APP_H
