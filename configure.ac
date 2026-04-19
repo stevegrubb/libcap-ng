@@ -50,6 +50,14 @@ AC_PROG_CC
 AC_PROG_INSTALL
 AC_PROG_AWK
 
+AC_MSG_CHECKING([for __atomic_load_n])
+AC_LINK_IFELSE(
+	[AC_LANG_PROGRAM(
+		[[unsigned int test_atomic;]],
+		[[return __atomic_load_n(&test_atomic, __ATOMIC_ACQUIRE);]])],
+	[AC_MSG_RESULT(yes)],
+	[AC_MSG_FAILURE([Compiler support for __atomic_load_n is required by libcap-ng])])
+
 LIBBPF_CFLAGS=""
 LIBBPF_LIBS=""
 LIBAUDIT_CFLAGS=""
