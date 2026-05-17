@@ -14,10 +14,18 @@
 
 #include <stddef.h>
 #include <sys/types.h>
+#include "proc-attrs.h"
 
 void proc_format_account_name_from_euid(int euid, char *account,
-					size_t account_len);
+					size_t account_len)
+	__attr_access ((__write_only__, 2, 3));
+void proc_update_account_cache(uid_t uid, int *last_uid,
+			       const char **cached_name)
+	__attr_access ((__read_write__, 2))
+	__attr_access ((__write_only__, 3));
 void netcap_update_account_cache(uid_t uid, int *last_uid,
-				 const char **cached_name);
+				 const char **cached_name)
+	__attr_access ((__read_write__, 2))
+	__attr_access ((__write_only__, 3));
 
 #endif

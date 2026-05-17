@@ -25,7 +25,11 @@
 #ifndef PROC_SANITIZE_H
 #define PROC_SANITIZE_H
 
-char *sanitize_untrusted_field(const char *src);
-int sanitize_untrusted_owned(char **s);
+#include "proc-attrs.h"
+
+char *sanitize_untrusted_field(const char *src)
+	__attr_access ((__read_only__, 1));
+int sanitize_untrusted_owned(char **s)
+	__attr_access ((__read_write__, 1));
 
 #endif

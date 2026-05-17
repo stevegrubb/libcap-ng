@@ -11,13 +11,15 @@ TESTS = $(check_PROGRAMS)
 
 utils_test_SOURCES = utils_test.c \
 	${top_srcdir}/utils/filecap-path.c \
-	${top_srcdir}/utils/proc-account.c
+	${top_srcdir}/utils/proc-account.c \
+	${top_srcdir}/utils/proc-status.c
 
 utility_logic_test_SOURCES = utility_logic_test.c \
 	${top_srcdir}/utils/pscap.c \
 	${top_srcdir}/utils/netcap.c \
 	${top_srcdir}/utils/proc-account.c \
 	${top_srcdir}/utils/proc-llist.c \
+	${top_srcdir}/utils/proc-output.c \
 	${top_srcdir}/utils/proc-sanitize.c
 utility_logic_test_CPPFLAGS = $(AM_CPPFLAGS) -DPSCAP_NO_MAIN -DPSCAP_TEST \
 	-DNETCAP_NO_MAIN -DNETCAP_TEST

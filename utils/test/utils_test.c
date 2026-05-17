@@ -15,8 +15,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
+#include <unistd.h>
 #include "filecap-path.h"
 #include "proc-account.h"
+#include "proc-status.h"
 
 struct path_list {
 	char **items;
@@ -120,10 +122,31 @@ static void test_account_formatting(void)
 		fail("Missing passwd entry should update last_uid");
 }
 
+/*
+ * test_proc_status - verify shared /proc status parsing against this process.
+ * @none: function takes no parameters.
+ *
+ * Returns no value. Calls fail() when expected status fields are missing.
+ */
+static void test_proc_status(void)
+{
+	struct proc_status status;
+
+	if (proc_read_status(getpid(), &status) != 0)
+		fail("Failed to read own proc status");
+	if (!status.seen_name || status.name[0] == '\0')
+		fail("Proc status should include a process name");
+	if (!status.seen_uid || status.uid != (int)getuid())
+		fail("Proc status should include the real uid");
+	if (!status.seen_euid || status.euid != (int)geteuid())
+		fail("Proc status should include the effective uid");
+}
+
 int main(void)
 {
 	test_path_parser();
 	test_account_formatting();
+	test_proc_status();
 	puts("Utility helper tests passed");
 	return 0;
 }

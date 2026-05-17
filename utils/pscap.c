@@ -24,30 +24,23 @@
 
 #include "config.h"
 #include <stdio.h>
-#include <stdio_ext.h>
 #include <unistd.h>
 #include <stdlib.h>
 #include <errno.h>
 #include <string.h>
 #include <dirent.h>
 #include <fcntl.h>
-#include <pwd.h>
 #include <stdbool.h>
 #include <sys/stat.h>
-#include <sys/ioctl.h>
 #include "cap-ng.h"
 #include "proc-account.h"
+#include "proc-output.h"
 #include "proc-sanitize.h"
+#include "proc-status.h"
 
 #define CMD_LEN 16
 #define ACCOUNT_LEN 32
 #define USERNS_MARK_LEN 3	// two characters plus '\0'.
-
-#ifdef PSCAP_TEST
-#define PSCAP_TESTABLE
-#else
-#define PSCAP_TESTABLE static
-#endif
 
 #ifndef PSCAP_NO_MAIN
 static void usage(void)
@@ -64,86 +57,50 @@ struct proc_info {
 	char *caps_text;
 };
 
-static int get_euid(int pid)
+/*
+ * read_euid - read one process effective UID from procfs.
+ * @pid: process ID whose status file should be inspected.
+ *
+ * Returns the effective UID on success, or -1 when it cannot be read.
+ */
+static int read_euid(int pid)
 {
-	char path[32], buf[128];
-	FILE *f;
-	int euid = -1;
+	struct proc_status status;
 
-	snprintf(path, sizeof(path), "/proc/%d/status", pid);
-	f = fopen(path, "rte");
-	if (f == NULL)
+	if (proc_read_status(pid, &status) < 0 || !status.seen_euid)
 		return -1;
-
-	__fsetlocking(f, FSETLOCKING_BYCALLER);
-	while (fgets(buf, sizeof(buf), f)) {
-		if (memcmp(buf, "Uid:", 4) == 0) {
-			int uid;
-
-			sscanf(buf, "Uid: %d %d", &uid, &euid);
-			break;
-		}
-	}
-	fclose(f);
-
-	if (euid < 0)
-		return -1;
-
-	return euid;
+	return status.euid;
 }
 
+/*
+ * get_account_name - format the account name for a process effective UID.
+ * @pid: process ID whose effective UID should be read.
+ * @account: destination buffer receiving the account label.
+ * @account_len: size of @account in bytes.
+ *
+ * Returns no value.
+ */
 static void get_account_name(int pid, char *account, size_t account_len)
 {
-	int euid;
+	int euid = read_euid(pid);
 
-	euid = get_euid(pid);
 	proc_format_account_name_from_euid(euid, account, account_len);
-}
-
-static int get_width(void)
-{
-	struct winsize ws;
-	char *e;
-	long c;
-
-	if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0)
-		return ws.ws_col;
-
-	e = getenv("COLUMNS");
-	if (e) {
-		char *endptr;
-
-		errno = 0;
-		c = strtol(e, &endptr, 10);
-		if (errno == 0 && endptr != e && *endptr == '\0' && c > 0 &&
-		    c < 400)
-			return (int)c;
-	}
-
-	return 80;
 }
 #endif
 
-PSCAP_TESTABLE size_t wrap_to(const char *text, size_t max)
+#ifdef PSCAP_TEST
+/*
+ * wrap_to - test-visible wrapper for the shared plain text wrap helper.
+ * @text: source string to wrap.
+ * @max: maximum number of bytes to include before wrapping.
+ *
+ * Returns the byte offset where output should wrap.
+ */
+size_t wrap_to(const char *text, size_t max)
 {
-	size_t len = strlen(text);
-	size_t i;
-
-	if (len <= max)
-		return len;
-
-	for (i = max; i > 0; i--) {
-		if (text[i - 1] == ',') {
-			if (i < len && text[i] == ' ')
-				return i + 1;
-			return i;
-		}
-		if (text[i - 1] == ' ')
-			return i;
-	}
-
-	return max;
+	return proc_wrap_plain(text, max);
 }
+#endif
 
 #ifndef PSCAP_NO_MAIN
 /*
@@ -229,10 +186,14 @@ static char *format_caps(int caps, bool ambient, bool bounds)
 
 	if (!text)
 		return NULL;
-	if (ambient)
-		append_marker(&text, " @");
-	if (bounds)
-		append_marker(&text, " +");
+	if (ambient && append_marker(&text, " @") < 0) {
+		free(text);
+		return NULL;
+	}
+	if (bounds && append_marker(&text, " +") < 0) {
+		free(text);
+		return NULL;
+	}
 	return text;
 }
 
@@ -255,16 +216,12 @@ static void print_tree_node(struct proc_info *procs, size_t count,
 	size_t child_total = 0;
 	size_t child_seen = 0;
 	size_t i;
-	size_t prefix_len;
-	size_t cont_len;
-	size_t avail;
-	size_t n;
-	const char *caps;
 	char head[64];
 	const char *branch = "";
+	char *text;
+	size_t text_len;
 	char *line_prefix;
 	char *cont_prefix;
-	char *child_prefix;
 
 	if (!is_root)
 		branch = is_last ? "   " : "│  ";
@@ -287,63 +244,37 @@ static void print_tree_node(struct proc_info *procs, size_t count,
 
 	snprintf(head, sizeof(head), "%s(%d:%s) [", proc->cmd,
 		 proc->pid, proc->account);
-	prefix_len = strlen(line_prefix);
-	cont_len = strlen(cont_prefix);
-	caps = proc->caps_text;
-
-	if ((int)(prefix_len + strlen(head) + strlen(caps) + 1) <= width) {
-		printf("%s%s%s]\n", line_prefix, head, caps);
-		goto children;
+	text_len = strlen(head) + strlen(proc->caps_text) + 2;
+	text = malloc(text_len);
+	if (!text) {
+		free(line_prefix);
+		free(cont_prefix);
+		return;
 	}
-
-	avail = width > (int)(prefix_len + strlen(head)) ?
-		(size_t)(width - (int)(prefix_len + strlen(head))) : 10;
-	if (avail < 10)
-		avail = 10;
-	n = wrap_to(caps, avail);
-	printf("%s%s%.*s\n", line_prefix, head, (int)n, caps);
-	caps += n;
-
-	while (*caps) {
-		avail = width > (int)cont_len ? (size_t)(width - (int)cont_len) : 10;
-		if (avail < 10)
-			avail = 10;
-		if (strlen(caps) + 1 <= avail) {
-			printf("%s%s]\n", cont_prefix, caps);
-			break;
-		}
-		n = wrap_to(caps, avail);
-		printf("%s%.*s\n", cont_prefix, (int)n, caps);
-		caps += n;
-	}
-
-children:
+	snprintf(text, text_len, "%s%s]", head, proc->caps_text);
+	proc_print_wrapped(line_prefix, cont_prefix, text, width);
+	free(text);
 	free(line_prefix);
-	free(cont_prefix);
 
 	for (i = 0; i < count; i++) {
 		if (procs[i].ppid == proc->pid)
 			child_total++;
 	}
 
-	if (child_total == 0)
+	if (child_total == 0) {
+		free(cont_prefix);
 		return;
-
-	child_prefix = malloc(strlen(prefix) + strlen(branch) + 1);
-	if (!child_prefix)
-		return;
-	strcpy(child_prefix, prefix);
-	strcat(child_prefix, branch);
+	}
 
 	for (i = 0; i < count; i++) {
 		if (procs[i].ppid != proc->pid)
 			continue;
 		child_seen++;
-		print_tree_node(procs, count, i, child_prefix,
+		print_tree_node(procs, count, i, cont_prefix,
 				child_seen == child_total, false, width);
 	}
 
-	free(child_prefix);
+	free(cont_prefix);
 }
 
 /*
@@ -356,7 +287,7 @@ children:
 static void print_tree(struct proc_info *procs, size_t count)
 {
 	size_t i;
-	int width = get_width();
+	int width = proc_output_width();
 
 	if (count > 1)
 		qsort(procs, count, sizeof(*procs), compare_pid);
@@ -403,8 +334,8 @@ int main(int argc, char *argv[])
 	int header = 0, show_all = 0, caps;
 	pid_t our_pid = getpid();
 	pid_t target_pid = 0;
-	int uid = -1;
-	char *name = NULL;
+	int last_uid = -1;
+	const char *name = NULL;
 	int tree_mode = 0;
 	struct proc_info *procs = NULL;
 	size_t proc_count = 0;
@@ -454,7 +385,6 @@ int main(int argc, char *argv[])
 		char *safe_cmd = NULL;
 		char *tmp, cmd[CMD_LEN + USERNS_MARK_LEN], state;
 		int fd, len;
-		struct passwd *p;
 
 		// Skip non-process dir entries
 		if(*ent->d_name<'0' || *ent->d_name>'9')
@@ -562,7 +492,10 @@ int main(int argc, char *argv[])
 			proc_count++;
 			safe_cmd = NULL;
 		} else if (caps > CAPNG_NONE) {
-			int euid = get_euid(pid);
+			char *caps_text;
+			bool has_ambient;
+			bool has_bounds;
+			int euid = read_euid(pid);
 
 			if (header == 0) {
 				printf("%-7s %-7s %-16s %-15s %s\n",
@@ -570,49 +503,24 @@ int main(int argc, char *argv[])
 				    "capabilities");
 				header = 1;
 			}
-			if (euid == 0) {
-				// Take short cut for this one
-				name = "root";
-				uid = 0;
-			} else if (euid < 0) {
-				name = "unknown";
-				uid = -1;
-			} else if (euid != uid) {
-				// Only look up if name changed
-				p = getpwuid(euid);
-				uid = euid;
-				if (p)
-					name = p->pw_name;
-				else
-					name = NULL;
+			proc_update_account_cache((uid_t)euid, &last_uid, &name);
+			has_ambient = capng_have_capabilities(
+					CAPNG_SELECT_AMBIENT) > CAPNG_NONE;
+			has_bounds = capng_have_capabilities(
+					CAPNG_SELECT_BOUNDS) > CAPNG_NONE;
+			caps_text = format_caps(caps, has_ambient, has_bounds);
+			if (!caps_text) {
+				free(safe_cmd);
+				continue;
 			}
-
 			if (name) {
 				printf("%-7d %-7d %-16s %-15s ", ppid, pid,
 					name, safe_cmd);
 			} else
 				printf("%-7d %-7d %-16d %-15s ", ppid, pid,
-					uid, safe_cmd);
-			if (caps == CAPNG_PARTIAL) {
-				capng_print_caps_text(CAPNG_PRINT_STDOUT,
-							CAPNG_PERMITTED);
-				if (capng_have_capabilities(
-					    CAPNG_SELECT_AMBIENT) > CAPNG_NONE)
-					printf(" @");
-				if (capng_have_capabilities(CAPNG_SELECT_BOUNDS)
-							 > CAPNG_NONE)
-					printf(" +");
-				printf("\n");
-			} else {
-				printf("full");
-				if (capng_have_capabilities(
-					    CAPNG_SELECT_AMBIENT) > CAPNG_NONE)
-					printf(" @");
-				if (capng_have_capabilities(CAPNG_SELECT_BOUNDS)
-							 > CAPNG_NONE)
-					printf(" +");
-				printf("\n");
-			}
+					last_uid, safe_cmd);
+			printf("%s\n", caps_text);
+			free(caps_text);
 			free(safe_cmd);
 			safe_cmd = NULL;
 		}

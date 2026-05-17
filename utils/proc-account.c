@@ -47,8 +47,16 @@ void proc_format_account_name_from_euid(int euid, char *account,
 	snprintf(account, account_len, "%d", euid);
 }
 
-void netcap_update_account_cache(uid_t uid, int *last_uid,
-				 const char **cached_name)
+/*
+ * proc_update_account_cache - update cached passwd lookup state for @uid.
+ * @uid: effective UID to format.
+ * @last_uid: caller's cached UID value, updated when @uid is looked up.
+ * @cached_name: caller's cached passwd name pointer, updated in place.
+ *
+ * Returns no value. @cached_name is NULL when @uid has no passwd entry.
+ */
+void proc_update_account_cache(uid_t uid, int *last_uid,
+			       const char **cached_name)
 {
 	struct passwd *p;
 
@@ -74,4 +82,18 @@ void netcap_update_account_cache(uid_t uid, int *last_uid,
 	*last_uid = uid;
 	if (p)
 		*cached_name = p->pw_name;
+}
+
+/*
+ * netcap_update_account_cache - compatibility wrapper for netcap callers.
+ * @uid: effective UID to format.
+ * @last_uid: caller's cached UID value, updated when @uid is looked up.
+ * @cached_name: caller's cached passwd name pointer, updated in place.
+ *
+ * Returns no value.
+ */
+void netcap_update_account_cache(uid_t uid, int *last_uid,
+				 const char **cached_name)
+{
+	proc_update_account_cache(uid, last_uid, cached_name);
 }

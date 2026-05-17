@@ -35,13 +35,15 @@ bin_PROGRAMS = pscap netcap filecap
 man_MANS = pscap.8 netcap.8 filecap.8
 bashcompletiondir = ${datadir}/bash-completion/completions
 
-pscap_SOURCES = pscap.c proc-account.c proc-account.h \
-	proc-sanitize.c proc-sanitize.h
+pscap_SOURCES = pscap.c proc-account.c proc-account.h proc-attrs.h \
+	proc-output.c proc-output.h proc-sanitize.c proc-sanitize.h \
+	proc-status.c proc-status.h
 netcap_SOURCES = netcap.c netcap-advanced.h proc-llist.c \
-	proc-llist.h proc-account.c proc-account.h \
+	proc-llist.h proc-account.c proc-account.h proc-attrs.h \
 	proc-sanitize.c proc-sanitize.h
 if BUILD_NETCAP_ADVANCED
-netcap_SOURCES += netcap-advanced.c
+netcap_SOURCES += netcap-advanced.c proc-output.c proc-output.h \
+	proc-status.c proc-status.h
 endif
 filecap_SOURCES = filecap.c filecap-path.c filecap-path.h
 

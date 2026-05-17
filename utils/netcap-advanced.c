@@ -59,7 +59,9 @@
 #include <unistd.h>
 #include "cap-ng.h"
 #include "netcap-advanced.h"
+#include "proc-output.h"
 #include "proc-sanitize.h"
+#include "proc-status.h"
 
 /*
  * Overview:
@@ -216,13 +218,6 @@ struct pidset {
 	size_t used;
 };
 
-struct status_fields {
-	unsigned long no_new_privs;
-	unsigned long seccomp;
-	int seen_no_new_privs;
-	int seen_seccomp;
-};
-
 struct endpoint_attrs {
 	int wildcard;
 	int reuseport;
@@ -369,8 +364,6 @@ static enum cap_severity caps_worst_severity(const char *caps)
 
 static void free_model(struct model *m);
 static void json_escape(const char *s);
-static void print_tree_node(const char *prefix, int is_last,
-	const char *txt, int width);
 static int bind_sort_cmp(const char *a, const char *b);
 static struct inode_proc *lookup_inode(struct model *m, unsigned long inode);
 static void render_interfaces_text(struct model *m);
@@ -666,36 +659,6 @@ static void inode_hash_insert(struct model *m, size_t idx)
 }
 
 /*
- * get_width - choose terminal width for wrapped tree output.
- * @none: function takes no parameters.
- *
- * Returns terminal columns from TIOCGWINSZ or $COLUMNS, else 80.
- * Side effects/assumptions: Operates on in-memory data and may read
- * procfs/netns state; it does not change kernel configuration.
- */
-static int get_width(void)
-{
-	struct winsize ws;
-	const int fds[] = { STDOUT_FILENO, STDERR_FILENO, STDIN_FILENO };
-	const char *env;
-	char *end = NULL;
-	unsigned long v;
-	size_t i;
-
-	for (i = 0; i < sizeof(fds) / sizeof(fds[0]); i++) {
-		if (ioctl(fds[i], TIOCGWINSZ, &ws) == 0 && ws.ws_col)
-			return ws.ws_col;
-	}
-	env = getenv("COLUMNS");
-	if (env) {
-		v = strtoul(env, &end, 10);
-		if (end != env && *end == '\0' && v > 0 && v < 400)
-			return (int)v;
-	}
-	return 80;
-}
-
-/*
  * xstrdup - duplicate @s into a newly allocated string.
  * @s: source string, or NULL.
  *
@@ -896,7 +859,7 @@ static void print_flag_nodes(const char *pfx_flags, int width,
 		if (flags & map[i].bit)
 			n++;
 	if (!n) {
-		print_tree_node(pfx_flags, 1, "(none)", width);
+		proc_tree_print_node(pfx_flags, 1, "(none)", width);
 		return;
 	}
 	for (i = 0; i < sizeof(map) / sizeof(map[0]); i++) {
@@ -912,7 +875,7 @@ static void print_flag_nodes(const char *pfx_flags, int width,
 		else
 			snprintf(node, sizeof(node), "%s", map[i].name);
 		printed++;
-		print_tree_node(pfx_flags, printed == n, node, width);
+		proc_tree_print_node(pfx_flags, printed == n, node, width);
 	}
 }
 
@@ -1291,7 +1254,7 @@ static char *caps_summary_for_pid(int pid, int *privileged, int *has_amb,
  * @pid: process ID whose procfs status/attr files are parsed.
  * @uid: process real UID, used for root/non-root interpretation.
  * @d: destination struct receiving caller-freed string fields.
- * @sf: parsed /proc/<pid>/status fields consumed for hardening decode.
+ * @status: parsed /proc/<pid>/status fields consumed for hardening decode.
  *
  * Missing fields are tolerated; function leaves best-effort defaults.
  * Returns no value.
@@ -1299,7 +1262,7 @@ static char *caps_summary_for_pid(int pid, int *privileged, int *has_amb,
  * procfs/netns state; it does not change kernel configuration.
  */
 static void parse_status_defenses(int pid, int uid, struct defense_info *d,
-	const struct status_fields *sf)
+	const struct proc_status *status)
 {
 	char path[64];
 
@@ -1308,15 +1271,15 @@ static void parse_status_defenses(int pid, int uid, struct defense_info *d,
 	d->seccomp = xstrdup("disabled");
 	d->lsm_label = NULL;
 
-	if (sf->seen_no_new_privs) {
+	if (status->seen_no_new_privs) {
 		free(d->no_new_privs);
-		d->no_new_privs = xstrdup(sf->no_new_privs ? "yes" : "no");
+		d->no_new_privs = xstrdup(status->no_new_privs ? "yes" : "no");
 	}
-	if (sf->seen_seccomp) {
+	if (status->seen_seccomp) {
 		free(d->seccomp);
-		if (sf->seccomp == 0)
+		if (status->seccomp == 0)
 			d->seccomp = xstrdup("disabled");
-		else if (sf->seccomp == 1)
+		else if (status->seccomp == 1)
 			d->seccomp = xstrdup("strict");
 		else
 			d->seccomp = xstrdup("filter");
@@ -1342,40 +1305,15 @@ static void parse_status_defenses(int pid, int uid, struct defense_info *d,
  */
 static struct process_info *add_process(struct model *m, int pid)
 {
-	char path[64], line[256], comm[64] = "";
+	char path[64];
 	char exepath[PATH_MAX];
-	FILE *f;
 	ssize_t exelen;
-	int uid = -1;
 	int has_amb = 0, has_bnd = 0;
 	char *amb_list = NULL;
-	struct status_fields sf = { 0 };
+	struct proc_status status;
 	struct process_info *p;
 
-	snprintf(path, sizeof(path), "/proc/%d/status", pid);
-	f = fopen(path, "rte");
-	if (!f)
-		return NULL;
-	__fsetlocking(f, FSETLOCKING_BYCALLER);
-	while (fgets(line, sizeof(line), f)) {
-		if (sscanf(line, "Name:\t%63s", comm) == 1)
-			continue;
-		if (sscanf(line, "Uid:\t%d", &uid) == 1)
-			continue;
-		if (sscanf(line, "NoNewPrivs:\t%lu", &sf.no_new_privs) == 1) {
-			sf.seen_no_new_privs = 1;
-			continue;
-		}
-		if (sscanf(line, "Seccomp:\t%lu", &sf.seccomp) == 1) {
-			sf.seen_seccomp = 1;
-			continue;
-		}
-		if (uid >= 0 && comm[0] && sf.seen_no_new_privs &&
-		    sf.seen_seccomp)
-			break;
-	}
-	fclose(f);
-	if (uid < 0)
+	if (proc_read_status(pid, &status) < 0 || !status.seen_uid)
 		return NULL;
 
 	p = calloc(1, sizeof(*p));
@@ -1384,8 +1322,8 @@ static struct process_info *add_process(struct model *m, int pid)
 		return NULL;
 	}
 	p->pid = pid;
-	p->uid = uid;
-	p->comm = xstrdup(comm[0] ? comm : "?");
+	p->uid = status.uid;
+	p->comm = xstrdup(status.seen_name ? status.name : "?");
 	if (sanitize_untrusted_owned(&p->comm) < 0)
 		goto fail;
 	snprintf(path, sizeof(path), "/proc/%d/exe", pid);
@@ -1410,7 +1348,7 @@ static struct process_info *add_process(struct model *m, int pid)
 	p->ambient_caps = amb_list;
 	p->ambient_present = has_amb;
 	p->open_ended_bounding = has_bnd;
-	parse_status_defenses(pid, uid, &p->defenses, &sf);
+	parse_status_defenses(pid, status.uid, &p->defenses, &status);
 	if (!p->comm || (exelen >= 0 && !p->exe) || !p->caps ||
 	    (has_amb && !p->ambient_caps) ||
 	    !p->defenses.runs_as_nonroot ||
@@ -2829,211 +2767,6 @@ static void collect_endpoints(struct model *m)
 }
 
 /*
- * wrap_to - choose a safe wrap index for one output line.
- * @text: source string being wrapped.
- * @from: starting offset in @text.
- * @limit: maximum columns to consume from @from.
- *
- * Returns next index to continue rendering from.
- * Side effects/assumptions: Operates on in-memory data and may read
- * procfs/netns state; it does not change kernel configuration.
- */
-enum color_state {
-	COLOR_STATE_NONE,
-	COLOR_STATE_ORANGE,
-	COLOR_STATE_YELLOW,
-	COLOR_STATE_GREEN,
-};
-
-/*
- * color_state_code - map parser color state to ANSI start sequence.
- * @st: tracked color state carried across wrapped lines.
- *
- * Returns SGR color code for @st, or NULL for default color.
- * Side effects/assumptions: Operates on in-memory data and may read
- * procfs/netns state; it does not change kernel configuration.
- */
-static const char *color_state_code(enum color_state st)
-{
-	switch (st) {
-	case COLOR_STATE_ORANGE:
-		return COLOR_ORANGE;
-	case COLOR_STATE_YELLOW:
-		return COLOR_YELLOW;
-	case COLOR_STATE_GREEN:
-		return COLOR_GREEN;
-	default:
-		return NULL;
-	}
-}
-
-/*
- * skip_ansi_sgr - advance index past one ANSI SGR escape sequence.
- * @text: source string potentially containing SGR escapes.
- * @i: current index, expected at ESC byte when sequence starts.
- *
- * Returns new index after sequence (or unchanged when not at SGR).
- * Side effects/assumptions: Operates on in-memory data and may read
- * procfs/netns state; it does not change kernel configuration.
- */
-static int skip_ansi_sgr(const char *text, int i)
-{
-	if (text[i] != '\033' || text[i + 1] != '[')
-		return i;
-	i += 2;
-	while (text[i] && text[i] != 'm')
-		i++;
-	if (text[i] == 'm')
-		i++;
-	return i;
-}
-
-/*
- * scan_color_state - track active color state across wrapped text spans.
- * @text: source string segment being scanned.
- * @from: start index (inclusive) of rendered segment.
- * @to: end index (exclusive) of rendered segment.
- * @st: incoming color state before scanning @text[@from:@to].
- *
- * Returns resulting color state after processing embedded SGR escapes.
- * Side effects/assumptions: Operates on in-memory data and may read
- * procfs/netns state; it does not change kernel configuration.
- */
-static enum color_state scan_color_state(const char *text, int from, int to,
-	enum color_state st)
-{
-	int i;
-
-	for (i = from; i < to && text[i]; ) {
-		if (text[i] == '\033' && text[i + 1] == '[') {
-			if (strncmp(text + i, COLOR_ORANGE, strlen(COLOR_ORANGE)) == 0) {
-				st = COLOR_STATE_ORANGE;
-				i += strlen(COLOR_ORANGE);
-				continue;
-			}
-			if (strncmp(text + i, COLOR_YELLOW, strlen(COLOR_YELLOW)) == 0) {
-				st = COLOR_STATE_YELLOW;
-				i += strlen(COLOR_YELLOW);
-				continue;
-			}
-			if (strncmp(text + i, COLOR_GREEN, strlen(COLOR_GREEN)) == 0) {
-				st = COLOR_STATE_GREEN;
-				i += strlen(COLOR_GREEN);
-				continue;
-			}
-			if (strncmp(text + i, COLOR_RESET, strlen(COLOR_RESET)) == 0) {
-				st = COLOR_STATE_NONE;
-				i += strlen(COLOR_RESET);
-				continue;
-			}
-			i = skip_ansi_sgr(text, i);
-			continue;
-		}
-		i++;
-	}
-	return st;
-}
-
-static int wrap_to(const char *text, int from, int limit)
-{
-	int i;
-	int vis = 0;
-	int space = -1;
-
-	for (i = from; text[i] && vis < limit; ) {
-		if (text[i] == '\033' && text[i + 1] == '[') {
-			i = skip_ansi_sgr(text, i);
-			continue;
-		}
-		if (text[i] == ' ')
-			space = i;
-		i++;
-		vis++;
-	}
-	if (!text[i])
-		return i;
-	if (space > from)
-		return space;
-	if (i == from)
-		return from + 1;
-	return i;
-}
-
-/*
- * print_tree_node - render one tree node line (with wrapping) to stdout.
- * @prefix: precomputed branch prefix glyphs.
- * @is_last: non-zero when this node is the last child.
- * @txt: node text to render.
- * @width: target display width used for wrapping.
- *
- * Returns no value.
- * Side effects/assumptions: Operates on in-memory data and may read
- * procfs/netns state; it does not change kernel configuration.
- */
-static void print_tree_node(const char *prefix, int is_last, const char *txt,
-	int width)
-{
-	char head[512];
-	char cont[512];
-	int pos = 0;
-	int first = 1;
-	enum color_state st = COLOR_STATE_NONE;
-
-	snprintf(head, sizeof(head), "%s%s", prefix,
-		is_last ? "└─ " : "├─ ");
-	snprintf(cont, sizeof(cont), "%s%s", prefix,
-		is_last ? "   " : "│  ");
-	while (1) {
-		const char *lead = first ? head : cont;
-		int lead_len = strlen(lead);
-		int avail = width - lead_len;
-		int to;
-		const char *code;
-
-		if (avail < 10)
-			avail = 10;
-		if (!txt[pos]) {
-			printf("%s\n", lead);
-			return;
-		}
-		to = wrap_to(txt, pos, avail);
-		printf("%s", lead);
-		code = color_state_code(st);
-		if (!first && code)
-			fputs(code, stdout);
-		printf("%.*s", to - pos, txt + pos);
-		st = scan_color_state(txt, pos, to, st);
-		if (st != COLOR_STATE_NONE)
-			fputs(COLOR_RESET, stdout);
-		putchar('\n');
-		while (txt[to] == ' ')
-			to++;
-		pos = to;
-		first = 0;
-		if (!txt[pos])
-			return;
-	}
-}
-
-/*
- * build_child_prefix - extend tree prefix glyphs for child nodes.
- * @dst: output buffer receiving generated prefix text.
- * @dst_sz: size of @dst in bytes.
- * @prefix: parent prefix string.
- * @parent_is_last: non-zero when parent is the last sibling.
- *
- * Returns no value.
- * Side effects/assumptions: Operates on in-memory data and may read
- * procfs/netns state; it does not change kernel configuration.
- */
-static void build_child_prefix(char *dst, size_t dst_sz, const char *prefix,
-	int parent_is_last)
-{
-	snprintf(dst, dst_sz, "%s%s", prefix,
-		parent_is_last ? "   " : "│  ");
-}
-
-/*
  * endpoint_cmp - qsort comparator for stable endpoint grouping.
  * @a: pointer to first endpoint element.
  * @b: pointer to second endpoint element.
@@ -3138,8 +2871,8 @@ static void render_tree_process_details(const char *prefix,
 		p->exe ? p->exe : "",
 		p->unit ? " unit=" : "",
 		p->unit ? p->unit : "");
-	print_tree_node(prefix, is_last, line, width);
-	build_child_prefix(pfx_child, sizeof(pfx_child), prefix, is_last);
+	proc_tree_print_node(prefix, is_last, line, width);
+	proc_tree_build_child_prefix(pfx_child, sizeof(pfx_child), prefix, is_last);
 
 	if (strcmp(p->caps, "(full)") == 0 || strcmp(p->caps, "(none)") == 0) {
 		const char *c = strcmp(p->caps, "(full)") == 0 ? COLOR_ORANGE :
@@ -3199,7 +2932,7 @@ static void render_tree_process_details(const char *prefix,
 			snprintf(line, sizeof(line), "caps: %s", capsbuf);
 		}
 	}
-	print_tree_node(pfx_child, 0, line, width);
+	proc_tree_print_node(pfx_child, 0, line, width);
 
 	if (p->ambient_caps) {
 		if (use_color)
@@ -3207,7 +2940,7 @@ static void render_tree_process_details(const char *prefix,
 				p->ambient_caps, COLOR_RESET);
 		else
 			snprintf(line, sizeof(line), "ambient: %s", p->ambient_caps);
-		print_tree_node(pfx_child, 0, line, width);
+		proc_tree_print_node(pfx_child, 0, line, width);
 	}
 
 	snprintf(def_buf[def_n], sizeof(def_buf[def_n]),
@@ -3258,10 +2991,10 @@ static void render_tree_process_details(const char *prefix,
 		def_nodes[def_n] = def_buf[def_n];
 		def_n++;
 	}
-	print_tree_node(pfx_child, 0, "defenses", width);
-	build_child_prefix(pfx_def, sizeof(pfx_def), pfx_child, 0);
+	proc_tree_print_node(pfx_child, 0, "defenses", width);
+	proc_tree_build_child_prefix(pfx_def, sizeof(pfx_def), pfx_child, 0);
 	for (ai = 0; ai < def_n; ai++)
-		print_tree_node(pfx_def, ai + 1 == def_n, def_nodes[ai], width);
+		proc_tree_print_node(pfx_def, ai + 1 == def_n, def_nodes[ai], width);
 
 	if (e->plane == PLANE_VSOCK) {
 		flags |= FLAG_HYPERVISOR_PLANE;
@@ -3278,8 +3011,8 @@ static void render_tree_process_details(const char *prefix,
 	if (p->has_privileged_caps)
 		flags |= FLAG_PRIVILEGED_CAPS;
 
-	print_tree_node(pfx_child, 1, "flags", width);
-	build_child_prefix(pfx_flags, sizeof(pfx_flags), pfx_child, 1);
+	proc_tree_print_node(pfx_child, 1, "flags", width);
+	proc_tree_build_child_prefix(pfx_flags, sizeof(pfx_flags), pfx_child, 1);
 	print_flag_nodes(pfx_flags, width, flags, priv_sev);
 }
 
@@ -3379,7 +3112,7 @@ static void render_tree(struct model *m)
 	size_t i;
 	int planes[PLANE_COUNT];
 	size_t plane_n = 0;
-	int width = get_width();
+	int width = proc_output_width();
 
 	if (m->eps_n > 1)
 		qsort(m->eps, m->eps_n, sizeof(struct endpoint), endpoint_cmp);
@@ -3408,8 +3141,8 @@ static void render_tree(struct model *m)
 			plane == PLANE_BLUETOOTH ? PLANE_BLUETOOTH_NAME : "VSOCK";
 		size_t j = 0;
 
-		print_tree_node(pfx_plane, plane_last, plane_name, width);
-		build_child_prefix(pfx_iface, sizeof(pfx_iface), pfx_plane,
+		proc_tree_print_node(pfx_plane, plane_last, plane_name, width);
+		proc_tree_build_child_prefix(pfx_iface, sizeof(pfx_iface), pfx_plane,
 			plane_last);
 		if (plane == PLANE_VSOCK) {
 			/*
@@ -3431,8 +3164,8 @@ static void render_tree(struct model *m)
 						break;
 					}
 				}
-				print_tree_node(pfx_iface, ep_last, e->label, width);
-				build_child_prefix(pfx_proc, sizeof(pfx_proc), pfx_iface,
+				proc_tree_print_node(pfx_iface, ep_last, e->label, width);
+				proc_tree_build_child_prefix(pfx_proc, sizeof(pfx_proc), pfx_iface,
 					ep_last);
 				for (k = 0; k < e->procs_n; k++) {
 					struct process_info *p = e->procs[k];
@@ -3470,8 +3203,8 @@ static void render_tree(struct model *m)
 
 			snprintf(iface_line, sizeof(iface_line), "%s",
 				m->eps[iface_start].ifname);
-			print_tree_node(pfx_iface, iface_last, iface_line, width);
-			build_child_prefix(pfx_iface_child, sizeof(pfx_iface_child),
+			proc_tree_print_node(pfx_iface, iface_last, iface_line, width);
+			proc_tree_build_child_prefix(pfx_iface_child, sizeof(pfx_iface_child),
 				pfx_iface, iface_last);
 
 			{
@@ -3502,12 +3235,12 @@ static void render_tree(struct model *m)
 
 						snprintf(pbuf, sizeof(pbuf), "%s%s%s", COLOR_YELLOW,
 							m->eps[proto_start].proto, COLOR_RESET);
-						print_tree_node(pfx_proto_root, proto_last, pbuf, width);
+						proc_tree_print_node(pfx_proto_root, proto_last, pbuf, width);
 					} else {
-						print_tree_node(pfx_proto_root, proto_last,
+						proc_tree_print_node(pfx_proto_root, proto_last,
 							m->eps[proto_start].proto, width);
 					}
-					build_child_prefix(pfx_bind, sizeof(pfx_bind),
+					proc_tree_build_child_prefix(pfx_bind, sizeof(pfx_bind),
 						pfx_proto_root, proto_last);
 
 					{
@@ -3529,8 +3262,8 @@ static void render_tree(struct model *m)
 
 							format_bind_node(bind_line, sizeof(bind_line),
 								m->eps[bind_start].bind);
-							print_tree_node(pfx_bind, bind_last, bind_line, width);
-							build_child_prefix(pfx_port, sizeof(pfx_port),
+							proc_tree_print_node(pfx_bind, bind_last, bind_line, width);
+							proc_tree_build_child_prefix(pfx_port, sizeof(pfx_port),
 								pfx_bind, bind_last);
 
 							for (bi = bind_start; bi < bind_end; ) {
@@ -3551,9 +3284,9 @@ static void render_tree(struct model *m)
 
 								snprintf(port_line, sizeof(port_line), "%u",
 									m->eps[port_start].port);
-								print_tree_node(pfx_port, port_last,
+								proc_tree_print_node(pfx_port, port_last,
 									port_line, width);
-								build_child_prefix(pfx_proc, sizeof(pfx_proc),
+								proc_tree_build_child_prefix(pfx_proc, sizeof(pfx_proc),
 									pfx_port, port_last);
 
 								if (pidset_init(&seen)) {
