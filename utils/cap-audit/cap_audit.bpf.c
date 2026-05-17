@@ -19,7 +19,18 @@
  *   Portions of this code were made with codex 5.2
  */
 
+#ifdef __clang__
+/*
+ * bpftool can emit nameless BTF declarations in vmlinux.h. Clang warns about
+ * those generated declarations even though this program does not use them.
+ */
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wmissing-declarations"
+#endif
 #include "vmlinux.h"
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
 
 #ifndef CAP_OPT_NOAUDIT
 #define CAP_OPT_NOAUDIT 2
