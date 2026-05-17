@@ -29,12 +29,7 @@
 #include <linux/capability.h>
 #include <unistd.h>
 
-// The next 2 macros originate in sys/cdefs.h
-// gcc-analyzer notation
-#ifndef __attr_dealloc_free
-# define __attr_dealloc_free
-#endif
-
+// The next macro originates in sys/cdefs.h
 // Warn unused result
 #ifndef __wur
 # define __wur
