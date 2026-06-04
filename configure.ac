@@ -161,7 +161,13 @@ AC_CHECK_HEADERS(sys/xattr.h, [], [
 	])
 AC_CHECK_HEADERS(linux/securebits.h, [], [])
 AC_CHECK_HEADERS(bluetooth/bluetooth.h bluetooth/hci.h, [], [])
-AC_CHECK_HEADERS(linux/inet_diag.h linux/netlink.h linux/sock_diag.h linux/vm_sockets.h, [], [])
+AC_CHECK_HEADERS(linux/inet_diag.h linux/netlink.h linux/sock_diag.h, [], [])
+AC_CHECK_HEADERS(sys/socket.h, [], [])
+AC_CHECK_HEADERS(linux/vm_sockets.h, [], [], [AC_INCLUDES_DEFAULT
+		#ifdef HAVE_SYS_SOCKET_H
+		#include <sys/socket.h>
+		#endif
+		])
 AC_CHECK_HEADERS(linux/vm_sockets_diag.h, [], [])
 AC_CHECK_HEADERS(pthread.h,
 	[AC_SEARCH_LIBS(pthread_atfork, pthread)],
