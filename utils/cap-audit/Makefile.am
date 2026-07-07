@@ -53,6 +53,7 @@ endif
 BPF_ARCH = @BPF_ARCH@
 BPFTOOL = @BPFTOOL@
 CLANG = @CLANG@
+VMLINUX_H_PATH = @VMLINUX_H_PATH@
 
 BPF_CFLAGS = -g -O2 -target bpf -D__TARGET_ARCH_${BPF_ARCH} ${AM_CPPFLAGS}
 
@@ -62,7 +63,14 @@ cap_audit.skel.h: cap_audit.bpf.o
 cap_audit.bpf.o: cap_audit.bpf.c vmlinux.h
 	$(AM_V_CC)$(CLANG) $(BPF_CFLAGS) -c $< -o $@
 
+if PROVIDED_VMLINUX_H
+# Reproducible builds: use the vmlinux.h supplied at configure time via
+# --with-vmlinux-h-path instead of reading the running kernel's BTF data.
+vmlinux.h: $(VMLINUX_H_PATH)
+	$(AM_V_GEN)cp $< $@
+else
 vmlinux.h:
 	$(AM_V_GEN)$(BPFTOOL) btf dump file /sys/kernel/btf/vmlinux format c > $@
+endif
 
 man_MANS = cap-audit.8
