@@ -77,6 +77,23 @@ AS_HELP_STRING([--enable-cap-audit],[build cap-audit [[default=no]]]),
 [enable_cap_audit=$enableval],
 [enable_cap_audit=no])
 
+dnl For reproducible builds cap-audit's vmlinux.h can be supplied at
+dnl configure time instead of being generated from the running kernel's BTF
+dnl data in /sys/kernel/btf/vmlinux.
+AC_ARG_WITH([vmlinux-h],
+AS_HELP_STRING([--with-vmlinux-h=MODE],
+[how to obtain cap-audit's vmlinux.h: auto, provided, or generated [[default=auto]]]),
+[with_vmlinux_h="$withval"],
+[with_vmlinux_h=auto])
+AC_ARG_WITH([vmlinux-h-path],
+AS_HELP_STRING([--with-vmlinux-h-path=PATH],
+[path to a pre-generated vmlinux.h to use for cap-audit]),
+[with_vmlinux_h_path="$withval"],
+[with_vmlinux_h_path=""])
+
+VMLINUX_H_PATH=""
+vmlinux_h_status="n/a (cap-audit disabled)"
+
 if test "x$enable_cap_audit" = "xyes"; then
 missing_cap_audit_deps=no
 AC_CHECK_PROG([CLANG],[clang],[clang],[no])
@@ -91,6 +108,48 @@ if test "$CLANG" = "no" -o "$BPFTOOL" = "no" -o \
 "x$have_libbpf" != "xyes" -o "x$have_libaudit" != "xyes" -o \
 "x$missing_cap_audit_deps" = "xyes"; then
 AC_MSG_ERROR([cap-audit requires clang, bpftool, libbpf, and libaudit])
+fi
+
+AC_MSG_CHECKING([how to obtain vmlinux.h])
+case "$with_vmlinux_h" in
+auto)
+if test "x$with_vmlinux_h_path" != "x"; then
+vmlinux_h_source=provided
+else
+vmlinux_h_source=generated
+fi
+;;
+provided)
+vmlinux_h_source=provided
+;;
+generated)
+vmlinux_h_source=generated
+;;
+*)
+AC_MSG_RESULT([error])
+AC_MSG_ERROR([invalid --with-vmlinux-h value '$with_vmlinux_h' (expected auto, provided, or generated)])
+;;
+esac
+
+if test "x$vmlinux_h_source" = "xprovided"; then
+if test "x$with_vmlinux_h_path" = "x"; then
+AC_MSG_RESULT([error])
+AC_MSG_ERROR([--with-vmlinux-h=provided requires --with-vmlinux-h-path=PATH])
+fi
+if test ! -f "$with_vmlinux_h_path"; then
+AC_MSG_RESULT([error])
+AC_MSG_ERROR([provided vmlinux.h not found: $with_vmlinux_h_path])
+fi
+dnl Resolve to an absolute path so the build works from any directory.
+case "$with_vmlinux_h_path" in
+/*) VMLINUX_H_PATH="$with_vmlinux_h_path" ;;
+*)  VMLINUX_H_PATH="`pwd`/$with_vmlinux_h_path" ;;
+esac
+vmlinux_h_status="provided ($VMLINUX_H_PATH)"
+AC_MSG_RESULT([provided ($VMLINUX_H_PATH)])
+else
+vmlinux_h_status="generated from /sys/kernel/btf/vmlinux"
+AC_MSG_RESULT([generated from /sys/kernel/btf/vmlinux])
 fi
 fi
 
@@ -149,8 +208,10 @@ AC_SUBST(LIBBPF_CFLAGS)
 AC_SUBST(LIBBPF_LIBS)
 AC_SUBST(LIBAUDIT_CFLAGS)
 AC_SUBST(LIBAUDIT_LIBS)
+AC_SUBST(VMLINUX_H_PATH)
 
 AM_CONDITIONAL([BUILD_CAP_AUDIT], [test "x$enable_cap_audit" = "xyes"])
+AM_CONDITIONAL([PROVIDED_VMLINUX_H], [test "x$VMLINUX_H_PATH" != "x"])
 AM_CONDITIONAL([BUILD_DEPRECATED], [test "x$enable_deprecated" = "xyes"])
 
 echo .
@@ -351,4 +412,5 @@ echo "
   __attr_dealloc_free support:  $DEALLOC
   netcap advanced mode:  $netcap_advanced_status
   netcap VSOCK support:  $netcap_vsock_status
+  cap-audit vmlinux.h:   $vmlinux_h_status
   "

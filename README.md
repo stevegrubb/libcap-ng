@@ -215,9 +215,34 @@ cap-audit is optional and has to be enabled at build time:
 ```
 
 The build needs clang, bpftool, libbpf, libaudit, and their development
-headers. It also generates `utils/cap-audit/vmlinux.h` from the running
-kernel's BTF data in `/sys/kernel/btf/vmlinux`, so the build host kernel must
-provide enough BTF and tracing metadata for the BPF program to compile.
+headers. It also needs a `utils/cap-audit/vmlinux.h` describing the kernel's
+types. By default this is generated from the running kernel's BTF data in
+`/sys/kernel/btf/vmlinux`, so the build host kernel must provide enough BTF and
+tracing metadata for the BPF program to compile.
+
+Reading `/sys/kernel/btf/vmlinux` at build time makes the build depend on the
+host kernel and is therefore not reproducible. To avoid this, a pre-generated
+`vmlinux.h` can be supplied at configure time:
+
+```
+./configure --enable-cap-audit \
+    --with-vmlinux-h=provided \
+    --with-vmlinux-h-path=/path/to/vmlinux.h
+```
+
+`--with-vmlinux-h` selects how `vmlinux.h` is obtained:
+
+* `auto` (default) uses the file given by `--with-vmlinux-h-path` if set, and
+  otherwise generates one from `/sys/kernel/btf/vmlinux`.
+* `provided` requires `--with-vmlinux-h-path` and uses that file as-is,
+  without touching `/sys`.
+* `generated` always generates the file from `/sys/kernel/btf/vmlinux`.
+
+A `vmlinux.h` for the target architecture can be produced ahead of time with:
+
+```
+bpftool btf dump file /sys/kernel/btf/vmlinux format c >vmlinux.h
+```
 
 The kernel used to build and run cap-audit needs the BPF and tracing support
 used by `utils/cap-audit/cap_audit.bpf.c`. On current kernels, check for these
