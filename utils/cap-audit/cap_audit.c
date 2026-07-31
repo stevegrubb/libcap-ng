@@ -121,6 +121,16 @@ static char *resolve_target_command(const char *target)
 	__attr_dealloc_free
 	__attr_access ((__read_only__, 1))
 	__wur;
+static char **prepend_execstart_argv(const service_config_t *cfg,
+				     char **args, int arg_count)
+	__attribute_malloc__
+	__attr_dealloc_free
+	__attr_access ((__read_only__, 1))
+	__attr_access ((__read_only__, 2))
+	__wur;
+static int has_service_suffix(const char *path)
+	__attr_access ((__read_only__, 1))
+	__attribute_pure__;
 
 static void sig_handler(int sig __attribute__((unused)))
 {
@@ -220,6 +230,38 @@ static char *resolve_target_command(const char *target)
 	return NULL;
 }
 
+static char **prepend_execstart_argv(const service_config_t *cfg,
+				     char **args, int arg_count)
+{
+	char **argv;
+	int i;
+
+	argv = calloc((size_t)arg_count + 2, sizeof(char *));
+	if (!argv)
+		return NULL;
+
+	argv[0] = cfg->exec_argv[0];
+	for (i = 0; i < arg_count; i++)
+		argv[i + 1] = args[i];
+	argv[arg_count + 1] = NULL;
+
+	return argv;
+}
+
+static int has_service_suffix(const char *path)
+{
+	size_t len;
+	const char suffix[] = ".service";
+	size_t suffix_len = sizeof(suffix) - 1;
+
+	if (!path)
+		return 0;
+
+	len = strlen(path);
+	return len >= suffix_len &&
+	       strcmp(path + len - suffix_len, suffix) == 0;
+}
+
 static int check_auditor_caps(void)
 {
 	if (!capng_have_capability(CAPNG_EFFECTIVE, CAP_BPF) &&
@@ -270,11 +312,13 @@ static int set_target_pid(pid_t pid)
 static void usage(FILE *out, const char *prog)
 {
 	fprintf(out, "Usage: %s [options] -- command [args...]\n", prog);
+	fprintf(out, "       %s --service FILE [-- command-or-args...]\n", prog);
 	fprintf(out, "Options:\n");
-	fprintf(out, "  -h, --help       Show this help message\n");
-	fprintf(out, "  -v, --verbose    Verbose output\n");
-	fprintf(out, "  -j, --json       JSON output\n");
-	fprintf(out, "  -y, --yaml       YAML output\n");
+	fprintf(out, "  -h, --help          Show this help message\n");
+	fprintf(out, "  -v, --verbose       Verbose output\n");
+	fprintf(out, "  -j, --json          JSON output\n");
+	fprintf(out, "  -y, --yaml          YAML output\n");
+	fprintf(out, "  -s, --service FILE  Simulate a systemd service unit\n");
 }
 
 #ifndef CAP_AUDIT_NO_MAIN
@@ -285,7 +329,9 @@ int main(int argc, char **argv)
 	pid_t child;
 	pid_t ret_pid;
 	int wstatus;
-	char *target_path;
+	char *target_path = NULL;
+	char **service_target_argv = NULL;
+	int separator_seen = 0;
 
 	if (argc < 2) {
 		usage(stderr, argv[0]);
@@ -307,7 +353,25 @@ int main(int argc, char **argv)
 		else if (!strcmp(argv[arg_idx], "-y") ||
 			 !strcmp(argv[arg_idx], "--yaml"))
 			state.yaml_output = 1;
+		else if (!strcmp(argv[arg_idx], "-s") ||
+			 !strcmp(argv[arg_idx], "--service")) {
+			char *service_file;
+
+			arg_idx++;
+			if (arg_idx >= argc) {
+				fprintf(stderr,
+					"Error: --service requires a file\n");
+				usage(stderr, argv[0]);
+				return 1;
+			}
+			service_file = strdup(argv[arg_idx]);
+			if (!service_file)
+				return 1;
+			free(state.service_file);
+			state.service_file = service_file;
+		}
 		else if (!strcmp(argv[arg_idx], "--")) {
+			separator_seen = 1;
 			arg_idx++;
 			break;
 		} else {
@@ -319,13 +383,54 @@ int main(int argc, char **argv)
 		arg_idx++;
 	}
 
-	if (arg_idx >= argc) {
+	if (state.service_file) {
+		state.service_cfg = calloc(1, sizeof(*state.service_cfg));
+		if (!state.service_cfg)
+			goto err_target_path;
+
+		if (parse_service_file(state.service_file,
+				       state.service_cfg) != 0)
+			goto err_target_path;
+
+		if (!separator_seen && arg_idx < argc) {
+			fprintf(stderr,
+				"Error: --service command overrides require --\n");
+			usage(stderr, argv[0]);
+			goto err_target_path;
+		}
+
+		if (separator_seen && arg_idx < argc) {
+			if (argv[arg_idx][0] == '-') {
+				if (!state.service_cfg->exec_argv) {
+					fprintf(stderr,
+						"Error: service has no ExecStart executable for argument override\n");
+					goto err_target_path;
+				}
+				service_target_argv =
+				    prepend_execstart_argv(state.service_cfg,
+							   &argv[arg_idx],
+							   argc - arg_idx);
+				if (!service_target_argv)
+					goto err_target_path;
+				state.target_argv = service_target_argv;
+			} else {
+				state.target_argv = &argv[arg_idx];
+			}
+		} else {
+			if (!state.service_cfg->exec_argv) {
+				fprintf(stderr,
+					"Error: service has no ExecStart command\n");
+				goto err_target_path;
+			}
+			state.target_argv = state.service_cfg->exec_argv;
+		}
+	} else if (arg_idx >= argc) {
 		fprintf(stderr, "Error: No command specified\n");
 		usage(stderr, argv[0]);
 		return 1;
+	} else {
+		state.target_argv = &argv[arg_idx];
 	}
-
-	state.target_argv = &argv[arg_idx];
 
 	/*
 	 * Fail before capability checks, BPF setup, or fork/exec tracing so
@@ -335,7 +440,11 @@ int main(int argc, char **argv)
 	if (!target_path) {
 		fprintf(stderr, "Error: target is not executable: %s\n",
 			state.target_argv[0]);
-		return 1;
+		if (!state.service_file &&
+		    has_service_suffix(state.target_argv[0]))
+			fprintf(stderr,
+				"Hint: to audit a systemd unit, use --service FILE\n");
+		goto err_target_path;
 	}
 
 	if (init_capng() != 0)
@@ -419,6 +528,9 @@ int main(int argc, char **argv)
 			exit(1);
 		}
 		close(state.sync_pipe[0]);
+		if (state.service_cfg &&
+		    apply_service_config(state.service_cfg) != 0)
+			_exit(1);
 		/*
 		 * Use the resolved candidate so execvp() does not repeat PATH
 		 * lookup, while keeping its normal ENOEXEC shell fallback.
@@ -482,6 +594,8 @@ int main(int argc, char **argv)
 	inspect_target_file_caps(child);
 	if (state.app.prog_type == PYTHON && state.verbose)
 		printf("[*] Script interpreter: %s\n", state.app.exe);
+	if (state.service_cfg && state.verbose)
+		print_service_config(state.service_cfg);
 	printf("[*] Tracing application: %s (PID %d)\n", state.app.exe, child);
 	printf("[*] Press Ctrl-C to stop\n\n");
 
@@ -527,6 +641,12 @@ int main(int argc, char **argv)
 	cap_audit_bpf__destroy(state.skel);
 	free(state.app.exe);
 	free(target_path);
+	free(service_target_argv);
+	if (state.service_cfg) {
+		free_config(state.service_cfg);
+		free(state.service_cfg);
+	}
+	free(state.service_file);
 
 	for (int i = 0; i <= CAP_LAST_CAP; i++) {
 		if (state.app.checks[i].reason)
@@ -541,6 +661,12 @@ int main(int argc, char **argv)
 
 err_target_path:
 	free(target_path);
+	free(service_target_argv);
+	if (state.service_cfg) {
+		free_config(state.service_cfg);
+		free(state.service_cfg);
+	}
+	free(state.service_file);
 	return 1;
 }
 #endif

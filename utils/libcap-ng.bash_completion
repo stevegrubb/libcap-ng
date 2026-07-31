@@ -70,7 +70,7 @@ _filecap()
 _cap_audit()
 {
 	local cur prev
-	local opts="-h --help -v --verbose -j --json -y --yaml --"
+	local opts="-h --help -v --verbose -j --json -y --yaml -s --service --"
 
 	COMPREPLY=()
 	cur="${COMP_WORDS[COMP_CWORD]}"
@@ -80,6 +80,13 @@ _cap_audit()
 		COMPREPLY=( $(compgen -c -- "$cur") )
 		return 0
 	fi
+
+	case "$prev" in
+	-s|--service)
+		COMPREPLY=( $(compgen -f -- "$cur") )
+		return 0
+		;;
+	esac
 
 	if [[ "$cur" == -* ]]; then
 		COMPREPLY=( $(compgen -W "$opts" -- "$cur") )

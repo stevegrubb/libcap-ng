@@ -26,6 +26,7 @@
 #include "cap_audit.h"
 
 #include <ctype.h>
+#include <grp.h>
 #include <limits.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -187,6 +188,276 @@ static int cap_in_programmatic_set(int cap)
 		return state.app.checks[cap].op_granted > 0;
 
 	return state.app.checks[cap].granted > 0;
+}
+
+static bool svc_is_root_service(const service_config_t *cfg)
+{
+	return !cfg->user_is_set || cfg->user_uid == 0;
+}
+
+static gid_t svc_effective_gid(const service_config_t *cfg)
+{
+	if (cfg->group_is_set)
+		return cfg->group_gid;
+	if (cfg->user_is_set)
+		return cfg->user_primary_gid;
+	return 0;
+}
+
+static const char *svc_group_name(gid_t gid, char *buf, size_t buf_len)
+{
+	struct group *grp;
+
+	grp = getgrgid(gid);
+	if (grp)
+		return grp->gr_name;
+
+	snprintf(buf, buf_len, "%u", (unsigned int)gid);
+	return buf;
+}
+
+static const char *svc_user_name(const service_config_t *cfg)
+{
+	if (cfg->user_is_set && cfg->user_raw)
+		return cfg->user_raw;
+
+	return "root";
+}
+
+static void svc_print_cap_list(const bool caps[CAP_LAST_CAP + 1])
+{
+	int cap;
+	int first = 1;
+
+	for (cap = 0; cap <= CAP_LAST_CAP; cap++) {
+		if (!caps[cap])
+			continue;
+		if (!first)
+			printf(" ");
+		printf("%s", cap_name_safe(cap));
+		first = 0;
+	}
+	if (first)
+		printf("(none)");
+}
+
+static void svc_print_cap_set(const cap_set_t *set)
+{
+	if (!set->seen) {
+		printf("not configured (all capabilities inherited)");
+		return;
+	}
+
+	svc_print_cap_list(set->caps);
+}
+
+static void svc_build_recommended_caps(bool caps[CAP_LAST_CAP + 1])
+{
+	int cap;
+
+	for (cap = 0; cap <= CAP_LAST_CAP; cap++) {
+		struct cap_check *check = &state.app.checks[cap];
+
+		caps[cap] = false;
+		if (!include_cap_in_recommendations(cap))
+			continue;
+		if (cap_required_union(check) ||
+		    cap_total_denied(check) > 0)
+			caps[cap] = true;
+	}
+}
+
+static void svc_print_reason(const struct cap_check *check)
+{
+	const char *reason = cap_union_reason(check);
+
+	if (reason)
+		printf(" (%s)", reason);
+}
+
+static void svc_print_needed_caps(void)
+{
+	int cap;
+	int found = 0;
+
+	printf("    Needed capabilities:");
+	for (cap = 0; cap <= CAP_LAST_CAP; cap++) {
+		struct cap_check *check = &state.app.checks[cap];
+
+		if (!cap_required_union(check) ||
+		    !include_cap_in_recommendations(cap))
+			continue;
+		if (!found)
+			printf("\n");
+		printf("      %s", cap_name_safe(cap));
+		svc_print_reason(check);
+		printf("\n");
+		found = 1;
+	}
+	if (!found)
+		printf(" none\n");
+}
+
+static void svc_print_phase_caps(const char *label, int operational)
+{
+	int cap;
+	int first = 1;
+
+	printf("    %s", label);
+	for (cap = 0; cap <= CAP_LAST_CAP; cap++) {
+		struct cap_check *check = &state.app.checks[cap];
+		unsigned long granted;
+
+		granted = operational ? check->op_granted : check->granted;
+		if (granted == 0 || !include_cap_in_recommendations(cap))
+			continue;
+		if (!first)
+			printf(" ");
+		printf("%s", cap_name_safe(cap));
+		first = 0;
+	}
+	if (first)
+		printf("none");
+	printf("\n");
+}
+
+static void svc_print_denied_syscalls(const struct cap_check *check)
+{
+	size_t j;
+
+	if (check->denied_syscall_count == 0) {
+		printf("unknown");
+		return;
+	}
+
+	for (j = 0; j < check->denied_syscall_count; j++) {
+		const char *syscall_name;
+
+		if (j > 0)
+			printf(", ");
+		syscall_name = syscall_name_from_nr(check->denied_syscalls[j]);
+		if (syscall_name)
+			printf("%s", syscall_name);
+		else
+			printf("unknown(#%d)", check->denied_syscalls[j]);
+	}
+}
+
+static void svc_print_denied_caps(const service_config_t *cfg)
+{
+	int cap;
+	int found = 0;
+
+	for (cap = 0; cap <= CAP_LAST_CAP; cap++) {
+		struct cap_check *check = &state.app.checks[cap];
+		unsigned long denied = cap_total_denied(check);
+		int by_bounding;
+
+		if (denied == 0 || !include_cap_in_recommendations(cap))
+			continue;
+
+		by_bounding = cfg->bounding.seen && !cfg->bounding.caps[cap];
+		printf("    %s: %s - %lu attempts (",
+		       by_bounding ? "Denied by bounding set" :
+		       "Denied for other reasons",
+		       cap_name_safe(cap), denied);
+		svc_print_denied_syscalls(check);
+		printf(")\n");
+		if (by_bounding)
+			print_wrapped_text("      ",
+					   "Consider adding to CapabilityBoundingSet if this functionality is needed.");
+		found = 1;
+	}
+
+	if (!found)
+		printf("    Denied capabilities: none\n");
+}
+
+static void svc_print_unused_bounding(const service_config_t *cfg)
+{
+	int cap;
+	int found = 0;
+
+	if (!cfg->bounding.seen)
+		return;
+
+	for (cap = 0; cap <= CAP_LAST_CAP; cap++) {
+		struct cap_check *check = &state.app.checks[cap];
+
+		if (!cfg->bounding.caps[cap] ||
+		    cap_total_checks(check) > 0)
+			continue;
+		printf("    Configured but not observed: %s\n",
+		       cap_name_safe(cap));
+		print_wrapped_text("      ",
+				   "Consider removing from CapabilityBoundingSet to minimize attack surface.");
+		found = 1;
+	}
+
+	if (!found)
+		printf("    Configured but not observed: none\n");
+}
+
+static void print_service_recommendations(void)
+{
+	const service_config_t *cfg = state.service_cfg;
+	bool recommended[CAP_LAST_CAP + 1];
+	char group_buf[32];
+	gid_t gid = svc_effective_gid(cfg);
+	const char *group = svc_group_name(gid, group_buf, sizeof(group_buf));
+	int is_root = svc_is_root_service(cfg);
+
+	svc_build_recommended_caps(recommended);
+
+	printf("SYSTEMD SERVICE RECOMMENDATIONS:\n");
+	print_rule('-');
+	printf("  Unit file: %s\n", state.service_file);
+	printf("  ExecStart: %s\n", cfg->exec_start ?
+	       cfg->exec_start : "(not configured)");
+	printf("  User: %s (uid=%u)\n", svc_user_name(cfg),
+	       cfg->user_is_set ? (unsigned int)cfg->user_uid : 0);
+	printf("  Group: %s (gid=%u)\n", group, (unsigned int)gid);
+	printf("  NoNewPrivileges: %s\n",
+	       cfg->no_new_privs ? "yes" : "no");
+	printf("\n");
+	printf("  Current CapabilityBoundingSet: ");
+	svc_print_cap_set(&cfg->bounding);
+	printf("\n\n");
+
+	printf("  Analysis:\n");
+	svc_print_needed_caps();
+	if (state.capset_observed) {
+		print_wrapped_text("    ",
+				   "capset was observed. CapabilityBoundingSet "
+				   "should include the union of initialization "
+				   "and operational capabilities.");
+		svc_print_phase_caps("Initialization capabilities: ", 0);
+		svc_print_phase_caps("Operational capabilities: ", 1);
+	}
+	if (is_root)
+		print_wrapped_text("    ",
+				   "AmbientCapabilities omitted because ambient "
+				   "capabilities are not meaningful for root "
+				   "services.");
+	svc_print_denied_caps(cfg);
+	svc_print_unused_bounding(cfg);
+	printf("\n");
+
+	printf("  Recommended [Service] configuration:\n");
+	printf("    [Service]\n");
+	printf("    User=%s\n", svc_user_name(cfg));
+	printf("    Group=%s\n", group);
+	if (is_root)
+		printf("    # AmbientCapabilities omitted for root service\n");
+	else {
+		printf("    AmbientCapabilities=");
+		svc_print_cap_list(recommended);
+		printf("\n");
+	}
+	printf("    CapabilityBoundingSet=");
+	svc_print_cap_list(recommended);
+	printf("\n");
+	printf("    NoNewPrivileges=yes\n\n");
 }
 
 static void print_updatev_wrapped(const char *prefix, const char *cap_prefix,
@@ -586,7 +857,9 @@ void analyze_capabilities(void)
 	printf("  Denied operations: %d\n", denied_count);
 	printf("\n");
 
-	if (required_count > 0) {
+	if (state.service_cfg) {
+		print_service_recommendations();
+	} else if (required_count > 0) {
 		printf("RECOMMENDATIONS:\n");
 		print_rule('-');
 		if (state.app.prog_type != UNSUPPORTED) {

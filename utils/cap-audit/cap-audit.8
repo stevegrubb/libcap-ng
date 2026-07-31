@@ -7,6 +7,11 @@ cap-audit \- discover the minimal capability set for a program
 .B --
 .I command
 .RI [ args ...]
+.br
+.B cap-audit
+.BR --service
+.I file
+.RI [ -- " command-or-args" ...]
 .SH DESCRIPTION
 \fBcap-audit\fP traces a target process and its descendants to record every
 kernel capability check it performs. The tool uses eBPF to hook capability
@@ -33,6 +38,22 @@ Emit the analysis as JSON.
 .TP
 .BR -y , " --yaml"
 Emit the analysis as YAML.
+.TP
+.BR -s , " --service " \fIFILE\fP
+Parse a systemd service unit file, simulate the service user, group,
+supplementary group, capability, and NoNewPrivileges settings in the traced
+child, and emit service-specific recommendations. Without an explicit command
+after
+.BR -- ,
+the parsed
+.B ExecStart=
+command is traced. With
+.BR -- ,
+a command can be supplied explicitly; if the first supplied word starts with
+.BR - ,
+it is treated as replacement arguments for the parsed
+.B ExecStart=
+executable.
 .TP
 .BR --
 End option parsing and treat the rest of the command line as the program to

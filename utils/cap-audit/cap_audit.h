@@ -25,6 +25,7 @@
 #include "config.h"
 
 #include <bpf/libbpf.h>
+#include <stdbool.h>
 #include <linux/capability.h>
 #include <signal.h>
 #include <stddef.h>
@@ -101,6 +102,38 @@ struct app_caps {
 	int file_setpcap;
 };
 
+typedef struct {
+	bool seen;
+	bool caps[CAP_LAST_CAP + 1];
+} cap_set_t;
+
+typedef struct {
+	gid_t *gids;
+	size_t count;
+	bool is_set;
+} gid_list_t;
+
+typedef struct {
+	char *user_raw;
+	uid_t user_uid;
+	gid_t user_primary_gid;
+	bool user_is_set;
+	bool user_resolved;
+	gid_t group_gid;
+	bool group_is_set;
+	gid_list_t sup_groups;
+	cap_set_t bounding;
+	cap_set_t ambient;
+	bool dynamic_user;
+	bool dynamic_user_set;
+	bool no_new_privs;
+	bool no_new_privs_set;
+	char *service_type;
+	char *exec_start;
+	char **exec_argv;
+	size_t exec_argc;
+} service_config_t;
+
 struct audit_state {
 	struct cap_audit_bpf *skel;
 	struct ring_buffer *rb;
@@ -113,6 +146,8 @@ struct audit_state {
 	int capset_observed;
 	volatile sig_atomic_t stop;
 	int shutting_down;
+	char *service_file;
+	service_config_t *service_cfg;
 };
 
 extern struct audit_state state;
@@ -164,5 +199,16 @@ const char *cap_union_reason(const struct cap_check *check)
 type_t classify_app(const char *exe)
 	__attr_access ((__read_only__, 1))
 	__wur;
+int parse_service_file(const char *path, service_config_t *cfg)
+	__attr_access ((__read_only__, 1))
+	__attr_access ((__read_write__, 2))
+	__wur;
+int apply_service_config(const service_config_t *cfg)
+	__attr_access ((__read_only__, 1))
+	__wur;
+void free_config(service_config_t *cfg)
+	__attr_access ((__read_write__, 1));
+void print_service_config(const service_config_t *cfg)
+	__attr_access ((__read_only__, 1));
 
 #endif

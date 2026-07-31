@@ -29,6 +29,7 @@ cap_audit_SOURCES = cap_audit.c \
 	cap_audit_analyze.c \
 	cap_audit_event.c \
 	cap_audit_json.c \
+	cap_audit_service.c \
 	classify_app.c \
 	classify_app.h \
 	cap_audit_util.c \
@@ -45,7 +46,8 @@ if BUILD_CAP_AUDIT
 BUILT_SOURCES = cap_audit.bpf.o cap_audit.skel.h vmlinux.h
 cap_audit.$(OBJEXT) cap_audit_analyze.$(OBJEXT) \
 cap_audit_event.$(OBJEXT) cap_audit_json.$(OBJEXT) \
-cap_audit_util.$(OBJEXT) cap_audit_yaml.$(OBJEXT): cap_audit.skel.h
+cap_audit_service.$(OBJEXT) cap_audit_util.$(OBJEXT) \
+cap_audit_yaml.$(OBJEXT): cap_audit.skel.h
 endif
 
 BPF_ARCH = @BPF_ARCH@
