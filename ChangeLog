@@ -2,6 +2,7 @@
 - Add bluetooth collection to netcap --advanced
 - Don't drop netcap --advanced if only VSOCK kernel headers are missing
 - In cap-audit, verify executable is being passed
+- Add a systemd simulator to cap-audit: use --service to test a service file
 
 0.9.3
 - In cap-audit, split capability analysis across init and runtime phases
