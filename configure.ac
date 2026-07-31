@@ -288,12 +288,18 @@ if test x"${swig_found}" = x"no" ; then
 fi
 AM_CONDITIONAL(HAVE_SWIG, test x"${swig_found}" = x"yes")
 
+dnl Keep --without-python as a generic alias. A version-specific option
+dnl takes precedence because it is processed after the generic option.
+AC_ARG_WITH(python,
+AS_HELP_STRING([--without-python],[disable building all python bindings]),
+use_python3=$withval,
+use_python3=auto)
+
 withval=""
 AC_MSG_CHECKING(whether to create python3 bindings)
 AC_ARG_WITH(python3,
 AS_HELP_STRING([--with-python3],[enable building python3 bindings]),
-use_python3=$withval,
-use_python3=auto)
+use_python3=$withval)
 if test x$use_python3 = xno ; then
 	AC_MSG_RESULT(no)
 else
