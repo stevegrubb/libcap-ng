@@ -70,14 +70,14 @@ static char *format_caps(int caps, bool ambient, bool bounds)
  * read_euid - read one process effective UID from procfs.
  * @pid: process ID whose status file should be inspected.
  *
- * Returns the effective UID on success, or -1 when it cannot be read.
+ * Returns the effective UID on success, or (uid_t)-1 when it cannot be read.
  */
-static int read_euid(int pid)
+static uid_t read_euid(int pid)
 {
 	struct proc_status status;
 
 	if (proc_read_status(pid, &status) < 0 || !status.seen_euid)
-		return -1;
+		return (uid_t)-1;
 	return status.euid;
 }
 
@@ -91,7 +91,7 @@ static int read_euid(int pid)
  */
 static void get_account_name(int pid, char *account, size_t account_len)
 {
-	int euid = read_euid(pid);
+	uid_t euid = read_euid(pid);
 
 	proc_format_account_name_from_euid(euid, account, account_len);
 }
@@ -343,7 +343,7 @@ int main(int argc, char *argv[])
 	int header = 0, show_all = 0, caps;
 	pid_t our_pid = getpid();
 	pid_t target_pid = 0;
-	int last_uid = -1;
+	uid_t last_uid = (uid_t)-1;
 	const char *name = NULL;
 	int tree_mode = 0;
 	struct proc_info *procs = NULL;
@@ -504,7 +504,7 @@ int main(int argc, char *argv[])
 			char *caps_text;
 			bool has_ambient;
 			bool has_bounds;
-			int euid = read_euid(pid);
+			uid_t euid = read_euid(pid);
 
 			if (header == 0) {
 				printf("%-7s %-7s %-16s %-15s %s\n",
@@ -512,7 +512,7 @@ int main(int argc, char *argv[])
 				    "capabilities");
 				header = 1;
 			}
-			proc_update_account_cache((uid_t)euid, &last_uid, &name);
+			proc_update_account_cache(euid, &last_uid, &name);
 			has_ambient = capng_have_capabilities(
 					CAPNG_SELECT_AMBIENT) > CAPNG_NONE;
 			has_bounds = capng_have_capabilities(
@@ -526,8 +526,8 @@ int main(int argc, char *argv[])
 				printf("%-7d %-7d %-16s %-15s ", ppid, pid,
 					name, safe_cmd);
 			} else
-				printf("%-7d %-7d %-16d %-15s ", ppid, pid,
-					last_uid, safe_cmd);
+				printf("%-7d %-7d %-16u %-15s ", ppid, pid,
+					(unsigned int)last_uid, safe_cmd);
 			printf("%s\n", caps_text);
 			free(caps_text);
 			free(safe_cmd);

@@ -66,11 +66,15 @@ static uid_t find_missing_uid(void)
 {
 	uid_t uid;
 
-	for (uid = (uid_t)INT_MAX; uid > 100000; uid--) {
+	/*
+	 * Exercise the range that a signed int cannot represent. UID_MAX is
+	 * reserved as the invalid UID sentinel, so stop before reaching it.
+	 */
+	for (uid = (uid_t)INT_MAX + 1U; uid != (uid_t)-1; uid++) {
 		if (getpwuid(uid) == NULL)
 			return uid;
 	}
-	fail("Failed to find an unmapped uid for cache test");
+	fail("Failed to find an unmapped uid above INT_MAX for cache test");
 	return 0;
 }
 
@@ -96,29 +100,32 @@ static void test_path_parser(void)
 static void test_account_formatting(void)
 {
 	char account[32];
+	char expected[32];
 	uid_t missing_uid = find_missing_uid();
-	int last_uid = 0;
+	uid_t last_uid = 0;
 	const char *cached_name = "root";
 
 	/* Unknown proc owners should stay explicit instead of becoming root. */
-	proc_format_account_name_from_euid(-1, account, sizeof(account));
+	proc_format_account_name_from_euid((uid_t)-1, account,
+					   sizeof(account));
 	if (strcmp(account, "unknown") != 0)
-		fail("Negative euid should format as unknown");
+		fail("Invalid euid should format as unknown");
 
 	proc_format_account_name_from_euid(0, account, sizeof(account));
 	if (strcmp(account, "root") != 0)
 		fail("Root euid should format as root");
 
-	proc_format_account_name_from_euid((int)missing_uid, account,
+	snprintf(expected, sizeof(expected), "%u", (unsigned int)missing_uid);
+	proc_format_account_name_from_euid(missing_uid, account,
 					   sizeof(account));
-	if (strcmp(account, "root") == 0 || strcmp(account, "unknown") == 0)
-		fail("Missing passwd entry should fall back to numeric uid");
+	if (strcmp(account, expected) != 0)
+		fail("Large unmapped euid should retain its numeric value");
 
 	/* A failed lookup must not leave the previous cached name in place. */
 	netcap_update_account_cache(missing_uid, &last_uid, &cached_name);
 	if (cached_name != NULL)
 		fail("Missing passwd entry should clear stale cached name");
-	if (last_uid != (int)missing_uid)
+	if (last_uid != missing_uid)
 		fail("Missing passwd entry should update last_uid");
 }
 
@@ -136,9 +143,9 @@ static void test_proc_status(void)
 		fail("Failed to read own proc status");
 	if (!status.seen_name || status.name[0] == '\0')
 		fail("Proc status should include a process name");
-	if (!status.seen_uid || status.uid != (int)getuid())
+	if (!status.seen_uid || status.uid != getuid())
 		fail("Proc status should include the real uid");
-	if (!status.seen_euid || status.euid != (int)geteuid())
+	if (!status.seen_euid || status.euid != geteuid())
 		fail("Proc status should include the effective uid");
 }
 

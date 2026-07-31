@@ -57,7 +57,8 @@
 
 #ifndef NETCAP_NO_MAIN
 static llist l;
-static int perm_warn = 0, header = 0, last_uid = -1;
+static int perm_warn = 0, header = 0;
+static uid_t last_uid = (uid_t)-1;
 static char *tacct = NULL;
 #endif
 
@@ -108,7 +109,8 @@ static int collect_process_info(void)
 		char *safe_cmd;
 		char *tmp, cmd[16], state;
 		char *text = NULL, *bounds = NULL, *ambient = NULL;
-		int fd, len, euid = -1;
+		int fd, len;
+		uid_t euid = (uid_t)-1;
 
 		// Skip non-process dir entries
 		if(*ent->d_name<'0' || *ent->d_name>'9')
@@ -179,8 +181,8 @@ static int collect_process_info(void)
 					continue;
 				}
 				if (memcmp(buf, "Uid:", 4) == 0) {
-					int id;
-					if (sscanf(buf, "Uid: %d %d",
+					uid_t id;
+					if (sscanf(buf, "Uid: %u %u",
 						&id, &euid) == 2)
 						break;
 				}
@@ -311,7 +313,8 @@ static void report_finding(const lnode *n, unsigned int port, const char *type,
 	if (tacct) {
 		printf("%-7d %-7d %-16s", n->ppid, n->pid, tacct);
 	} else
-		printf("%-7d %-7d %-16d", n->ppid, n->pid, last_uid);
+		printf("%-7d %-7d %-16u", n->ppid, n->pid,
+		       (unsigned int)last_uid);
 	printf(" %-15s %-8s", n->cmd, type);
 	if (ifc)
 		printf(" %-15s", ifc);

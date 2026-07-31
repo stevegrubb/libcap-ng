@@ -19,8 +19,8 @@
 
 struct proc_status {
 	char name[PROC_STATUS_NAME_LEN];
-	int uid;
-	int euid;
+	uid_t uid;
+	uid_t euid;
 	unsigned long no_new_privs;
 	unsigned long seccomp;
 	int seen_name;

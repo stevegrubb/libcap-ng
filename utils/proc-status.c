@@ -29,8 +29,8 @@ int proc_read_status(pid_t pid, struct proc_status *status)
 	FILE *f;
 
 	memset(status, 0, sizeof(*status));
-	status->uid = -1;
-	status->euid = -1;
+	status->uid = (uid_t)-1;
+	status->euid = (uid_t)-1;
 
 	snprintf(path, sizeof(path), "/proc/%d/status", pid);
 	f = fopen(path, "rte");
@@ -39,14 +39,14 @@ int proc_read_status(pid_t pid, struct proc_status *status)
 
 	__fsetlocking(f, FSETLOCKING_BYCALLER);
 	while (fgets(line, sizeof(line), f)) {
-		int uid, euid;
+		uid_t uid, euid;
 		int fields;
 
 		if (sscanf(line, "Name: %63s", status->name) == 1) {
 			status->seen_name = 1;
 			continue;
 		}
-		fields = sscanf(line, "Uid: %d %d", &uid, &euid);
+		fields = sscanf(line, "Uid: %u %u", &uid, &euid);
 		if (fields >= 1) {
 			status->uid = uid;
 			status->seen_uid = 1;
