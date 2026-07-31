@@ -1635,6 +1635,8 @@ if (HAVE_PR_CAP_AMBIENT) {
 			// Make it big enough for bounding & ambient set, too
 			size_t buf_size = 180;
 			ptr = malloc(buf_size);
+			if (ptr == NULL)
+				return ptr;
 			if (m.cap_ver == 1) {
 				// 22 * 3 + 1
 				snprintf(ptr, buf_size,
