@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
+// Copyright (c) 2026 Red Hat Inc.
 /*
  * classify_app.c - File type detection helper for cap-audit
  *

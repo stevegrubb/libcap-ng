@@ -1,6 +1,6 @@
 /*
  * netcap.c - A program that lists network apps with capabilities
- * Copyright (c) 2009-10,2012,2020 Red Hat Inc.
+ * Copyright (c) 2009-10,2012,2019-20,2024,2026 Red Hat Inc.
  * All Rights Reserved.
  *
  * This software may be freely redistributed and/or modified under the

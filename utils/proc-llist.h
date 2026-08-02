@@ -1,6 +1,6 @@
 /*
 * proc-llist.h
-* Copyright (c) 2009, 2020 Red Hat Inc.
+* Copyright (c) 2009, 2020, 2026 Red Hat Inc.
 * All Rights Reserved.
 *
 * This software may be freely redistributed and/or modified under the

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
+// Copyright (c) 2026 Red Hat Inc.
 
 #ifndef CAP_AUDIT_CLASSIFY_APP_H
 #define CAP_AUDIT_CLASSIFY_APP_H

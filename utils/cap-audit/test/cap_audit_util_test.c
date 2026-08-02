@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* cap_audit_util_test.c -- cap-audit helper regression tests
  * Copyright 2026 Red Hat Inc.
  * All Rights Reserved.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* utility_logic_test.c -- direct tests against utility translation units
  * Copyright 2026 Red Hat Inc.
  * All Rights Reserved.

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// Copyright (c) 2026 Steve Grubb
+
 #ifndef GCC_ATTRIBUTES_H
 #define GCC_ATTRIBUTES_H
 

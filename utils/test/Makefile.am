@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Makefile.am -- utility tests
 #
 # Copyright 2026 Red Hat Inc.

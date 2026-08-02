@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.1-or-later
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * cap_audit.bpf.c - Capture capability checks for a target application
  * Copyright (c) 2026 Red Hat Inc.

@@ -1,6 +1,6 @@
 /*
  * pscap.c - A program that lists running processes with capabilities
- * Copyright (c) 2009,2012,2020 Red Hat Inc.
+ * Copyright (c) 2009,2012,2019-20,2023-24,2026 Red Hat Inc.
  * All Rights Reserved.
  *
  * This software may be freely redistributed and/or modified under the
