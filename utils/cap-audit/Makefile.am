@@ -66,10 +66,10 @@ cap_audit.bpf.o: cap_audit.bpf.c vmlinux.h
 if PROVIDED_VMLINUX_H
 # Reproducible builds: use the vmlinux.h supplied at configure time via
 # --with-vmlinux-h-path instead of reading the running kernel's BTF data.
-vmlinux.h: $(VMLINUX_H_PATH)
+vmlinux.h: $(VMLINUX_H_PATH) Makefile
 	$(AM_V_GEN)cp $< $@
 else
-vmlinux.h:
+vmlinux.h: Makefile
 	$(AM_V_GEN)$(BPFTOOL) btf dump file /sys/kernel/btf/vmlinux format c > $@
 endif
 
