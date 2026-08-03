@@ -15,6 +15,7 @@ BuildRequires: libattr-devel
 BuildRequires: clang
 BuildRequires: bpftool libbpf-devel
 BuildRequires: audit-libs-devel
+BuildRequires: kernel-devel
 %endif
 
 %description
@@ -58,13 +59,21 @@ to determine the necessary capabilities for a program.
 
 %prep
 %setup -q
-touch NEWS
-autoreconf -fv --install
+touch -d @${SOURCE_DATE_EPOCH:?} NEWS
 
 %build
-%configure --libdir=%{_libdir}
-%ifarch %{bpf_supported_arches} \
+# Locate suitable vmlinux.h. In normal builds under mock,
+# there'll be just one. But in case multiple kernel-devel packages
+# are installed, sort alphabetically and pick the last version.
+vmlinux_h="$(ls -1 /usr/src/kernels/*/vmlinux.h | sort -g | tail -n 1)"
+
+autoreconf -fv --install
+
+%configure --libdir=%{_libdir} \
+%ifarch %{bpf_supported_arches}
 	--enable-cap-audit=yes \
+	--with-vmlinux-h-path="${vmlinux_h}" \
+	--with-vmlinux-h=provided \
 %endif
 	--with-python3
 
