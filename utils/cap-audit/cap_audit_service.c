@@ -10,6 +10,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <grp.h>
+#include <limits.h>
 #include <pwd.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -30,6 +31,18 @@ struct word_buf {
 	size_t capacity;
 	int started;
 };
+
+enum numeric_id_result {
+	NUMERIC_ID_INVALID = -1,
+	NUMERIC_ID_NAME,
+	NUMERIC_ID_VALID,
+};
+
+#define LEGACY_INVALID_ID 65535UL
+/* capng_change_id takes int IDs and reserves -1 to mean "no change". */
+#define MAX_CHANGE_ID ((unsigned long)INT_MAX)
+/* Supplementary groups use gid_t directly, whose all-ones value is invalid. */
+#define MAX_SUPPLEMENTARY_GID ((unsigned long)((gid_t)-2))
 
 static char *trim(char *str)
 {
@@ -124,32 +137,52 @@ static int replace_string(char **dst, const char *src)
 	return 0;
 }
 
-static int parse_unsigned_id(const char *value, unsigned long *id)
+static int id_in_range(unsigned long id, unsigned long max)
+{
+	return id <= max && id != LEGACY_INVALID_ID;
+}
+
+static enum numeric_id_result parse_numeric_id(const char *value,
+						unsigned long max,
+						unsigned long *id)
 {
 	char *end = NULL;
 	unsigned long parsed;
 
+	if (!value || value[0] == '\0' || value[0] == '+' ||
+	    value[0] == '-')
+		return NUMERIC_ID_INVALID;
+	if (!isdigit((unsigned char)value[0]))
+		return NUMERIC_ID_NAME;
+
 	errno = 0;
 	parsed = strtoul(value, &end, 10);
-	if (errno || !end || *end != '\0')
-		return -1;
+	if (!end || end == value || *end != '\0')
+		return NUMERIC_ID_NAME;
+	if (errno || !id_in_range(parsed, max))
+		return NUMERIC_ID_INVALID;
 
 	*id = parsed;
-	return 0;
+	return NUMERIC_ID_VALID;
 }
 
-static int resolve_group_token(const char *value, gid_t *gid)
+static int resolve_group_token(const char *value, gid_t *gid,
+			       unsigned long max)
 {
 	struct group *grp;
 	unsigned long parsed;
+	enum numeric_id_result result;
 
-	if (parse_unsigned_id(value, &parsed) == 0) {
+	result = parse_numeric_id(value, max, &parsed);
+	if (result == NUMERIC_ID_VALID) {
 		*gid = (gid_t)parsed;
 		return 0;
 	}
+	if (result == NUMERIC_ID_INVALID)
+		return -1;
 
 	grp = getgrnam(value);
-	if (!grp)
+	if (!grp || !id_in_range((unsigned long)grp->gr_gid, max))
 		return -1;
 
 	*gid = grp->gr_gid;
@@ -160,26 +193,35 @@ static int resolve_user_raw(service_config_t *cfg)
 {
 	struct passwd *pw;
 	unsigned long parsed;
+	enum numeric_id_result result;
 
 	if (!cfg->user_is_set)
 		return 0;
 
-	if (parse_unsigned_id(cfg->user_raw, &parsed) == 0) {
+	result = parse_numeric_id(cfg->user_raw, MAX_CHANGE_ID, &parsed);
+	if (result == NUMERIC_ID_INVALID)
+		return -EINVAL;
+	if (result == NUMERIC_ID_VALID) {
 		cfg->user_uid = (uid_t)parsed;
 		pw = getpwuid(cfg->user_uid);
 		if (pw) {
+			if (!id_in_range((unsigned long)pw->pw_gid,
+					 MAX_CHANGE_ID))
+				return -ERANGE;
 			cfg->user_primary_gid = pw->pw_gid;
-			cfg->user_resolved = true;
 		} else {
 			cfg->user_primary_gid = (gid_t)parsed;
-			cfg->user_resolved = true;
 		}
+		cfg->user_resolved = true;
 		return 0;
 	}
 
 	pw = getpwnam(cfg->user_raw);
 	if (!pw)
-		return -1;
+		return -ENOENT;
+	if (!id_in_range((unsigned long)pw->pw_uid, MAX_CHANGE_ID) ||
+	    !id_in_range((unsigned long)pw->pw_gid, MAX_CHANGE_ID))
+		return -ERANGE;
 
 	cfg->user_uid = pw->pw_uid;
 	cfg->user_primary_gid = pw->pw_gid;
@@ -192,7 +234,9 @@ static int fallback_to_nobody(service_config_t *cfg)
 	struct passwd *pw;
 
 	pw = getpwnam("nobody");
-	if (pw) {
+	if (pw && pw->pw_uid != 0 && pw->pw_gid != 0 &&
+	    id_in_range((unsigned long)pw->pw_uid, MAX_CHANGE_ID) &&
+	    id_in_range((unsigned long)pw->pw_gid, MAX_CHANGE_ID)) {
 		cfg->user_uid = pw->pw_uid;
 		cfg->user_primary_gid = pw->pw_gid;
 	} else {
@@ -203,22 +247,32 @@ static int fallback_to_nobody(service_config_t *cfg)
 	if (replace_string(&cfg->user_raw, "nobody") != 0)
 		return -1;
 
+	/* Downstream code treats this as the effective simulated User=. */
+	cfg->user_is_set = true;
 	cfg->user_resolved = true;
 	return 0;
 }
 
 static int finalize_user(service_config_t *cfg)
 {
-	if (!cfg->user_is_set)
+	int rc;
+
+	if (!cfg->user_is_set) {
+		if (cfg->dynamic_user_set && cfg->dynamic_user)
+			return fallback_to_nobody(cfg);
+		return 0;
+	}
+
+	rc = resolve_user_raw(cfg);
+	if (rc == 0)
 		return 0;
 
-	if (resolve_user_raw(cfg) == 0)
-		return 0;
-
-	if (cfg->dynamic_user_set && cfg->dynamic_user)
+	/* Only a missing dynamic name is eligible for the nobody fallback. */
+	if (rc == -ENOENT && cfg->dynamic_user_set && cfg->dynamic_user)
 		return fallback_to_nobody(cfg);
 
-	fprintf(stderr, "Error: unable to resolve User=%s\n", cfg->user_raw);
+	fprintf(stderr, "Error: invalid or unresolved User=%s\n",
+		cfg->user_raw);
 	return -1;
 }
 
@@ -548,7 +602,8 @@ static int parse_supplementary_groups(gid_list_t *list, const char *value)
 	     token = strtok_r(NULL, " \t", &saveptr)) {
 		gid_t gid;
 
-		if (resolve_group_token(token, &gid) != 0) {
+		if (resolve_group_token(token, &gid,
+					MAX_SUPPLEMENTARY_GID) != 0) {
 			fprintf(stderr,
 				"Error: unable to resolve SupplementaryGroups=%s\n",
 				token);
@@ -589,7 +644,7 @@ static int set_group(service_config_t *cfg, const char *value)
 		return 0;
 	}
 
-	if (resolve_group_token(value, &cfg->group_gid) != 0) {
+	if (resolve_group_token(value, &cfg->group_gid, MAX_CHANGE_ID) != 0) {
 		fprintf(stderr, "Error: unable to resolve Group=%s\n", value);
 		return -1;
 	}
@@ -846,13 +901,34 @@ int apply_service_config(const service_config_t *cfg)
 	if (!cfg)
 		return 0;
 
+	if ((cfg->user_is_set && !cfg->user_resolved) ||
+	    (cfg->dynamic_user && !cfg->user_resolved)) {
+		fprintf(stderr, "Error: service user is not resolved\n");
+		return -1;
+	}
+
 	if (cfg->user_is_set) {
+		gid_t gid = cfg->group_is_set ? cfg->group_gid :
+			    cfg->user_primary_gid;
+
+		if (!id_in_range((unsigned long)cfg->user_uid,
+				 MAX_CHANGE_ID) ||
+		    !id_in_range((unsigned long)gid, MAX_CHANGE_ID)) {
+			fprintf(stderr,
+				"Error: service credentials are out of range\n");
+			return -1;
+		}
 		target_uid = (int)cfg->user_uid;
-		target_gid = cfg->group_is_set ? (int)cfg->group_gid :
-			     (int)cfg->user_primary_gid;
+		target_gid = (int)gid;
 		non_root = cfg->user_uid != 0;
 		flags = (capng_flags_t)(flags | CAPNG_INIT_SUPP_GRP);
 	} else if (cfg->group_is_set) {
+		if (!id_in_range((unsigned long)cfg->group_gid,
+				 MAX_CHANGE_ID)) {
+			fprintf(stderr,
+				"Error: service group is out of range\n");
+			return -1;
+		}
 		target_gid = (int)cfg->group_gid;
 	}
 
