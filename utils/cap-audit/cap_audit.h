@@ -35,7 +35,7 @@
 #include "cap-ng.h"
 #include "classify_app.h"
 #include "cap_audit.skel.h"
-#include "../gcc-attributes.h"
+#include "gcc-attributes.h"
 
 #ifndef CAP_OPT_NOAUDIT
 #define CAP_OPT_NOAUDIT 0x2

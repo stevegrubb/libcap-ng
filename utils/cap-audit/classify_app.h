@@ -4,7 +4,7 @@
 #ifndef CAP_AUDIT_CLASSIFY_APP_H
 #define CAP_AUDIT_CLASSIFY_APP_H
 
-#include "../gcc-attributes.h"
+#include "gcc-attributes.h"
 
 typedef enum { UNSUPPORTED, ELF, PYTHON } type_t;
 

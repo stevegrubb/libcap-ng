@@ -20,7 +20,9 @@
 SUBDIRS = test
 DIST_SUBDIRS = test
 
-AM_CPPFLAGS = -I${top_srcdir} -I${top_srcdir}/src -I$(top_builddir)/utils/cap-audit ${LIBBPF_CFLAGS} ${LIBAUDIT_CFLAGS}
+AM_CPPFLAGS = -I${top_srcdir} -I${top_srcdir}/src \
+	-I$(top_builddir)/utils \
+	-I$(top_builddir)/utils/cap-audit ${LIBBPF_CFLAGS} ${LIBAUDIT_CFLAGS}
 AM_CFLAGS = -W -Wall -Wshadow ${WFLAGS} -Wundef -D_GNU_SOURCE
 
 if BUILD_CAP_AUDIT
@@ -29,6 +31,8 @@ cap_audit_SOURCES = cap_audit.c \
 	cap_audit_analyze.c \
 	cap_audit_event.c \
 	cap_audit_json.c \
+	cap_audit_path.c \
+	cap_audit_path.h \
 	cap_audit_service.c \
 	classify_app.c \
 	classify_app.h \

@@ -20,6 +20,7 @@
  */
 
 #include "cap_audit.h"
+#include "cap_audit_path.h"
 
 #include <bpf/bpf.h>
 #include <errno.h>
@@ -109,18 +110,6 @@
 struct audit_state state;
 int audit_machine = -1;
 
-static char *make_path_candidate(const char *dir, size_t dir_len,
-				 const char *target, size_t target_len)
-	__attribute_malloc__
-	__attr_dealloc_free
-	__attr_access ((__read_only__, 1, 2))
-	__attr_access ((__read_only__, 3))
-	__wur;
-static char *resolve_target_command(const char *target)
-	__attribute_malloc__
-	__attr_dealloc_free
-	__attr_access ((__read_only__, 1))
-	__wur;
 static char **prepend_execstart_argv(const service_config_t *cfg,
 				     char **args, int arg_count)
 	__attribute_malloc__
@@ -164,70 +153,6 @@ static int init_capng(void)
 	}
 
 	return 0;
-}
-
-static char *make_path_candidate(const char *dir, size_t dir_len,
-				 const char *target, size_t target_len)
-{
-	char candidate[PATH_MAX];
-
-	if (!dir_len) {
-		/*
-		 * Empty PATH components mean cwd; keep a slash in the
-		 * resolved path so the later execvp() does not search PATH.
-		 */
-		if (target_len + 3 > sizeof(candidate))
-			return NULL;
-		candidate[0] = '.';
-		candidate[1] = '/';
-		memcpy(candidate + 2, target, target_len + 1);
-		return strdup(candidate);
-	}
-
-	if (dir_len + target_len + 2 > sizeof(candidate))
-		return NULL;
-
-	memcpy(candidate, dir, dir_len);
-	candidate[dir_len] = '/';
-	memcpy(candidate + dir_len + 1, target, target_len + 1);
-
-	return strdup(candidate);
-}
-
-static char *resolve_target_command(const char *target)
-{
-	const char *path;
-	const char *dir;
-	size_t target_len;
-
-	if (!target || !target[0])
-		return NULL;
-
-	if (strchr(target, '/'))
-		return access(target, X_OK) == 0 ? strdup(target) : NULL;
-
-	target_len = strlen(target);
-	path = getenv("PATH");
-	if (!path || !path[0])
-		return NULL;
-
-	for (dir = path; dir;) {
-		char *candidate;
-		const char *next = strchr(dir, ':');
-		size_t dir_len = next ? (size_t)(next - dir) : strlen(dir);
-
-		candidate = make_path_candidate(dir, dir_len, target,
-						target_len);
-		if (candidate) {
-			if (access(candidate, X_OK) == 0)
-				return candidate;
-			free(candidate);
-		}
-
-		dir = next ? next + 1 : NULL;
-	}
-
-	return NULL;
 }
 
 static char **prepend_execstart_argv(const service_config_t *cfg,
@@ -532,10 +457,10 @@ int main(int argc, char **argv)
 		    apply_service_config(state.service_cfg) != 0)
 			_exit(1);
 		/*
-		 * Use the resolved candidate so execvp() does not repeat PATH
-		 * lookup, while keeping its normal ENOEXEC shell fallback.
+		 * The earlier path check is only diagnostic. Repeat lookup here
+		 * so execvp() preserves PATH fallback if a candidate changes.
 		 */
-		execvp(target_path, state.target_argv);
+		execvp(state.target_argv[0], state.target_argv);
 		perror("execvp");
 		exit(1);
 	} else if (child < 0) {
