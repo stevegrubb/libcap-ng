@@ -381,11 +381,15 @@ RECOMMENDATIONS:
 ----------------------------------------------------------------------
   Programmatic solution (C with libcap-ng):
     #include <cap-ng.h>
+    #include <stdio.h>
+    #include <stdlib.h>
     ...
     capng_clear(CAPNG_SELECT_BOTH);
     capng_updatev(CAPNG_ADD, CAPNG_EFFECTIVE|CAPNG_PERMITTED, CHOWN, DAC_READ_SEARCH, SETGID, SETUID, NET_BIND_SERVICE, NET_ADMIN, SYS_CHROOT, SYS_ADMIN, SYS_RESOURCE, AUDIT_WRITE, MAC_ADMIN, -1);
-    if (capng_change_id(uid, gid, CAPNG_DROP_SUPP_GRP | CAPNG_CLEAR_BOUNDING))
+    if (capng_change_id(uid, gid, CAPNG_DROP_SUPP_GRP | CAPNG_CLEAR_BOUNDING)) {
 	perror("capng_change_id");
+	exit(EXIT_FAILURE);
+    }
 
   For systemd service:
     [Service]

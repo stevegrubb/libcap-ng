@@ -873,6 +873,8 @@ void analyze_capabilities(void)
 
 			if (state.app.prog_type == ELF) {
 				printf("    #include <cap-ng.h>\n");
+				printf("    #include <stdio.h>\n");
+				printf("    #include <stdlib.h>\n");
 				printf("    ...\n");
 				printf("    capng_clear(CAPNG_SELECT_BOTH);\n");
 				print_updatev_wrapped("    capng_updatev(CAPNG_ADD, "
@@ -880,8 +882,11 @@ void analyze_capabilities(void)
 						      "", "-1);\n");
 				printf("    if (capng_change_id(uid, gid, "
 				       "CAPNG_DROP_SUPP_GRP | "
-				       "CAPNG_CLEAR_BOUNDING))\n");
-				printf("\tperror(\"capng_change_id\");\n\n");
+				       "CAPNG_CLEAR_BOUNDING)) {\n");
+				printf("\tperror(\"capng_change_id\");\n");
+				/* Failure can leave partial privileges. */
+				printf("\texit(EXIT_FAILURE);\n");
+				printf("    }\n\n");
 			} else if (state.app.prog_type == PYTHON) {
 				printf("    import sys\n");
 				printf("    import _capng as capng\n");
