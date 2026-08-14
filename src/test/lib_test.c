@@ -51,8 +51,10 @@ static unsigned int get_last_cap(void)
 		if (num > 0) {
 			errno = 0;
 			unsigned int val = strtoul(buf, NULL, 10);
-			if (errno == 0)
+			if (errno == 0) {
+				close(fd);
 				return val;
+			}
 		}
 		close(fd);
 	}
