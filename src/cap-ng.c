@@ -717,7 +717,7 @@ static int load_data(const struct vfs_ns_cap_data *filedata, int size)
 static int load_data(const struct vfs_cap_data *filedata, int size)
 #endif
 {
-	unsigned int magic;
+	unsigned int i, magic, words;
 
 	if (m.cap_ver == 1)
 		return -1;	// Should never get here but just in case
@@ -729,36 +729,38 @@ static int load_data(const struct vfs_cap_data *filedata, int size)
 			m.vfs_cap_ver = 1;
 			if (size != XATTR_CAPS_SZ_1)
 				return -1;
+			words = 1;
 			break;
 		case VFS_CAP_REVISION_2:
 			m.vfs_cap_ver = 2;
 			if (size != XATTR_CAPS_SZ_2)
 				return -1;
+			words = VFS_CAP_U32;
 			break;
 #ifdef VFS_CAP_REVISION_3
 		case VFS_CAP_REVISION_3:
 			m.vfs_cap_ver = 3;
 			if (size != XATTR_CAPS_SZ_3)
 				return -1;
+			words = VFS_CAP_U32;
 			break;
 #endif
 		default:
 			return -1;
 	}
 
-	// Now stuff the data structures
-	m.data.v3[0].permitted = FIXUP(filedata->data[0].permitted);
-	m.data.v3[1].permitted = FIXUP(filedata->data[1].permitted);
-	m.data.v3[0].inheritable = FIXUP(filedata->data[0].inheritable);
-	m.data.v3[1].inheritable = FIXUP(filedata->data[1].inheritable);
-	if (magic & VFS_CAP_FLAGS_EFFECTIVE) {
-		m.data.v3[0].effective =
-			m.data.v3[0].permitted | m.data.v3[0].inheritable;
-		m.data.v3[1].effective =
-			m.data.v3[1].permitted | m.data.v3[1].inheritable;
-	} else {
-		m.data.v3[0].effective = 0;
-		m.data.v3[1].effective = 0;
+	/*
+	 * Revision 1 contains only data[0]. Clear fields omitted by older
+	 * formats before copying the number of words validated above.
+	 */
+	memset(&m.data, 0, sizeof(m.data));
+	m.rootid = CAPNG_UNSET_ROOTID;
+	for (i = 0; i < words; i++) {
+		m.data.v3[i].permitted = FIXUP(filedata->data[i].permitted);
+		m.data.v3[i].inheritable = FIXUP(filedata->data[i].inheritable);
+		if (magic & VFS_CAP_FLAGS_EFFECTIVE)
+			m.data.v3[i].effective = m.data.v3[i].permitted |
+						m.data.v3[i].inheritable;
 	}
 #ifdef VFS_CAP_REVISION_3
 	if (size == XATTR_CAPS_SZ_3) {
@@ -777,9 +779,9 @@ int capng_get_caps_fd(int fd)
 #else
 	int rc;
 #ifdef VFS_CAP_REVISION_3
-	struct vfs_ns_cap_data filedata;
+	struct vfs_ns_cap_data filedata = { 0 };
 #else
-	struct vfs_cap_data filedata;
+	struct vfs_cap_data filedata = { 0 };
 #endif
 	if (m.state == CAPNG_NEW)
 		init();
