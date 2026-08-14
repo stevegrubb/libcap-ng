@@ -30,6 +30,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/resource.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -120,6 +121,24 @@ static char **prepend_execstart_argv(const service_config_t *cfg,
 static int has_service_suffix(const char *path)
 	__attr_access ((__read_only__, 1))
 	__attribute_pure__;
+
+static int read_user_ns_inum(__u32 *inum)
+{
+	struct stat st;
+
+	if (stat("/proc/self/ns/user", &st) != 0) {
+		fprintf(stderr, "Error: failed to read user namespace: %s\n",
+			strerror(errno));
+		return -1;
+	}
+	if (st.st_ino == 0 || st.st_ino > UINT_MAX) {
+		fprintf(stderr, "Error: invalid user namespace inode\n");
+		return -1;
+	}
+
+	*inum = (__u32)st.st_ino;
+	return 0;
+}
 
 static void sig_handler(int sig __attribute__((unused)))
 {
@@ -371,6 +390,8 @@ int main(int argc, char **argv)
 				"Hint: to audit a systemd unit, use --service FILE\n");
 		goto err_target_path;
 	}
+	if (read_user_ns_inum(&state.baseline_user_ns_inum) != 0)
+		goto err_target_path;
 
 	if (init_capng() != 0)
 		goto err_target_path;

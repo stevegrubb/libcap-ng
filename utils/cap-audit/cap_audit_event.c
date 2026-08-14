@@ -119,6 +119,15 @@ int handle_cap_event(void *ctx __attribute__((unused)), void *data,
 		return 0;
 	}
 
+	/*
+	 * A target namespace does not identify the namespace that scoped the
+	 * checked credentials. Do not turn an ambiguous observation into a
+	 * potentially broader capability grant.
+	 */
+	if (e->targ_ns_inum != 0 && state.baseline_user_ns_inum != 0 &&
+	    e->targ_ns_inum != state.baseline_user_ns_inum)
+		state.foreign_target_ns_observed = true;
+
 	if (state.verbose) {
 		printf("[CAP] pid=%d cap=%s result=%s syscall=%s "
 		       "comm=%s\n",

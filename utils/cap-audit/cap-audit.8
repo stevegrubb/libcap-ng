@@ -72,6 +72,12 @@ prefix and the legacy
 .B !!
 prefix are rejected because cap-audit cannot safely simulate their execution
 semantics.
+.PP
+If a capability check targets a user namespace different from the namespace
+in which cap-audit started, the observation is retained in the diagnostic
+output but automatic capability recommendations are suppressed. The safe
+scope of a capability grant cannot be determined from the target namespace
+alone.
 .TP
 .BR --
 End option parsing and treat the rest of the command line as the program to

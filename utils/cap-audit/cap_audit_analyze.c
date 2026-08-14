@@ -857,7 +857,16 @@ void analyze_capabilities(void)
 	printf("  Denied operations: %d\n", denied_count);
 	printf("\n");
 
-	if (state.service_cfg) {
+	if (state.foreign_target_ns_observed) {
+		printf("RECOMMENDATIONS:\n");
+		print_rule('-');
+		print_wrapped_text("  Warning: ",
+				   "Capability checks targeted a different user "
+				   "namespace. Automatic capability recommendations "
+				   "are suppressed because their safe scope cannot "
+				   "be determined.");
+		printf("\n");
+	} else if (state.service_cfg) {
 		print_service_recommendations();
 	} else if (required_count > 0) {
 		printf("RECOMMENDATIONS:\n");
