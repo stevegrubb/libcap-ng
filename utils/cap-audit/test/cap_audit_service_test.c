@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/prctl.h>
 #include <unistd.h>
 
 #include "cap_audit.h"
@@ -207,6 +208,56 @@ static void test_sink_validation(void)
 		fail("Invalid credentials reached capng_change_id");
 }
 
+static void test_exec_start_privilege_prefixes(const char *dir)
+{
+	service_config_t cfg;
+	const char bang_unit[] =
+		"[Service]\n"
+		"User=1234\n"
+		"Group=1234\n"
+		"SupplementaryGroups=1 2\n"
+		"CapabilityBoundingSet=CAP_CHOWN\n"
+		"NoNewPrivileges=yes\n"
+		"ExecStart=-!/usr/bin/true\n";
+	const char plus_unit[] =
+		"[Service]\n"
+		"ExecStart=-+/usr/bin/true\n";
+	const char combined_plus_unit[] =
+		"[Service]\n"
+		"ExecStart=!-+/usr/bin/true\n";
+	const char double_bang_unit[] =
+		"[Service]\n"
+		"ExecStart=!!/usr/bin/true\n";
+
+	if (parse_unit(dir, "bang.service", bang_unit, &cfg) != 0)
+		fail("ExecStart=! service should parse");
+	if (!cfg.exec_start_no_setuid)
+		fail("ExecStart=! credential semantics were not retained");
+	if (!cfg.exec_argv || strcmp(cfg.exec_argv[0], "/usr/bin/true"))
+		fail("ExecStart=! prefixes were not removed from executable");
+
+	change_id_calls = 0;
+	changed_uid = 0;
+	changed_gid = 0;
+	changed_flags = CAPNG_NO_FLAG;
+	if (apply_service_config(&cfg) != 0)
+		fail("ExecStart=! configuration should apply");
+	if (change_id_calls != 1 || changed_uid != -1 || changed_gid != -1)
+		fail("ExecStart=! must leave credential changes to the command");
+	if (changed_flags & (CAPNG_INIT_SUPP_GRP |
+			     CAPNG_APPLY_STAGED_GROUPS))
+		fail("ExecStart=! must not apply supplementary groups");
+	if (!(changed_flags & CAPNG_APPLY_BOUNDING))
+		fail("ExecStart=! must still apply the capability bounding set");
+	if (prctl(PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) != 1)
+		fail("ExecStart=! must still apply NoNewPrivileges");
+	free_config(&cfg);
+
+	expect_parse_failure(dir, "plus.service", plus_unit);
+	expect_parse_failure(dir, "combined-plus.service", combined_plus_unit);
+	expect_parse_failure(dir, "double-bang.service", double_bang_unit);
+}
+
 int main(void)
 {
 	char dir[] = "/tmp/libcap-ng-service-XXXXXX";
@@ -219,6 +270,7 @@ int main(void)
 	test_valid_credentials(dir);
 	test_invalid_credentials(dir);
 	test_sink_validation();
+	test_exec_start_privilege_prefixes(dir);
 
 	rmdir(dir);
 	puts("cap-audit service credential tests passed");

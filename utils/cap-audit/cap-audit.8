@@ -57,6 +57,21 @@ a command can be supplied explicitly; if the first supplied word starts with
 it is treated as replacement arguments for the parsed
 .B ExecStart=
 executable.
+.PP
+A single
+.B !
+prefix on the
+.B ExecStart=
+executable is supported. It leaves the configured user, group, and
+supplementary group changes to the executed program while continuing to apply
+the configured capability and
+.B NoNewPrivileges=
+settings. The fully privileged
+.B +
+prefix and the legacy
+.B !!
+prefix are rejected because cap-audit cannot safely simulate their execution
+semantics.
 .TP
 .BR --
 End option parsing and treat the rest of the command line as the program to

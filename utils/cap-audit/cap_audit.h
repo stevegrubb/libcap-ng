@@ -132,6 +132,8 @@ typedef struct {
 	char *exec_start;
 	char **exec_argv;
 	size_t exec_argc;
+	/* ExecStart=! leaves configured credential changes to the command. */
+	bool exec_start_no_setuid;
 } service_config_t;
 
 struct audit_state {

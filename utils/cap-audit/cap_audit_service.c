@@ -454,6 +454,7 @@ static int strip_exec_prefixes(service_config_t *cfg)
 	const char *arg0;
 	char *copy;
 	size_t offset = 0;
+	int no_setuid = 0;
 
 	if (!cfg->exec_argv || !cfg->exec_argv[0])
 		return 0;
@@ -461,8 +462,22 @@ static int strip_exec_prefixes(service_config_t *cfg)
 	arg0 = cfg->exec_argv[0];
 	while (arg0[offset] == '-' || arg0[offset] == '@' ||
 	       arg0[offset] == ':' || arg0[offset] == '+' ||
-	       arg0[offset] == '!')
+	       arg0[offset] == '!') {
+		if (arg0[offset] == '+') {
+			fprintf(stderr,
+				"Error: ExecStart '+' prefix is unsupported\n");
+			return -1;
+		}
+		if (arg0[offset] == '!') {
+			if (no_setuid) {
+				fprintf(stderr,
+					"Error: ExecStart '!!' prefix is unsupported\n");
+				return -1;
+			}
+			no_setuid = 1;
+		}
 		offset++;
+	}
 	if (offset == 0)
 		return 0;
 	if (arg0[offset] == '\0') {
@@ -476,6 +491,7 @@ static int strip_exec_prefixes(service_config_t *cfg)
 
 	free(cfg->exec_argv[0]);
 	cfg->exec_argv[0] = copy;
+	cfg->exec_start_no_setuid = no_setuid;
 	return 0;
 }
 
@@ -485,6 +501,7 @@ static int set_exec_start(service_config_t *cfg, const char *value)
 	size_t argc = 0;
 
 	free_exec_argv(cfg);
+	cfg->exec_start_no_setuid = false;
 	if (replace_string(&cfg->exec_start, value) != 0)
 		return -1;
 	if (value[0] == '\0')
@@ -853,19 +870,23 @@ void print_service_config(const service_config_t *cfg)
 
 static int stage_service_caps(const service_config_t *cfg, int non_root)
 {
+	capng_type_t type = CAPNG_INHERITABLE | CAPNG_AMBIENT;
 	int cap;
 
-	if (!non_root)
+	if (!non_root && !cfg->exec_start_no_setuid)
 		return 0;
 
-	capng_clear(CAPNG_SELECT_CAPS | CAPNG_SELECT_AMBIENT);
+	if (non_root) {
+		capng_clear(CAPNG_SELECT_CAPS | CAPNG_SELECT_AMBIENT);
+		type |= CAPNG_EFFECTIVE | CAPNG_PERMITTED;
+	} else {
+		/* With ExecStart=!, systemd retains credentials and capabilities. */
+		capng_clear(CAPNG_SELECT_AMBIENT);
+	}
 	for (cap = 0; cap <= CAP_LAST_CAP; cap++) {
 		if (!cfg->ambient.caps[cap])
 			continue;
-		if (capng_update(CAPNG_ADD,
-				 CAPNG_EFFECTIVE | CAPNG_PERMITTED |
-				 CAPNG_INHERITABLE | CAPNG_AMBIENT,
-				 cap) != 0)
+		if (capng_update(CAPNG_ADD, type, cap) != 0)
 			return -1;
 	}
 
@@ -907,7 +928,7 @@ int apply_service_config(const service_config_t *cfg)
 		return -1;
 	}
 
-	if (cfg->user_is_set) {
+	if (!cfg->exec_start_no_setuid && cfg->user_is_set) {
 		gid_t gid = cfg->group_is_set ? cfg->group_gid :
 			    cfg->user_primary_gid;
 
@@ -922,7 +943,7 @@ int apply_service_config(const service_config_t *cfg)
 		target_gid = (int)gid;
 		non_root = cfg->user_uid != 0;
 		flags = (capng_flags_t)(flags | CAPNG_INIT_SUPP_GRP);
-	} else if (cfg->group_is_set) {
+	} else if (!cfg->exec_start_no_setuid && cfg->group_is_set) {
 		if (!id_in_range((unsigned long)cfg->group_gid,
 				 MAX_CHANGE_ID)) {
 			fprintf(stderr,
@@ -952,7 +973,8 @@ int apply_service_config(const service_config_t *cfg)
 	if (!cfg->ambient.seen || !cap_set_any(&cfg->ambient))
 		flags = (capng_flags_t)(flags | CAPNG_CLEAR_AMBIENT);
 
-	if (cfg->sup_groups.is_set && cfg->sup_groups.count > 0) {
+	if (!cfg->exec_start_no_setuid && cfg->sup_groups.is_set &&
+	    cfg->sup_groups.count > 0) {
 		if (capng_stage_additional_groups(cfg->sup_groups.gids,
 						  cfg->sup_groups.count) != 0) {
 			fprintf(stderr,
