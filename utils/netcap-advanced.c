@@ -157,7 +157,7 @@ struct defense_info {
 
 struct process_info {
 	int pid;
-	int uid;
+	uid_t uid;
 	char *comm;
 	char *exe;
 	char *unit;
@@ -1294,7 +1294,7 @@ static char *caps_summary_for_pid(int pid, int *privileged, int *has_amb,
  * Side effects/assumptions: Operates on in-memory data and may read
  * procfs/netns state; it does not change kernel configuration.
  */
-static void parse_status_defenses(int pid, int uid, struct defense_info *d,
+static void parse_status_defenses(int pid, uid_t uid, struct defense_info *d,
 	const struct proc_status *status)
 {
 	char path[64];
@@ -2906,8 +2906,8 @@ static void render_tree_process_details(const char *prefix,
 	unsigned int flags = 0;
 	enum cap_severity priv_sev = caps_worst_severity(p->caps);
 
-	snprintf(line, sizeof(line), "%s (pid=%d uid=%d%s%s%s%s)",
-		p->comm, p->pid, p->uid,
+	snprintf(line, sizeof(line), "%s (pid=%d uid=%u%s%s%s%s)",
+		p->comm, p->pid, (unsigned int)p->uid,
 		p->exe ? " exe=" : "",
 		p->exe ? p->exe : "",
 		p->unit ? " unit=" : "",
@@ -3079,7 +3079,8 @@ static void render_json_process(struct process_info *p,
 		printf(", \"exe\": ");
 		json_escape(p->exe);
 	}
-	printf(", \"pid\": %d, \"uid\": %d", p->pid, p->uid);
+	printf(", \"pid\": %d, \"uid\": %u", p->pid,
+		(unsigned int)p->uid);
 	if (p->unit) {
 		printf(", \"unit\": ");
 		json_escape(p->unit);
