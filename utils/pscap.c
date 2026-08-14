@@ -23,6 +23,7 @@
  */
 
 #include "config.h"
+#include <limits.h>
 #include <stdio.h>
 #include <unistd.h>
 #include <stdlib.h>
@@ -361,21 +362,24 @@ int main(int argc, char *argv[])
 			continue;
 		}
 		if (strcmp(argv[i], "-p") == 0) {
+			long parsed_pid;
+
 			if (i + 1 >= (size_t)argc)
 				usage();
 			errno = 0;
-			target_pid = strtol(argv[++i], &endptr, 10);
+			parsed_pid = strtol(argv[++i], &endptr, 10);
 			if (errno) {
 				fprintf(stderr, "Can't read pid: %s\n",
 					argv[i]);
 				return 1;
 			}
 			if ((endptr == argv[i]) || (*endptr != '\0')
-			    || !target_pid) {
+			    || parsed_pid <= 0 || parsed_pid > INT_MAX) {
 				fprintf(stderr, "Invalid pid argument: %s\n",
 					argv[i]);
 				return 1;
 			}
+			target_pid = (pid_t)parsed_pid;
 			if (target_pid == 1)
 				show_all = 1;
 			continue;
