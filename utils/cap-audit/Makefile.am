@@ -21,7 +21,7 @@ SUBDIRS = test
 DIST_SUBDIRS = test
 
 AM_CPPFLAGS = -I${top_srcdir} -I${top_srcdir}/src \
-	-I$(top_builddir)/utils \
+	-I$(top_srcdir)/utils \
 	-I$(top_builddir)/utils/cap-audit ${LIBBPF_CFLAGS} ${LIBAUDIT_CFLAGS}
 AM_CFLAGS = -W -Wall -Wshadow ${WFLAGS} -Wundef -D_GNU_SOURCE
 
