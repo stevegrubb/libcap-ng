@@ -35,6 +35,8 @@ const char *cap_name_safe(int cap)
 		return "net_bind_service";
 	case CAP_SYS_CHROOT:
 		return "sys_chroot";
+	case CAP_SYS_PTRACE:
+		return "sys_ptrace";
 	case CAP_SYS_ADMIN:
 		return "sys_admin";
 	case CAP_SYS_RESOURCE:
@@ -138,6 +140,19 @@ static int contains_tokens(const char *output, const char *const *tokens,
 	return 1;
 }
 
+static size_t count_text(const char *output, const char *expected)
+{
+	size_t count = 0;
+	size_t len = strlen(expected);
+
+	while ((output = strstr(output, expected)) != NULL) {
+		count++;
+		output += len;
+	}
+
+	return count;
+}
+
 static void setup_analysis(service_config_t *service)
 {
 	static int denied_syscall = 257;
@@ -190,6 +205,28 @@ static void setup_analysis(service_config_t *service)
 	check->op_granted = 1;
 }
 
+static void setup_empty_analysis(service_config_t *service)
+{
+	memset(&state, 0, sizeof(state));
+	memset(service, 0, sizeof(*service));
+	state.app.exe = "/usr/bin/empty-target";
+	state.app.pid = 5678;
+	strcpy(state.app.kernel_version, "validation");
+	state.app.yama_ptrace_scope = 1;
+	state.app.protected_symlinks = 1;
+	state.app.suid_dumpable = 2;
+	state.service_file = "/tmp/empty.service";
+	state.service_cfg = service;
+
+	service->exec_start = "/usr/bin/empty-target";
+	service->bounding.seen = true;
+
+	state.app.checks[CAP_DAC_OVERRIDE].count = 1;
+	state.app.checks[CAP_DAC_OVERRIDE].denied = 1;
+	state.app.checks[CAP_SYS_PTRACE].count = 1;
+	state.app.checks[CAP_SYS_PTRACE].denied = 1;
+}
+
 int main(void)
 {
 	static const char *const denied_guidance[] = {
@@ -199,7 +236,6 @@ int main(void)
 		"does not add",
 		"capability",
 		"automatically",
-		"successful capset",
 	};
 	static const char *const capset_guidance[] = {
 		"CAPSET-ONLY CAPABILITIES",
@@ -256,6 +292,40 @@ int main(void)
 			     sizeof(capset_guidance) /
 			     sizeof(capset_guidance[0])))
 		fail("Capset-only capability lacked coordinated removal guidance");
+	if (strstr(output,
+		   "A listed capability is retained separately because a"))
+		fail("Unrelated capset caveat was shown for denied capabilities");
+
+	free(output);
+	state.app.checks[CAP_SYS_RESOURCE].count = 1;
+	state.app.checks[CAP_SYS_RESOURCE].denied = 1;
+	output = capture_analysis();
+	if (!strstr(output,
+		    "A listed capability is retained separately because a"))
+		fail("Capset caveat was omitted for an overlapping capability");
+
+	free(output);
+	setup_empty_analysis(&service);
+	output = capture_analysis();
+	if (!strstr(output,
+		    "None - No confirmed granted capability use was observed."))
+		fail("No-granted-use summary was not evidence based");
+	expect_line(output, "    CapabilityBoundingSet: (none)");
+	expect_line(output, "    CapabilityBoundingSet=");
+	if (strstr(output, "    CapabilityBoundingSet=(none)"))
+		fail("Empty recommendation used invalid systemd syntax");
+	if (!strstr(output, "CAPABILITY-RELATED SYSTEM CONTEXT:") ||
+	    !strstr(output, "kernel.yama.ptrace_scope = 1") ||
+	    !strstr(output, "fs.suid_dumpable = 2") ||
+	    !strstr(output,
+		    "Capabilities with related system context: 1"))
+		fail("Related system context was not grouped by capability");
+	if (count_text(output, "  CAP_SYS_PTRACE\n") != 1)
+		fail("CAP_SYS_PTRACE system context was duplicated");
+	if (strstr(output, "  CAP_DAC_OVERRIDE\n") ||
+	    strstr(output, "capability needed") ||
+	    strstr(output, "CONDITIONAL CAPABILITIES"))
+		fail("System context was presented as capability evidence");
 
 	free(output);
 	puts("cap-audit service recommendation tests passed");

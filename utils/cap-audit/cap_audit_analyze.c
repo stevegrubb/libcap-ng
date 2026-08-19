@@ -287,7 +287,7 @@ static const char *svc_user_name(const service_config_t *cfg)
 	return "root";
 }
 
-static void svc_print_cap_list(const bool caps[CAP_LAST_CAP + 1])
+static int svc_print_cap_list(const bool caps[CAP_LAST_CAP + 1])
 {
 	int cap;
 	int first = 1;
@@ -300,8 +300,8 @@ static void svc_print_cap_list(const bool caps[CAP_LAST_CAP + 1])
 		printf("%s", cap_name_safe(cap));
 		first = 0;
 	}
-	if (first)
-		printf("(none)");
+
+	return !first;
 }
 
 static void svc_print_cap_set(const cap_set_t *set)
@@ -311,7 +311,8 @@ static void svc_print_cap_set(const cap_set_t *set)
 		return;
 	}
 
-	svc_print_cap_list(set->caps);
+	if (!svc_print_cap_list(set->caps))
+		printf("(none)");
 }
 
 static void svc_build_recommended_caps(bool caps[CAP_LAST_CAP + 1])
@@ -589,6 +590,7 @@ static void svc_print_denied_review(const service_config_t *cfg)
 {
 	int cap;
 	int found = 0;
+	int capset_overlap = 0;
 
 	for (cap = 0; cap <= CAP_LAST_CAP; cap++) {
 		struct cap_check *check = &state.app.checks[cap];
@@ -608,18 +610,23 @@ static void svc_print_denied_review(const service_config_t *cfg)
 			print_wrapped_text("        Note: ",
 				"Capability is absent from the configured "
 				"CapabilityBoundingSet.");
+		if (cap_is_capset_only(cap))
+			capset_overlap = 1;
 		found = 1;
 	}
 
-	if (found)
+	if (found) {
 		print_wrapped_text("      ",
 			"Detailed evidence appears in CAPABILITIES WITH ONLY "
 			"NOT-GRANTED CHECKS above. A not-granted check does not "
-			"add a "
-			"capability automatically. A capability may still be "
-			"retained separately when a successful capset requested it.");
-	else
+			"add a capability automatically.");
+		if (capset_overlap)
+			print_wrapped_text("      ",
+				"A listed capability is retained separately because a "
+				"successful capset requested it.");
+	} else {
 		printf("    Capabilities with only not-granted checks: none\n");
+	}
 }
 
 static void svc_print_recommended_denials(void)
@@ -834,6 +841,7 @@ static void print_denied_recommendation_review(void)
 {
 	int cap;
 	int found = 0;
+	int capset_overlap = 0;
 
 	for (cap = 0; cap <= CAP_LAST_CAP; cap++) {
 		struct cap_check *check = &state.app.checks[cap];
@@ -851,25 +859,154 @@ static void print_denied_recommendation_review(void)
 		if (!label)
 			continue;
 		printf("    %s: %s\n", cap_name_safe(cap), label);
+		if (cap_is_capset_only(cap))
+			capset_overlap = 1;
 		found = 1;
 	}
 
 	if (found) {
 		print_wrapped_text("    ",
 			"A not-granted check does not add a capability "
-			"automatically. A capability may still be retained "
-			"separately when a successful capset requested it.");
+			"automatically.");
+		if (capset_overlap)
+			print_wrapped_text("    ",
+				"A listed capability is retained separately because a "
+				"successful capset requested it.");
 		printf("\n");
 	}
+}
+
+static int cap_has_related_system_context(int cap)
+{
+	/*
+	 * Global settings cannot be correlated with an individual check, so
+	 * they remain diagnostic context and never drive recommendations.
+	 * protected_symlinks is intentionally absent because that policy
+	 * explicitly ignores CAP_DAC_OVERRIDE.
+	 */
+	switch (cap) {
+	case CAP_SYS_PTRACE:
+		return state.app.yama_ptrace_scope > 0 ||
+		       state.app.suid_dumpable == 2;
+	case CAP_PERFMON:
+		return state.app.perf_event_paranoid >= 2;
+	case CAP_BPF:
+		return state.app.unprivileged_bpf_disabled == 1;
+	case CAP_SYSLOG:
+		return state.app.kptr_restrict >= 1 ||
+		       state.app.dmesg_restrict >= 1;
+	case CAP_SYS_MODULE:
+		return state.app.modules_disabled == 1;
+	case CAP_SYS_RAWIO:
+		return state.app.mmap_min_addr > 0;
+	case CAP_FOWNER:
+		return state.app.protected_hardlinks == 1;
+	default:
+		return 0;
+	}
+}
+
+static void print_system_context_value(const char *name, int value,
+				       const char *effect)
+{
+	print_wrappedf("    ", "%s = %d: %s", name, value, effect);
+}
+
+static int print_capability_system_context(void)
+{
+	int cap;
+	int count = 0;
+
+	printf("CAPABILITY-RELATED SYSTEM CONTEXT:\n");
+	print_rule('-');
+	for (cap = 0; cap <= CAP_LAST_CAP; cap++) {
+		char cap_name[64];
+
+		if (cap_total_checks(&state.app.checks[cap]) == 0 ||
+		    !cap_has_related_system_context(cap))
+			continue;
+		if (count == 0)
+			print_wrapped_text("  ",
+				"These settings govern operations that can use the "
+				"listed capabilities. They cannot be correlated with a "
+				"particular observed check and do not prove that a "
+				"capability is required.");
+
+		cap_name_upper_buf(cap, cap_name, sizeof(cap_name));
+		printf("  CAP_%s\n", cap_name);
+		switch (cap) {
+		case CAP_SYS_PTRACE:
+			if (state.app.yama_ptrace_scope > 0)
+				print_system_context_value(
+					"kernel.yama.ptrace_scope",
+					state.app.yama_ptrace_scope,
+					"may restrict ptrace access.");
+			if (state.app.suid_dumpable == 2)
+				print_system_context_value(
+					"fs.suid_dumpable", state.app.suid_dumpable,
+					"affects core dumps and ptrace of privileged "
+					"programs.");
+			break;
+		case CAP_PERFMON:
+			print_system_context_value(
+				"kernel.perf_event_paranoid",
+				state.app.perf_event_paranoid,
+				"may restrict performance monitoring.");
+			break;
+		case CAP_BPF:
+			print_system_context_value(
+				"kernel.unprivileged_bpf_disabled",
+				state.app.unprivileged_bpf_disabled,
+				"restricts unprivileged BPF use.");
+			break;
+		case CAP_SYSLOG:
+			if (state.app.kptr_restrict >= 1)
+				print_system_context_value(
+					"kernel.kptr_restrict",
+					state.app.kptr_restrict,
+					"restricts exposure of kernel pointers.");
+			if (state.app.dmesg_restrict >= 1)
+				print_system_context_value(
+					"kernel.dmesg_restrict",
+					state.app.dmesg_restrict,
+					"restricts access to the kernel log.");
+			break;
+		case CAP_SYS_MODULE:
+			print_system_context_value(
+				"kernel.modules_disabled", state.app.modules_disabled,
+				"permanently disables module loading; CAP_SYS_MODULE "
+				"cannot override it.");
+			break;
+		case CAP_SYS_RAWIO:
+			print_system_context_value(
+				"vm.mmap_min_addr", state.app.mmap_min_addr,
+				"restricts mappings below this address.");
+			break;
+		case CAP_FOWNER:
+			print_system_context_value(
+				"fs.protected_hardlinks",
+				state.app.protected_hardlinks,
+				"restricts creation of hard links to files not owned "
+				"by the caller.");
+			break;
+		default:
+			break;
+		}
+		printf("\n");
+		count++;
+	}
+	if (count == 0)
+		printf("  None\n\n");
+
+	return count;
 }
 
 void analyze_capabilities(void)
 {
 	int has_required = 0;
-	int has_conditional = 0;
 	int has_denied = 0;
 	int required_count = 0;
-	int conditional_count = 0;
+	int context_count;
 	int denied_count = 0;
 	int denied_manual = 0;
 	int denied_inconclusive = 0;
@@ -931,7 +1068,8 @@ void analyze_capabilities(void)
 		}
 		if (!has_required)
 			print_wrapped_text("  ",
-					   "None - Application does not require elevated capabilities!\n");
+				"None - No confirmed granted capability use was "
+				"observed.\n");
 	} else {
 		print_wrapped_text("",
 				   "INITIALIZATION CAPABILITIES (before capability drop):");
@@ -983,185 +1121,7 @@ void analyze_capabilities(void)
 
 	print_capset_only_section();
 
-	printf("CONDITIONAL CAPABILITIES:\n");
-	print_rule('-');
-
-	if (state.app.yama_ptrace_scope > 0) {
-		for (i = 0; i <= CAP_LAST_CAP; i++) {
-			if (cap_total_checks(&state.app.checks[i]) > 0 &&
-			    state.app.checks[i].granted == 0 &&
-			    i == CAP_SYS_PTRACE) {
-				has_conditional = 1;
-				conditional_count++;
-				printf("  CAP_SYS_PTRACE\n");
-				print_wrapped_text("    ",
-						   "Needed when kernel.yama.ptrace_scope > 0");
-				print_wrappedf("    ",
-					       "Current value: %d (capability needed)",
-					       state.app.yama_ptrace_scope);
-				printf("\n");
-			}
-		}
-	}
-
-	if (state.app.perf_event_paranoid >= 2) {
-		for (i = 0; i <= CAP_LAST_CAP; i++) {
-			if (cap_total_checks(&state.app.checks[i]) > 0 &&
-			    i == CAP_PERFMON) {
-				has_conditional = 1;
-				conditional_count++;
-				printf("  CAP_PERFMON\n");
-				print_wrapped_text("    ",
-						   "Needed when kernel.perf_event_paranoid >= 2");
-				print_wrappedf("    ",
-					       "Current value: %d (capability needed)",
-					       state.app.perf_event_paranoid);
-				print_wrapped_text("    Note: ",
-						   "CAP_SYS_ADMIN can substitute on kernels < 5.8");
-				printf("\n");
-			}
-		}
-	}
-
-	if (state.app.unprivileged_bpf_disabled == 1) {
-		for (i = 0; i <= CAP_LAST_CAP; i++) {
-			if (cap_total_checks(&state.app.checks[i]) > 0 &&
-			    i == CAP_BPF) {
-				has_conditional = 1;
-				conditional_count++;
-				printf("  CAP_BPF\n");
-				print_wrapped_text("    ",
-						   "Needed when kernel.unprivileged_bpf_disabled = 1");
-				print_wrappedf("    ",
-					       "Current value: %d (capability needed)",
-					       state.app.unprivileged_bpf_disabled);
-				print_wrapped_text("    Note: ",
-						   "CAP_SYS_ADMIN can substitute on kernels < 5.8");
-				printf("\n");
-			}
-		}
-	}
-
-	if (state.app.kptr_restrict >= 1) {
-		for (i = 0; i <= CAP_LAST_CAP; i++) {
-			if (cap_total_checks(&state.app.checks[i]) > 0 &&
-			    i == CAP_SYSLOG) {
-				has_conditional = 1;
-				conditional_count++;
-				printf("  CAP_SYSLOG\n");
-				print_wrapped_text("    ",
-						   "Needed when kernel.kptr_restrict >= 1");
-				print_wrappedf("    ",
-					       "Current value: %d (capability needed)",
-					       state.app.kptr_restrict);
-				printf("\n");
-			}
-		}
-	}
-
-	if (state.app.dmesg_restrict >= 1) {
-		for (i = 0; i <= CAP_LAST_CAP; i++) {
-			if (cap_total_checks(&state.app.checks[i]) > 0 &&
-			    i == CAP_SYSLOG) {
-				has_conditional = 1;
-				conditional_count++;
-				printf("  CAP_SYSLOG\n");
-				print_wrapped_text("    ",
-						   "Needed when kernel.dmesg_restrict >= 1");
-				print_wrappedf("    ",
-					       "Current value: %d (capability needed)",
-					       state.app.dmesg_restrict);
-				printf("\n");
-			}
-		}
-	}
-
-	if (state.app.modules_disabled == 1) {
-		for (i = 0; i <= CAP_LAST_CAP; i++) {
-			if (cap_total_checks(&state.app.checks[i]) > 0 &&
-			    i == CAP_SYS_MODULE) {
-				has_conditional = 1;
-				conditional_count++;
-				printf("  NOTE: kernel.modules_disabled = 1\n");
-				print_wrapped_text("    ",
-						   "CAP_SYS_MODULE is ineffective!");
-				print_wrapped_text("    ",
-						   "Module loading is permanently disabled.");
-				printf("\n");
-			}
-		}
-	}
-
-	if (state.app.mmap_min_addr > 0) {
-		for (i = 0; i <= CAP_LAST_CAP; i++) {
-			if (cap_total_checks(&state.app.checks[i]) > 0 &&
-			    i == CAP_SYS_RAWIO) {
-				has_conditional = 1;
-				conditional_count++;
-				printf("  CAP_SYS_RAWIO\n");
-				print_wrapped_text("    ",
-						   "Needed when vm.mmap_min_addr > 0 to map low addresses");
-				print_wrappedf("    ",
-					       "Current value: %d (capability needed)",
-					       state.app.mmap_min_addr);
-				printf("\n");
-			}
-		}
-	}
-
-	if (state.app.protected_hardlinks == 1) {
-		for (i = 0; i <= CAP_LAST_CAP; i++) {
-			if (cap_total_checks(&state.app.checks[i]) > 0 &&
-			    i == CAP_FOWNER) {
-				has_conditional = 1;
-				conditional_count++;
-				printf("  CAP_FOWNER\n");
-				print_wrapped_text("    ",
-						   "Needed when fs.protected_hardlinks = 1 to link files not owned by the caller");
-				print_wrappedf("    ",
-					       "Current value: %d (capability needed)",
-					       state.app.protected_hardlinks);
-				printf("\n");
-			}
-		}
-	}
-
-	if (state.app.protected_symlinks == 1) {
-		for (i = 0; i <= CAP_LAST_CAP; i++) {
-			if (cap_total_checks(&state.app.checks[i]) > 0 &&
-			    i == CAP_DAC_OVERRIDE) {
-				has_conditional = 1;
-				conditional_count++;
-				printf("  CAP_DAC_OVERRIDE\n");
-				print_wrapped_text("    ",
-						   "Needed when fs.protected_symlinks = 1 for symlinks in world-writable directories");
-				print_wrappedf("    ",
-					       "Current value: %d (capability needed)",
-					       state.app.protected_symlinks);
-				printf("\n");
-			}
-		}
-	}
-
-	if (state.app.suid_dumpable == 2) {
-		for (i = 0; i <= CAP_LAST_CAP; i++) {
-			if (cap_total_checks(&state.app.checks[i]) > 0 &&
-			    i == CAP_SYS_PTRACE) {
-				has_conditional = 1;
-				conditional_count++;
-				printf("  CAP_SYS_PTRACE\n");
-				print_wrapped_text("    ",
-						   "Needed when fs.suid_dumpable = 2 for core dumps and ptrace of setuid programs");
-				print_wrappedf("    ",
-					       "Current value: %d (capability needed)",
-					       state.app.suid_dumpable);
-				printf("\n");
-			}
-		}
-	}
-
-	if (!has_conditional)
-		printf("  None\n\n");
+	context_count = print_capability_system_context();
 
 	printf("CAPABILITIES WITH ONLY NOT-GRANTED CHECKS:\n");
 	print_rule('-');
@@ -1226,7 +1186,8 @@ void analyze_capabilities(void)
 	print_rule('-');
 	printf("  Total capability checks: %lu\n", total_checks);
 	printf("  Required capabilities: %d\n", required_count);
-	printf("  Conditional capabilities: %d\n", conditional_count);
+	printf("  Capabilities with related system context: %d\n",
+	       context_count);
 	printf("  Successful capset calls: %lu\n",
 	       state.app.capset.successful_calls);
 	printf("  Capset-only capabilities: %d\n", capset_only);
