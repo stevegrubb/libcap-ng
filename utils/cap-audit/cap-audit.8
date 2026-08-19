@@ -83,6 +83,14 @@ it is treated as replacement arguments for the parsed
 .B ExecStart=
 executable.
 .PP
+Capabilities explicitly configured in the unit but not observed during the
+trace are retained in a current-service-compatible recommendation. They are
+also identified as removal candidates because the relevant functionality may
+not have been exercised. When such capabilities exist, cap-audit emits a
+separate observed-workload-minimized candidate that omits them. Apply that
+candidate only after targeted testing or manual review confirms that each
+configured capability is unnecessary.
+.PP
 A single
 .B !
 prefix on the

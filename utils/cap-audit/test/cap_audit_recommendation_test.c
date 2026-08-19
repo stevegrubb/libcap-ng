@@ -177,6 +177,8 @@ static void setup_analysis(service_config_t *service)
 	service->user_is_set = true;
 	service->user_resolved = true;
 	service->exec_start = "/usr/bin/recommendation-target";
+	service->ambient.seen = true;
+	service->ambient.caps[CAP_SYS_ADMIN] = true;
 	service->bounding.seen = true;
 	service->bounding.caps[CAP_SYS_ADMIN] = true;
 	service->bounding.caps[CAP_SYS_RESOURCE] = true;
@@ -254,12 +256,25 @@ int main(void)
 	setup_analysis(&service);
 	output = capture_analysis();
 
-	expect_line(output,
-		    "    AmbientCapabilities=dac_override fowner "
-		    "net_bind_service sys_chroot sys_resource");
-	expect_line(output,
-		    "    CapabilityBoundingSet=dac_override fowner "
-		    "net_bind_service sys_chroot sys_resource");
+	expect_line(output, "    AmbientCapabilities: sys_admin");
+	if (!contains_tokens(output,
+		(const char *const[]) {
+			"Recommended current-service-compatible [Service]",
+			"AmbientCapabilities=dac_override fowner "
+				"net_bind_service sys_chroot sys_admin sys_resource",
+			"CapabilityBoundingSet=dac_override fowner "
+				"net_bind_service sys_chroot sys_admin sys_resource",
+		}, 3))
+		fail("Compatible configuration did not retain unit capabilities");
+	if (!contains_tokens(output,
+		(const char *const[]) {
+			"Candidate observed-workload-minimized [Service]",
+			"AmbientCapabilities=dac_override fowner "
+				"net_bind_service sys_chroot sys_resource",
+			"CapabilityBoundingSet=dac_override fowner "
+				"net_bind_service sys_chroot sys_resource",
+		}, 3))
+		fail("Observed-workload candidate did not omit unobserved caps");
 	expect_line(output,
 		    "    Initialization capabilities: dac_override fowner "
 		    "net_bind_service");
@@ -273,18 +288,25 @@ int main(void)
 			     sizeof(denied_guidance) /
 			     sizeof(denied_guidance[0])))
 		fail("Denied-only capability lacked investigation guidance");
-	if (!strstr(output, "Configured but not observed: sys_admin"))
+	if (!strstr(output,
+		    "Configured but not observed in this run: sys_admin"))
 		fail("Unused bounding capability was not reported as removable");
-	if (strstr(output, "Configured but not observed: sys_resource"))
+	if (strstr(output,
+		   "Configured but not observed in this run: sys_resource"))
 		fail("Capset-only capability was reported as directly removable");
-	if (!strstr(output, "Consider removing from CapabilityBoundingSet"))
-		fail("Unused bounding capability lacked removal guidance");
+	if (!strstr(output, "Present in the current AmbientCapabilities and") ||
+	    !strstr(output, "Relevant functionality may not have been") ||
+	    !strstr(output, "Retained in the current-service-compatible") ||
+	    !strstr(output, "manual review and targeted testing"))
+		fail("Unobserved configured capability lacked safe guidance");
 	if (!strstr(output, "CAPSET-ONLY CAPABILITIES:") ||
 	    !strstr(output, "sys_resource (#24)") ||
 	    !strstr(output, "Capset-only compatibility capabilities: ") ||
-	    !strstr(output, "Recommended current-binary-compatible [Service]"))
+	    !strstr(output,
+		    "current-binary-compatible configuration retains these"))
 		fail("Capset-only capability lacked compatibility diagnostics");
 	if (!strstr(output, "  Current service context:\n") ||
+	    !strstr(output, "    AmbientCapabilities: sys_admin\n") ||
 	    !strstr(output,
 		    "    CapabilityBoundingSet: sys_admin sys_resource\n"))
 		fail("Current service context was not labeled");
@@ -311,9 +333,12 @@ int main(void)
 		    "None - No confirmed granted capability use was observed."))
 		fail("No-granted-use summary was not evidence based");
 	expect_line(output, "    CapabilityBoundingSet: (none)");
+	expect_line(output, "    AmbientCapabilities: not configured (none)");
 	expect_line(output, "    CapabilityBoundingSet=");
 	if (strstr(output, "    CapabilityBoundingSet=(none)"))
 		fail("Empty recommendation used invalid systemd syntax");
+	if (strstr(output, "Candidate observed-workload-minimized"))
+		fail("Minimized candidate was printed without configured caps");
 	if (!strstr(output, "CAPABILITY-RELATED SYSTEM CONTEXT:") ||
 	    !strstr(output, "kernel.yama.ptrace_scope = 1") ||
 	    !strstr(output, "fs.suid_dumpable = 2") ||

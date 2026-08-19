@@ -315,20 +315,81 @@ static void svc_print_cap_set(const cap_set_t *set)
 		printf("(none)");
 }
 
-static void svc_build_recommended_caps(bool caps[CAP_LAST_CAP + 1])
+static void svc_print_ambient_set(const cap_set_t *set)
+{
+	if (!set->seen) {
+		printf("not configured (none)");
+		return;
+	}
+
+	if (!svc_print_cap_list(set->caps))
+		printf("(none)");
+}
+
+struct svc_deployment_caps {
+	bool ambient[CAP_LAST_CAP + 1];
+	bool bounding[CAP_LAST_CAP + 1];
+};
+
+struct svc_recommendations {
+	struct svc_deployment_caps compatible;
+	struct svc_deployment_caps minimized;
+	int configured_unobserved;
+};
+
+static int svc_cap_configured_unobserved(const service_config_t *cfg,
+					 int cap)
+{
+	struct cap_check *check = &state.app.checks[cap];
+	int in_bounding;
+	int in_ambient;
+
+	if (!include_cap_in_recommendations(cap) ||
+	    cap_requested_by_capset(cap) || cap_total_checks(check) > 0)
+		return 0;
+
+	in_bounding = cfg->bounding.seen && cfg->bounding.caps[cap];
+	in_ambient = cfg->ambient.seen && cfg->ambient.caps[cap] &&
+		     (!cfg->bounding.seen || in_bounding);
+
+	return in_bounding || in_ambient;
+}
+
+static void svc_build_recommendations(const service_config_t *cfg,
+				      struct svc_recommendations *caps)
 {
 	int cap;
 
+	memset(caps, 0, sizeof(*caps));
 	for (cap = 0; cap <= CAP_LAST_CAP; cap++) {
-		caps[cap] = false;
 		if (!include_cap_in_recommendations(cap))
 			continue;
 		/*
 		 * A denied check may be advisory or precede a fallback, so it
 		 * does not prove that the capability is required.
 		 */
-		if (cap_is_compat_requirement(cap))
-			caps[cap] = true;
+		if (cap_is_compat_requirement(cap)) {
+			caps->minimized.ambient[cap] = true;
+			caps->minimized.bounding[cap] = true;
+			caps->compatible.ambient[cap] = true;
+			caps->compatible.bounding[cap] = true;
+		}
+
+		if (!svc_cap_configured_unobserved(cfg, cap))
+			continue;
+
+		/*
+		 * No observation can mean the run missed a feature-specific path.
+		 * Preserve explicit unit intent in the compatible configuration;
+		 * present removal separately as a workload-dependent candidate.
+		 */
+		if (cfg->bounding.seen && cfg->bounding.caps[cap])
+			caps->compatible.bounding[cap] = true;
+		if (cfg->ambient.seen && cfg->ambient.caps[cap]) {
+			caps->compatible.ambient[cap] = true;
+			caps->compatible.bounding[cap] = true;
+		}
+		caps->configured_unobserved++;
 	}
 }
 
@@ -695,42 +756,77 @@ static void svc_print_capset_only(const service_config_t *cfg)
 	}
 }
 
-static void svc_print_unused_bounding(const service_config_t *cfg)
+static void svc_print_configured_unobserved(const service_config_t *cfg)
 {
 	int cap;
 	int found = 0;
 
-	if (!cfg->bounding.seen)
-		return;
-
 	for (cap = 0; cap <= CAP_LAST_CAP; cap++) {
-		struct cap_check *check = &state.app.checks[cap];
+		int in_ambient;
+		int in_bounding;
 
-		if (!cfg->bounding.caps[cap] ||
-		    cap_requested_by_capset(cap) ||
-		    cap_total_checks(check) > 0)
+		if (!svc_cap_configured_unobserved(cfg, cap))
 			continue;
-		printf("    Configured but not observed: %s\n",
+
+		in_ambient = cfg->ambient.seen && cfg->ambient.caps[cap];
+		in_bounding = cfg->bounding.seen && cfg->bounding.caps[cap];
+		printf("    Configured but not observed in this run: %s\n",
 		       cap_name_safe(cap));
+		if (in_ambient && in_bounding)
+			print_wrapped_text("      ",
+				"Present in the current AmbientCapabilities and "
+				"CapabilityBoundingSet.");
+		else if (in_ambient)
+			print_wrapped_text("      ",
+				"Present in the current AmbientCapabilities.");
+		else
+			print_wrapped_text("      ",
+				"Present in the current CapabilityBoundingSet.");
 		print_wrapped_text("      ",
-				   "Consider removing from CapabilityBoundingSet to minimize attack surface.");
+			"No confirmed capability check or successful capset request "
+			"was observed. Relevant functionality may not have been "
+			"exercised.");
+		print_wrapped_text("      ",
+			"Retained in the current-service-compatible configuration. "
+			"Treat it as a removal candidate only after manual review and "
+			"targeted testing.");
 		found = 1;
 	}
 
 	if (!found)
-		printf("    Configured but not observed: none\n");
+		printf("    Configured but not observed in this run: none\n");
+}
+
+static void svc_print_generated_config(const service_config_t *cfg,
+				       const char *group, int is_root,
+				       const struct svc_deployment_caps *caps)
+{
+	printf("    [Service]\n");
+	printf("    User=%s\n", svc_user_name(cfg));
+	printf("    Group=%s\n", group);
+	if (is_root)
+		printf("    # AmbientCapabilities omitted for root service\n");
+	else {
+		printf("    AmbientCapabilities=");
+		svc_print_cap_list(caps->ambient);
+		printf("\n");
+	}
+	printf("    CapabilityBoundingSet=");
+	svc_print_cap_list(caps->bounding);
+	printf("\n");
+	printf("    NoNewPrivileges=yes\n");
 }
 
 static void print_service_recommendations(void)
 {
 	const service_config_t *cfg = state.service_cfg;
-	bool recommended[CAP_LAST_CAP + 1];
+	struct svc_recommendations recommended;
 	char group_buf[32];
 	gid_t gid = svc_effective_gid(cfg);
 	const char *group = svc_group_name(gid, group_buf, sizeof(group_buf));
 	int is_root = svc_is_root_service(cfg);
 
-	svc_build_recommended_caps(recommended);
+	svc_build_recommendations(cfg, &recommended);
 
 	printf("SYSTEMD SERVICE RECOMMENDATIONS:\n");
 	print_rule('-');
@@ -743,6 +839,9 @@ static void print_service_recommendations(void)
 	printf("    Group: %s (gid=%u)\n", group, (unsigned int)gid);
 	printf("    NoNewPrivileges: %s\n",
 	       cfg->no_new_privs ? "yes" : "no");
+	printf("    AmbientCapabilities: ");
+	svc_print_ambient_set(&cfg->ambient);
+	printf("\n");
 	printf("    CapabilityBoundingSet: ");
 	svc_print_cap_set(&cfg->bounding);
 	printf("\n\n");
@@ -765,28 +864,35 @@ static void print_service_recommendations(void)
 	svc_print_denied_review(cfg);
 	svc_print_recommended_denials();
 	svc_print_capset_only(cfg);
-	svc_print_unused_bounding(cfg);
+	svc_print_configured_unobserved(cfg);
 	printf("\n");
 
-	if (capset_only_count() > 0)
+	if (recommended.configured_unobserved > 0)
+		printf("  Recommended current-service-compatible [Service] "
+		       "configuration:\n");
+	else if (capset_only_count() > 0)
 		printf("  Recommended current-binary-compatible [Service] "
 		       "configuration:\n");
 	else
 		printf("  Recommended [Service] configuration:\n");
-	printf("    [Service]\n");
-	printf("    User=%s\n", svc_user_name(cfg));
-	printf("    Group=%s\n", group);
-	if (is_root)
-		printf("    # AmbientCapabilities omitted for root service\n");
-	else {
-		printf("    AmbientCapabilities=");
-		svc_print_cap_list(recommended);
+	svc_print_generated_config(cfg, group, is_root,
+				   recommended.configured_unobserved > 0 ?
+				   &recommended.compatible :
+				   &recommended.minimized);
+	printf("\n");
+
+	if (recommended.configured_unobserved > 0) {
+		print_wrapped_text("  Warning: ",
+			"The candidate below removes explicitly configured "
+			"capabilities that were not observed in this run. Apply it "
+			"only after exercising the relevant functionality and "
+			"confirming that each removal is safe.");
+		printf("  Candidate observed-workload-minimized [Service] "
+		       "configuration:\n");
+		svc_print_generated_config(cfg, group, is_root,
+					   &recommended.minimized);
 		printf("\n");
 	}
-	printf("    CapabilityBoundingSet=");
-	svc_print_cap_list(recommended);
-	printf("\n");
-	printf("    NoNewPrivileges=yes\n\n");
 }
 
 static void print_updatev_wrapped(const char *prefix, const char *cap_prefix,
