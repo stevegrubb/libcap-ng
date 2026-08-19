@@ -23,8 +23,22 @@ are filtered to only the traced process tree to reduce overhead.
 .PP
 The auditor fork/execs the requested command, registers its PID for tracing
 before exec, and automatically tracks child PIDs. At the end of execution it
-reports which capabilities were granted, which were attempted and denied, and
-presents deployment snippets showing how to grant the minimal set.
+reports which capability checks returned granted or not granted and presents
+deployment snippets showing how to grant the minimal set.
+.PP
+For syscall-associated checks returning not granted, cap-audit correlates the
+check with the raw kernel syscall return value when available. A syscall
+invocation may contain more than one such check, so capability-check and
+syscall-outcome counts are independent. Successful syscalls show that the
+not-granted check did not prevent that invocation from completing. EPERM and
+EACCES results are reported as permission-related failures requiring manual
+investigation. Other failures are retained as diagnostic evidence. EINTR and
+kernel restart results are treated as interruption evidence: interruption
+alone is inconclusive, while a mix of interrupted and successful invocations
+requires manual investigation because cap-audit cannot distinguish call sites
+or arguments. Capabilities with no granted checks are never added to automatic
+recommendations; users should add one only after confirming that required
+functionality fails because it is absent.
 .PP
 Runtime tracing requires root or the CAP_BPF, CAP_PERFMON, and CAP_SYS_PTRACE capabilities, along with kernel BTF data in
 \fI/sys/kernel/btf/vmlinux\fP.

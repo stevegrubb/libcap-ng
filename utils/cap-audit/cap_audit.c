@@ -601,6 +601,8 @@ int main(int argc, char **argv)
 			free(state.app.checks[i].op_reason);
 		if (state.app.checks[i].denied_syscalls)
 			free(state.app.checks[i].denied_syscalls);
+		if (state.app.checks[i].outcomes)
+			free(state.app.checks[i].outcomes);
 	}
 
 	return 0;

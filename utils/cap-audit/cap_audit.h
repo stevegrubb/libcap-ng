@@ -41,6 +41,11 @@
 #define CAP_OPT_NOAUDIT 0x2
 #endif
 
+enum cap_event_type {
+	CAP_EVENT_CHECK,
+	CAP_EVENT_SYSCALL_RESULT,
+};
+
 struct cap_event {
 	__u64 timestamp_ns;
 	__u32 pid;
@@ -54,6 +59,38 @@ struct cap_event {
 	__u64 stack_id;
 	__u32 targ_ns_inum;
 	__u32 cap_opts;
+	__s64 syscall_ret;
+	__u64 denied_caps;
+	__u32 event_type;
+};
+
+enum syscall_outcome_class {
+	SYSCALL_OUTCOME_SUCCESS,
+	SYSCALL_OUTCOME_PERMISSION,
+	SYSCALL_OUTCOME_OTHER,
+	SYSCALL_OUTCOME_INTERRUPTED,
+};
+
+enum denial_assessment {
+	DENIAL_ASSESSMENT_NONE,
+	DENIAL_ASSESSMENT_PERMISSION,
+	DENIAL_ASSESSMENT_MIXED_INTERRUPTED,
+	DENIAL_ASSESSMENT_INCONCLUSIVE,
+	DENIAL_ASSESSMENT_SUCCEEDED,
+	DENIAL_ASSESSMENT_OTHER,
+};
+
+struct syscall_outcome {
+	int syscall_nr;
+	__s64 result;
+	unsigned long count;
+};
+
+struct cap_outcome_summary {
+	unsigned long succeeded;
+	unsigned long permission_failed;
+	unsigned long other_failed;
+	unsigned long interrupted;
 };
 
 struct cap_check {
@@ -71,6 +108,9 @@ struct cap_check {
 	int *denied_syscalls;
 	size_t denied_syscall_count;
 	size_t denied_syscall_capacity;
+	struct syscall_outcome *outcomes;
+	size_t outcome_count;
+	size_t outcome_capacity;
 };
 
 struct app_caps {
@@ -200,6 +240,26 @@ unsigned long cap_total_denied(const struct cap_check *check)
 const char *cap_union_reason(const struct cap_check *check)
 	__attr_access ((__read_only__, 1))
 	__attribute_pure__;
+int add_cap_syscall_outcome(struct cap_check *check, int syscall_nr,
+			    __s64 result)
+	__attr_access ((__read_write__, 1));
+enum syscall_outcome_class classify_syscall_outcome(__s64 result)
+	__attribute_const__;
+const char *syscall_outcome_class_name(enum syscall_outcome_class class)
+	__attribute_const__;
+void summarize_cap_outcomes(const struct cap_check *check,
+			    struct cap_outcome_summary *summary)
+	__attr_access ((__read_only__, 1))
+	__attr_access ((__write_only__, 2));
+enum denial_assessment assess_cap_denials(const struct cap_check *check)
+	__attr_access ((__read_only__, 1))
+	__attribute_pure__;
+const char *denial_assessment_name(enum denial_assessment assessment)
+	__attribute_const__;
+int syscall_result_errno(__s64 result)
+	__attribute_const__;
+const char *syscall_result_name(__s64 result)
+	__attribute_const__;
 type_t classify_app(const char *exe)
 	__attr_access ((__read_only__, 1))
 	__wur;

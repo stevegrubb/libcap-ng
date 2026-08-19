@@ -28,6 +28,73 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+static void print_json_denied_syscalls(const struct cap_check *check)
+{
+	size_t i;
+
+	printf("      \"denied_syscalls\": [\n");
+	for (i = 0; i < check->denied_syscall_count; i++) {
+		const char *name;
+		char *name_json;
+
+		name = syscall_name_from_nr(check->denied_syscalls[i]);
+		name_json = json_escape(name ? name : "unknown");
+		if (i > 0)
+			printf(",\n");
+		printf("        {\"number\": %d, \"name\": \"%s\"}",
+		       check->denied_syscalls[i], name_json ? name_json : "");
+		free(name_json);
+	}
+	printf("\n      ],\n");
+}
+
+static void print_json_outcomes(const struct cap_check *check)
+{
+	size_t i;
+
+	printf("      \"assessment\": \"%s\",\n",
+	       denial_assessment_name(assess_cap_denials(check)));
+	printf("      \"syscall_outcomes\": [\n");
+	for (i = 0; i < check->outcome_count; i++) {
+		const struct syscall_outcome *outcome = &check->outcomes[i];
+		enum syscall_outcome_class class;
+		const char *result_name;
+		const char *syscall_name;
+		char *syscall_json;
+		int error;
+
+		class = classify_syscall_outcome(outcome->result);
+		result_name = syscall_result_name(outcome->result);
+		error = syscall_result_errno(outcome->result);
+		syscall_name = syscall_name_from_nr(outcome->syscall_nr);
+		syscall_json = json_escape(syscall_name ? syscall_name : "unknown");
+		if (i > 0)
+			printf(",\n");
+		printf("        {\n");
+		printf("          \"syscall_number\": %d,\n",
+		       outcome->syscall_nr);
+		printf("          \"syscall\": \"%s\",\n",
+		       syscall_json ? syscall_json : "");
+		printf("          \"outcome_class\": \"%s\",\n",
+		       syscall_outcome_class_name(class));
+		printf("          \"raw_return\": %lld,\n",
+		       (long long)outcome->result);
+		if (result_name)
+			printf("          \"return_name\": \"%s\",\n",
+			       result_name);
+		else
+			printf("          \"return_name\": null,\n");
+		if (error > 0)
+			printf("          \"errno\": %d,\n", error);
+		else
+			printf("          \"errno\": null,\n");
+		printf("          \"count\": %lu\n", outcome->count);
+		printf("        }");
+		free(syscall_json);
+	}
+	printf("\n      ]\n");
+}
+
 void output_json(void)
 {
 	int i;
@@ -196,7 +263,8 @@ void output_json(void)
 		struct cap_check *check = &state.app.checks[i];
 		char *name_json;
 
-		if (cap_total_denied(check) > 0 && cap_total_granted(check) == 0) {
+		if (cap_total_denied(check) > 0 &&
+		    cap_total_granted(check) == 0) {
 			name_json = json_escape(capng_capability_to_name(i));
 			if (!first_denied)
 				printf(",\n");
@@ -204,8 +272,10 @@ void output_json(void)
 			printf("      \"number\": %d,\n", i);
 			printf("      \"name\": \"%s\",\n",
 			       name_json ? name_json : "");
-			printf("      \"attempts\": %lu\n",
+			printf("      \"not_granted_checks\": %lu,\n",
 			       cap_total_denied(check));
+			print_json_denied_syscalls(check);
+			print_json_outcomes(check);
 			printf("    }");
 			first_denied = 0;
 			free(name_json);

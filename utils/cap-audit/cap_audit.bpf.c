@@ -70,19 +70,22 @@
  * the initial exec remain in phase 1 until their own exec transition.
  *
  * raw_syscalls/sys_enter and sys_exit use should_trace_pid() (phase > 0)
- * so syscall context is available the instant the exec gate opens.
+ * so syscall context and completion results are available the instant the
+ * exec gate opens.
  * Capability hooks use should_record_pid() (phase >= 2), so only post-exec
  * capability checks are emitted.
  *
  * For traced tasks, the program builds cap_event records with task identity,
  * syscall context, namespace inode, the CAP_OPT_* flags passed to
  * cap_capable(), and stack id; tracks per-capability statistics; and
- * streams finalized events to userspace through a ring buffer. The cap_opts
- * field carries the CAP_OPT_* flags so userspace can correlate known
- * advisory call sites without treating CAP_OPT_NOAUDIT as a standalone
- * filter. CAP_OPT_NOAUDIT means "do not audit" and is only a confirming
- * signal alongside syscall and capability matching. Fork/exit tracepoints
- * keep the PID filter in sync so children are traced and exits are pruned.
+ * streams finalized events to userspace through a ring buffer. A syscall
+ * completion event correlates denied checks from one invocation with its raw
+ * kernel return value. The cap_opts field carries the CAP_OPT_* flags so
+ * userspace can identify known advisory call sites without treating
+ * CAP_OPT_NOAUDIT as a standalone filter. CAP_OPT_NOAUDIT means "do not
+ * audit" and is only a confirming signal alongside syscall and capability
+ * matching. Fork/exit tracepoints keep the PID filter in sync so children
+ * are traced and exits are pruned.
  */
 
 #ifndef PERF_MAX_STACK_DEPTH
@@ -116,6 +119,11 @@
 
 char LICENSE[] SEC("license") = "GPL";
 
+enum cap_event_type {
+	CAP_EVENT_CHECK,
+	CAP_EVENT_SYSCALL_RESULT,
+};
+
 struct cap_event {
 	__u64 timestamp_ns;
 	__u32 pid;
@@ -129,6 +137,9 @@ struct cap_event {
 	__u64 stack_id;
 	__u32 targ_ns_inum;
 	__u32 cap_opts;
+	__s64 syscall_ret;
+	__u64 denied_caps;
+	__u32 event_type;
 };
 
 struct cap_stats {
@@ -238,10 +249,15 @@ struct {
 // affect tracing on CPU1. This is just mentioned here because it is
 // an esoteric problem and not likely to show up. But this documents
 // it and a possible solution. The drawback is that it uses more memory.
+struct syscall_state {
+	__u64 denied_caps;
+	int nr;
+};
+
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
 	__type(key, __u64);
-	__type(value, int);
+	__type(value, struct syscall_state);
 	__uint(max_entries, 4096);
 } current_syscalls SEC(".maps");
 
@@ -346,12 +362,12 @@ static __always_inline void update_result_stats(int cap, int ret)
 static __always_inline int read_syscall(struct pt_regs *ctx)
 {
 	__u64 pid_tgid;
-	int *nr;
+	struct syscall_state *syscall;
 
 	pid_tgid = bpf_get_current_pid_tgid();
-	nr = bpf_map_lookup_elem(&current_syscalls, &pid_tgid);
-	if (nr)
-		return *nr;
+	syscall = bpf_map_lookup_elem(&current_syscalls, &pid_tgid);
+	if (syscall)
+		return syscall->nr;
 
 #ifdef __TARGET_ARCH_x86
 	return BPF_CORE_READ(ctx, orig_ax);
@@ -413,6 +429,21 @@ static __always_inline void stash_event(struct cap_event *ev)
 			    BPF_ANY);
 }
 
+/* Record a denied check against the syscall invocation that contained it. */
+static __always_inline void mark_syscall_denial(int cap)
+{
+	struct syscall_state *syscall;
+	__u64 pid_tgid;
+
+	if (cap < 0 || cap >= 64)
+		return;
+
+	pid_tgid = bpf_get_current_pid_tgid();
+	syscall = bpf_map_lookup_elem(&current_syscalls, &pid_tgid);
+	if (syscall)
+		syscall->denied_caps |= 1ULL << cap;
+}
+
 /*
  * submit_event - finalize and emit a stashed event to the ring buffer.
  * @ret: return code from the capability helper (0 = granted).
@@ -426,11 +457,13 @@ static __always_inline int submit_event(int ret)
 	__u64 pid_tgid;
 	struct cap_event *stored;
 	struct cap_event *out;
+	int capability;
 
 	pid_tgid = bpf_get_current_pid_tgid();
 	stored = bpf_map_lookup_elem(&cap_events_inflight, &pid_tgid);
 	if (!stored)
 		return 0;
+	capability = stored->capability;
 
 	out = bpf_ringbuf_reserve(&cap_events, sizeof(*out), 0);
 	if (!out)
@@ -438,6 +471,8 @@ static __always_inline int submit_event(int ret)
 
 	__builtin_memcpy(out, stored, sizeof(*out));
 	out->result = ret ? 0 : 1;
+	if (ret)
+		mark_syscall_denial(capability);
 
 	bpf_ringbuf_submit(out, 0);
 
@@ -602,29 +637,56 @@ int BPF_KRETPROBE(trace_capable_ret, int ret)
 SEC("tracepoint/raw_syscalls/sys_enter")
 int trace_sys_enter(struct trace_event_raw_sys_enter *ctx)
 {
+	struct syscall_state syscall = { 0 };
 	__u64 pid_tgid;
 	__u32 pid;
-	__u32 id;
 
 	pid_tgid = bpf_get_current_pid_tgid();
 	pid = pid_tgid >> 32;
 	if (!should_trace_pid(pid))
 		return 0;
 
-	id = ctx->id;
-	bpf_map_update_elem(&current_syscalls, &pid_tgid, &id, BPF_ANY);
+	syscall.nr = ctx->id;
+	bpf_map_update_elem(&current_syscalls, &pid_tgid, &syscall, BPF_ANY);
 	return 0;
 }
 
+static __always_inline void emit_syscall_result(
+				const struct syscall_state *syscall, __s64 ret)
+{
+	struct cap_event *out;
+	__u64 pid_tgid;
+
+	if (syscall->denied_caps == 0)
+		return;
+
+	out = bpf_ringbuf_reserve(&cap_events, sizeof(*out), 0);
+	if (!out)
+		return;
+
+	__builtin_memset(out, 0, sizeof(*out));
+	pid_tgid = bpf_get_current_pid_tgid();
+	out->timestamp_ns = bpf_ktime_get_ns();
+	out->pid = pid_tgid >> 32;
+	out->tid = (__u32)pid_tgid;
+	out->syscall_nr = syscall->nr;
+	out->syscall_ret = ret;
+	out->denied_caps = syscall->denied_caps;
+	out->event_type = CAP_EVENT_SYSCALL_RESULT;
+	bpf_ringbuf_submit(out, 0);
+}
+
 /*
- * trace_sys_exit - clear syscall tracking on exit.
+ * trace_sys_exit - emit denied-check outcomes and clear syscall tracking.
  * @ctx: raw_syscalls/sys_exit tracepoint context.
  *
- * Removes the stored syscall number for the thread when tracing. Returns 0.
+ * Emits the raw return value when the invocation contained denied capability
+ * checks, then removes its per-thread state. Returns 0.
  */
 SEC("tracepoint/raw_syscalls/sys_exit")
 int trace_sys_exit(struct trace_event_raw_sys_exit *ctx)
 {
+	struct syscall_state *syscall;
 	__u64 pid_tgid;
 	__u32 pid;
 
@@ -633,6 +695,9 @@ int trace_sys_exit(struct trace_event_raw_sys_exit *ctx)
 	if (!should_trace_pid(pid))
 		return 0;
 
+	syscall = bpf_map_lookup_elem(&current_syscalls, &pid_tgid);
+	if (syscall)
+		emit_syscall_result(syscall, ctx->ret);
 	bpf_map_delete_elem(&current_syscalls, &pid_tgid);
 	return 0;
 }

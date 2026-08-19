@@ -85,11 +85,60 @@ static void add_denied_syscall(struct cap_check *check, int syscall_nr)
 	check->denied_syscalls[check->denied_syscall_count++] = syscall_nr;
 }
 
+static int check_has_denied_syscall(const struct cap_check *check,
+				    int syscall_nr)
+{
+	size_t i;
+
+	for (i = 0; i < check->denied_syscall_count; i++) {
+		if (check->denied_syscalls[i] == syscall_nr)
+			return 1;
+	}
+	return 0;
+}
+
+static void handle_syscall_result(const struct cap_event *e)
+{
+	int cap;
+
+	for (cap = 0; cap <= CAP_LAST_CAP && cap < 64; cap++) {
+		struct cap_check *check;
+
+		if (!(e->denied_caps & (1ULL << cap)))
+			continue;
+		check = &state.app.checks[cap];
+		/* Ignore outcomes for capability events filtered by userspace. */
+		if (!check_has_denied_syscall(check, e->syscall_nr))
+			continue;
+		if (state.shutting_down && e->pid == (__u32)state.app.pid &&
+		    (cap == CAP_SYS_ADMIN || cap == CAP_SETPCAP))
+			continue;
+		if (add_cap_syscall_outcome(check, e->syscall_nr,
+					    e->syscall_ret) != 0 && state.verbose)
+			fprintf(stderr,
+				"Warning: unable to record syscall outcome\n");
+	}
+
+	if (state.verbose)
+		printf("[SYSCALL] pid=%u syscall=%s return=%lld "
+		       "denied_caps=0x%llx\n", e->pid,
+		       syscall_name_from_nr(e->syscall_nr) ?: "unknown",
+		       (long long)e->syscall_ret,
+		       (unsigned long long)e->denied_caps);
+}
+
 int handle_cap_event(void *ctx __attribute__((unused)), void *data,
 		     size_t data_sz __attribute__((unused)))
 {
 	const struct cap_event *e = data;
 	int op_phase = state.capset_observed;
+
+	if (e->event_type == CAP_EVENT_SYSCALL_RESULT) {
+		handle_syscall_result(e);
+		return 0;
+	}
+	if (e->event_type != CAP_EVENT_CHECK)
+		return 0;
 
 	if (is_always_noise(e)) {
 		if (state.verbose) {

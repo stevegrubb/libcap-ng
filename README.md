@@ -358,27 +358,45 @@ CONDITIONAL CAPABILITIES:
     Needed when fs.protected_symlinks = 1 for symlinks in world-writable directories
     Current value: 1 (capability needed)
 
-ATTEMPTED BUT DENIED:
+CAPABILITIES WITH NO GRANTED CHECKS:
 ----------------------------------------------------------------------
   dac_override (#1)
-    Attempts: 2 (all denied)
-    Syscalls: readlink, faccessat2
-    Impact: Application may have reduced functionality
+    Capability checks returning not granted: 2
+    Outcomes of syscall invocations containing such a check:
+      readlink: 1 succeeded
+      faccessat2: 1 succeeded
+    Assessment: Associated syscall outcomes: 2 succeeded. The capability was not
+                granted by those checks, but the associated syscall invocations
+                completed. The capability is not automatically recommended.
+    Recommendation: Not added automatically.
 
   bpf (#39)
-    Attempts: 2 (all denied)
-    Syscalls: prctl
-    Impact: Application may have reduced functionality
+    Capability checks returning not granted: 2
+    Outcomes of syscall invocations containing such a check:
+      prctl: 2 succeeded
+    Assessment: Associated syscall outcomes: 2 succeeded. The capability was not
+                granted by those checks, but the associated syscall invocations
+                completed. The capability is not automatically recommended.
+    Recommendation: Not added automatically.
 
 SUMMARY:
 ----------------------------------------------------------------------
   Total capability checks: 2349
   Required capabilities: 11
   Conditional capabilities: 1
-  Denied operations: 2
+  Capabilities with no granted checks: 2
+    Assessment counts:
+      Omitted after associated syscall success: 2
 
 RECOMMENDATIONS:
 ----------------------------------------------------------------------
+  Capabilities with no granted checks:
+    dac_override: Omitted; associated syscalls succeeded
+    bpf: Omitted; associated syscalls succeeded
+    Capabilities in this section are not added automatically. Add one only
+    after confirming that required functionality fails because the capability
+    is absent.
+
   Programmatic solution (C with libcap-ng):
     #include <cap-ng.h>
     #include <stdio.h>

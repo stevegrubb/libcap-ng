@@ -324,64 +324,269 @@ static void svc_print_phase_caps(const char *label, int operational)
 	printf("\n");
 }
 
-static void svc_print_denied_syscalls(const struct cap_check *check)
+static void print_outcome_error(const struct syscall_outcome *outcome,
+				const char *syscall_name)
 {
-	size_t j;
+	enum syscall_outcome_class class;
+	const char *result_name;
+	int error;
 
-	if (check->denied_syscall_count == 0) {
-		printf("unknown");
+	class = classify_syscall_outcome(outcome->result);
+	if (class == SYSCALL_OUTCOME_SUCCESS) {
+		printf("%s: %lu succeeded\n", syscall_name, outcome->count);
 		return;
 	}
 
-	for (j = 0; j < check->denied_syscall_count; j++) {
-		const char *syscall_name;
+	result_name = syscall_result_name(outcome->result);
+	error = syscall_result_errno(outcome->result);
+	printf("%s: %lu %s with ", syscall_name, outcome->count,
+	       class == SYSCALL_OUTCOME_INTERRUPTED ? "interrupted" :
+	       "failed");
+	if (result_name)
+		printf("-%s", result_name);
+	else
+		printf("%lld", (long long)outcome->result);
+	if (error > 0 && error < 256)
+		printf(" (%s)", strerror(error));
+	printf("\n");
+}
 
-		if (j > 0)
-			printf(", ");
-		syscall_name = syscall_name_from_nr(check->denied_syscalls[j]);
-		if (syscall_name)
-			printf("%s", syscall_name);
+static void print_denied_outcomes(const struct cap_check *check,
+				  const char *indent)
+{
+	size_t i;
+	int found = 0;
+
+	printf("%sOutcomes of syscall invocations containing such a check:\n",
+	       indent);
+	for (i = 0; i < check->outcome_count; i++) {
+		const struct syscall_outcome *outcome = &check->outcomes[i];
+		const char *syscall_name;
+		char unknown[32];
+
+		syscall_name = syscall_name_from_nr(outcome->syscall_nr);
+		if (!syscall_name) {
+			snprintf(unknown, sizeof(unknown), "unknown(#%d)",
+				 outcome->syscall_nr);
+			syscall_name = unknown;
+		}
+		printf("%s  ", indent);
+		print_outcome_error(outcome, syscall_name);
+		found = 1;
+	}
+
+	for (i = 0; i < check->denied_syscall_count; i++) {
+		const char *syscall_name;
+		char unknown[32];
+		size_t j;
+
+		for (j = 0; j < check->outcome_count; j++) {
+			if (check->denied_syscalls[i] ==
+			    check->outcomes[j].syscall_nr)
+				break;
+		}
+		if (j < check->outcome_count)
+			continue;
+
+		syscall_name = syscall_name_from_nr(check->denied_syscalls[i]);
+		if (!syscall_name) {
+			snprintf(unknown, sizeof(unknown), "unknown(#%d)",
+				 check->denied_syscalls[i]);
+			syscall_name = unknown;
+		}
+		printf("%s  %s: outcome unavailable\n", indent, syscall_name);
+		found = 1;
+	}
+	if (!found)
+		printf("%s  unavailable\n", indent);
+}
+
+static const char *failure_word(unsigned long count)
+{
+	return count == 1 ? "failure" : "failures";
+}
+
+static const char *interruption_word(unsigned long count)
+{
+	return count == 1 ? "interruption" : "interruptions";
+}
+
+static void print_denial_assessment(const struct cap_check *check,
+				    const char *indent)
+{
+	struct cap_outcome_summary summary;
+	char evidence[320];
+	unsigned long failed;
+
+	summarize_cap_outcomes(check, &summary);
+	switch (assess_cap_denials(check)) {
+	case DENIAL_ASSESSMENT_PERMISSION:
+		failed = summary.permission_failed + summary.other_failed;
+		if (summary.other_failed > 0 && summary.interrupted > 0)
+			snprintf(evidence, sizeof(evidence),
+				 "Associated syscall invocations: %lu succeeded, "
+				 "%lu failed, and %lu interrupted. Failure "
+				 "categories: %lu permission-related; %lu other.",
+				 summary.succeeded,
+				 failed, summary.interrupted,
+				 summary.permission_failed,
+				 summary.other_failed);
+		else if (summary.other_failed > 0)
+			snprintf(evidence, sizeof(evidence),
+				 "Associated syscall invocations: %lu succeeded and "
+				 "%lu failed. Failure categories: %lu "
+				 "permission-related; %lu other.",
+				 summary.succeeded, failed,
+				 summary.permission_failed,
+				 summary.other_failed);
+		else if (summary.interrupted > 0)
+			snprintf(evidence, sizeof(evidence),
+				 "Associated syscall invocations: %lu succeeded, "
+				 "%lu failed, and %lu interrupted. All failures "
+				 "were permission-related.", summary.succeeded,
+				 summary.permission_failed,
+				 summary.interrupted);
 		else
-			printf("unknown(#%d)", check->denied_syscalls[j]);
+			snprintf(evidence, sizeof(evidence),
+				 "Associated syscall invocations: %lu succeeded and "
+				 "%lu failed. All failures were permission-related.",
+				 summary.succeeded,
+				 summary.permission_failed);
+		print_wrappedf(indent,
+			"%s A permission failure does not prove that the "
+			"capability check caused it. Manually investigate the "
+			"permission-related failures and add the capability only "
+			"if required functionality reproducibly fails because it "
+			"is absent.", evidence);
+		break;
+	case DENIAL_ASSESSMENT_MIXED_INTERRUPTED:
+		print_wrappedf(indent,
+			"Associated syscall outcomes: %lu succeeded and %lu %s. "
+			"Cap-audit "
+			"cannot determine whether they came from the same call site "
+			"or used the same arguments. Manual investigation is required "
+			"to confirm that required functionality completed or was "
+			"safely retried.", summary.succeeded, summary.interrupted,
+			interruption_word(summary.interrupted));
+		break;
+	case DENIAL_ASSESSMENT_INCONCLUSIVE:
+		if (check->outcome_count == 0)
+			print_wrapped_text(indent,
+				"Associated syscall outcomes are unavailable. Exercise "
+				"the affected functionality again before making a "
+				"capability decision.");
+		else
+			print_wrappedf(indent,
+				"Available associated outcomes: %lu succeeded, %lu "
+				"other %s, and %lu %s. The evidence remains "
+				"inconclusive; exercise the affected functionality "
+				"again before making a capability decision.",
+				summary.succeeded, summary.other_failed,
+				failure_word(summary.other_failed),
+				summary.interrupted,
+				interruption_word(summary.interrupted));
+		break;
+	case DENIAL_ASSESSMENT_SUCCEEDED:
+		print_wrappedf(indent,
+			"Associated syscall outcomes: %lu succeeded. The "
+			"capability was not granted by those checks, but the "
+			"associated syscall invocations completed. The capability "
+			"is not automatically recommended.", summary.succeeded);
+		break;
+	case DENIAL_ASSESSMENT_OTHER:
+		print_wrappedf(indent,
+			"Associated syscall outcomes: %lu non-permission %s. The "
+			"not-granted capability checks are not established as "
+			"their cause.",
+			summary.other_failed,
+			failure_word(summary.other_failed));
+		break;
+	case DENIAL_ASSESSMENT_NONE:
+		break;
 	}
 }
 
-static void svc_print_denied_caps(const service_config_t *cfg)
+static const char *denial_review_label(enum denial_assessment assessment)
+{
+	switch (assessment) {
+	case DENIAL_ASSESSMENT_PERMISSION:
+	case DENIAL_ASSESSMENT_MIXED_INTERRUPTED:
+		return "Manual investigation required";
+	case DENIAL_ASSESSMENT_INCONCLUSIVE:
+		return "Additional evidence required";
+	case DENIAL_ASSESSMENT_SUCCEEDED:
+		return "Omitted; associated syscalls succeeded";
+	case DENIAL_ASSESSMENT_OTHER:
+		return "Omitted; capability check not established as cause";
+	case DENIAL_ASSESSMENT_NONE:
+		return NULL;
+	}
+	return NULL;
+}
+
+static void svc_print_denied_review(const service_config_t *cfg)
 {
 	int cap;
 	int found = 0;
 
 	for (cap = 0; cap <= CAP_LAST_CAP; cap++) {
 		struct cap_check *check = &state.app.checks[cap];
-		unsigned long denied = cap_total_denied(check);
-		int by_bounding;
+		const char *label;
 
-		if (denied == 0 || !include_cap_in_recommendations(cap))
+		if (cap_total_denied(check) == 0 ||
+		    cap_total_granted(check) > 0 ||
+		    !include_cap_in_recommendations(cap))
 			continue;
 
-		by_bounding = cfg->bounding.seen && !cfg->bounding.caps[cap];
-		printf("    %s: %s - %lu attempts (",
-		       by_bounding ? "Denied by bounding set" :
-		       "Denied for other reasons",
-		       cap_name_safe(cap), denied);
-		svc_print_denied_syscalls(check);
-		printf(")\n");
-		if (!cap_required_union(check))
-			print_wrapped_text("      ",
-					   "Denied checks alone do not prove that a "
-					   "capability is required. Treat denied-only "
-					   "capabilities as candidates for manual "
-					   "investigation and add one only if its "
-					   "associated functionality is confirmed "
-					   "to fail.");
-		else if (by_bounding)
-			print_wrapped_text("      ",
-					   "Consider adding to CapabilityBoundingSet if this functionality is needed.");
+		if (!found)
+			printf("    Capabilities with no granted checks:\n");
+		label = denial_review_label(assess_cap_denials(check));
+		printf("      %s: %s\n", cap_name_safe(cap),
+		       label ? label : "no assessment");
+		if (cfg->bounding.seen && !cfg->bounding.caps[cap])
+			print_wrapped_text("        Note: ",
+				"Capability is absent from the configured "
+				"CapabilityBoundingSet.");
+		found = 1;
+	}
+
+	if (found)
+		print_wrapped_text("      ",
+			"Detailed evidence appears in CAPABILITIES WITH NO "
+			"GRANTED CHECKS above. No capability in that section is "
+			"added automatically. Add one only after confirming that "
+			"required functionality fails because it is absent.");
+	else
+		printf("    Capabilities with no granted checks: none\n");
+}
+
+static void svc_print_recommended_denials(void)
+{
+	bool caps[CAP_LAST_CAP + 1] = { false };
+	int cap;
+	int found = 0;
+
+	for (cap = 0; cap <= CAP_LAST_CAP; cap++) {
+		struct cap_check *check = &state.app.checks[cap];
+
+		if (cap_total_denied(check) == 0 ||
+		    !cap_required_union(check) ||
+		    !include_cap_in_recommendations(cap))
+			continue;
+		caps[cap] = true;
 		found = 1;
 	}
 
 	if (!found)
-		printf("    Denied capabilities: none\n");
+		return;
+
+	printf("    Mixed capability-check results: ");
+	svc_print_cap_list(caps);
+	printf("\n");
+	print_wrapped_text("      ",
+		"These capabilities had both granted and not-granted checks. "
+		"They are included because granted use was observed; the "
+		"not-granted checks do not change the generated configuration.");
 }
 
 static void svc_print_unused_bounding(const service_config_t *cfg)
@@ -450,7 +655,8 @@ static void print_service_recommendations(void)
 				   "AmbientCapabilities omitted because ambient "
 				   "capabilities are not meaningful for root "
 				   "services.");
-	svc_print_denied_caps(cfg);
+	svc_print_denied_review(cfg);
+	svc_print_recommended_denials();
 	svc_print_unused_bounding(cfg);
 	printf("\n");
 
@@ -519,6 +725,39 @@ static void print_updatev_wrapped(const char *prefix, const char *cap_prefix,
 	}
 }
 
+static void print_denied_recommendation_review(void)
+{
+	int cap;
+	int found = 0;
+
+	for (cap = 0; cap <= CAP_LAST_CAP; cap++) {
+		struct cap_check *check = &state.app.checks[cap];
+		enum denial_assessment assessment;
+		const char *label = NULL;
+
+		if (cap_total_denied(check) == 0 ||
+		    cap_total_granted(check) > 0)
+			continue;
+		if (!found)
+			printf("  Capabilities with no granted checks:\n");
+
+		assessment = assess_cap_denials(check);
+		label = denial_review_label(assessment);
+		if (!label)
+			continue;
+		printf("    %s: %s\n", cap_name_safe(cap), label);
+		found = 1;
+	}
+
+	if (found) {
+		print_wrapped_text("    ",
+			"Capabilities in this section are not added automatically. "
+			"Add one only after confirming that required functionality "
+			"fails because the capability is absent.");
+		printf("\n");
+	}
+}
+
 void analyze_capabilities(void)
 {
 	int has_required = 0;
@@ -527,6 +766,10 @@ void analyze_capabilities(void)
 	int required_count = 0;
 	int conditional_count = 0;
 	int denied_count = 0;
+	int denied_manual = 0;
+	int denied_inconclusive = 0;
+	int denied_succeeded = 0;
+	int denied_other = 0;
 	unsigned long total_checks = 0;
 	int i;
 	int first;
@@ -812,39 +1055,22 @@ void analyze_capabilities(void)
 	if (!has_conditional)
 		printf("  None\n\n");
 
-	printf("ATTEMPTED BUT DENIED:\n");
+	printf("CAPABILITIES WITH NO GRANTED CHECKS:\n");
 	print_rule('-');
 	for (i = 0; i <= CAP_LAST_CAP; i++) {
 		struct cap_check *check;
 
 		check = &state.app.checks[i];
-		if (cap_total_denied(check) > 0 && cap_total_granted(check) == 0) {
-			size_t j;
-
+		if (cap_total_denied(check) > 0 &&
+		    cap_total_granted(check) == 0) {
 			has_denied = 1;
 			printf("  %s (#%d)\n", cap_name_safe(i), i);
-			printf("    Attempts: %lu (all denied)\n",
+			printf("    Capability checks returning not granted: %lu\n",
 			       cap_total_denied(check));
-			printf("    Syscalls: ");
-			if (check->denied_syscall_count == 0)
-				printf("unknown\n");
-			for (j = 0; j < check->denied_syscall_count; j++) {
-				const char *syscall_name;
-				int syscall_nr;
-
-				syscall_nr = check->denied_syscalls[j];
-				syscall_name = syscall_name_from_nr(syscall_nr);
-				if (j > 0)
-					printf(", ");
-				if (syscall_name)
-					printf("%s", syscall_name);
-				else
-					printf("unknown(#%d)", syscall_nr);
-			}
-			if (check->denied_syscall_count > 0)
-				printf("\n");
-			print_wrapped_text("    Impact: ",
-					   "Application may have reduced functionality");
+			print_denied_outcomes(check, "    ");
+			print_denial_assessment(check, "    Assessment: ");
+			print_wrapped_text("    Recommendation: ",
+					   "Not added automatically.");
 			printf("\n");
 		}
 	}
@@ -856,8 +1082,29 @@ void analyze_capabilities(void)
 		if (cap_required_union(&state.app.checks[i]))
 			required_count++;
 		if (cap_total_denied(&state.app.checks[i]) > 0 &&
-		    cap_total_granted(&state.app.checks[i]) == 0)
+		    cap_total_granted(&state.app.checks[i]) == 0) {
+			enum denial_assessment assessment;
+
 			denied_count++;
+			assessment = assess_cap_denials(&state.app.checks[i]);
+			switch (assessment) {
+			case DENIAL_ASSESSMENT_PERMISSION:
+			case DENIAL_ASSESSMENT_MIXED_INTERRUPTED:
+				denied_manual++;
+				break;
+			case DENIAL_ASSESSMENT_INCONCLUSIVE:
+				denied_inconclusive++;
+				break;
+			case DENIAL_ASSESSMENT_SUCCEEDED:
+				denied_succeeded++;
+				break;
+			case DENIAL_ASSESSMENT_OTHER:
+				denied_other++;
+				break;
+			case DENIAL_ASSESSMENT_NONE:
+				break;
+			}
+		}
 	}
 
 	printf("SUMMARY:\n");
@@ -865,7 +1112,22 @@ void analyze_capabilities(void)
 	printf("  Total capability checks: %lu\n", total_checks);
 	printf("  Required capabilities: %d\n", required_count);
 	printf("  Conditional capabilities: %d\n", conditional_count);
-	printf("  Denied operations: %d\n", denied_count);
+	printf("  Capabilities with no granted checks: %d\n", denied_count);
+	if (denied_count > 0) {
+		printf("    Assessment counts:\n");
+		if (denied_manual > 0)
+			printf("      Manual investigation required: %d\n",
+			       denied_manual);
+		if (denied_inconclusive > 0)
+			printf("      Additional evidence required: %d\n",
+			       denied_inconclusive);
+		if (denied_succeeded > 0)
+			printf("      Omitted after associated syscall success: %d\n",
+			       denied_succeeded);
+		if (denied_other > 0)
+			printf("      Capability check not established as cause: %d\n",
+			       denied_other);
+	}
 	printf("\n");
 
 	if (state.foreign_target_ns_observed) {
@@ -882,6 +1144,7 @@ void analyze_capabilities(void)
 	} else if (required_count > 0) {
 		printf("RECOMMENDATIONS:\n");
 		print_rule('-');
+		print_denied_recommendation_review();
 		if (state.app.prog_type != UNSUPPORTED) {
 			printf("  Programmatic solution (%s):\n",
 			       state.app.prog_type == ELF ?
@@ -1004,10 +1267,19 @@ void analyze_capabilities(void)
 	} else {
 		printf("RECOMMENDATIONS:\n");
 		print_rule('-');
-		print_wrapped_text("  ",
-				   "This application does not require any elevated capabilities!");
-		print_wrapped_text("  ",
-				   "Run as an unprivileged user with no special capabilities.");
+		if (denied_count > 0) {
+			print_wrapped_text("  ",
+				"No capabilities have confirmed granted use, so none "
+				"are recommended automatically.");
+			print_denied_recommendation_review();
+		} else {
+			print_wrapped_text("  ",
+				"This application does not require any elevated "
+				"capabilities!");
+			print_wrapped_text("  ",
+				"Run as an unprivileged user with no special "
+				"capabilities.");
+		}
 		printf("\n");
 	}
 
