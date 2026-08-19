@@ -420,10 +420,19 @@ int main(int argc, char **argv)
 	state.app.mremap_nr = audit_name_to_syscall("mremap", audit_machine);
 	state.app.capset_nr = audit_name_to_syscall("capset", audit_machine);
 
-	state.skel = cap_audit_bpf__open_and_load();
+	state.skel = cap_audit_bpf__open();
 	if (!state.skel) {
-		fprintf(stderr, "Error: Failed to load BPF program: %s\n",
+		fprintf(stderr, "Error: Failed to open BPF program: %s\n",
 			strerror(errno));
+		free(state.app.exe);
+		goto err_target_path;
+	}
+	state.skel->rodata->capset_syscall_nr = state.app.capset_nr;
+	err = cap_audit_bpf__load(state.skel);
+	if (err) {
+		fprintf(stderr, "Error: Failed to load BPF program: %s\n",
+			strerror(-err));
+		cap_audit_bpf__destroy(state.skel);
 		free(state.app.exe);
 		goto err_target_path;
 	}

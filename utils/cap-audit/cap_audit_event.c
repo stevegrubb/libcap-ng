@@ -127,6 +127,40 @@ static void handle_syscall_result(const struct cap_event *e)
 		       (unsigned long long)e->denied_caps);
 }
 
+/* Mark the first capset from the initial process as the phase boundary. */
+static void observe_initial_capset(const struct cap_event *e)
+{
+	if (state.capset_observed ||
+	    e->syscall_nr != state.app.capset_nr ||
+	    e->pid != (__u32)state.app.pid)
+		return;
+
+	state.capset_observed = 1;
+	if (state.verbose)
+		printf("[CAP] Capability drop detected (capset from "
+		       "initial PID); switching to operational phase\n");
+}
+
+/*
+ * Child requests also constrain the inherited deployment boundary, but only
+ * the initial process's capset separates its initialization and operation.
+ */
+static void handle_capset_result(const struct cap_event *e)
+{
+	if (e->syscall_ret != 0)
+		return;
+
+	record_successful_capset(e);
+	observe_initial_capset(e);
+
+	if (state.verbose)
+		printf("[CAPSET] pid=%u effective=0x%llx permitted=0x%llx "
+		       "inheritable=0x%llx\n", e->pid,
+		       (unsigned long long)e->capset_effective,
+		       (unsigned long long)e->capset_permitted,
+		       (unsigned long long)e->capset_inheritable);
+}
+
 int handle_cap_event(void *ctx __attribute__((unused)), void *data,
 		     size_t data_sz __attribute__((unused)))
 {
@@ -135,6 +169,10 @@ int handle_cap_event(void *ctx __attribute__((unused)), void *data,
 
 	if (e->event_type == CAP_EVENT_SYSCALL_RESULT) {
 		handle_syscall_result(e);
+		return 0;
+	}
+	if (e->event_type == CAP_EVENT_CAPSET) {
+		handle_capset_result(e);
 		return 0;
 	}
 	if (e->event_type != CAP_EVENT_CHECK)
@@ -186,15 +224,7 @@ int handle_cap_event(void *ctx __attribute__((unused)), void *data,
 		       e->comm);
 	}
 
-	if (!state.capset_observed &&
-	    e->syscall_nr == state.app.capset_nr &&
-	    e->pid == (__u32)state.app.pid) {
-		state.capset_observed = 1;
-		if (state.verbose)
-			printf("[CAP] Capability drop detected (capset from "
-			       "initial PID); switching to operational "
-			       "phase\n");
-	}
+	observe_initial_capset(e);
 
 	if (e->capability >= 0 && e->capability <= CAP_LAST_CAP) {
 		struct cap_check *check;

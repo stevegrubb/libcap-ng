@@ -49,6 +49,8 @@ const char *cap_name_safe(int cap)
 		return "sys_ptrace";
 	case CAP_SYS_ADMIN:
 		return "sys_admin";
+	case CAP_SYS_RESOURCE:
+		return "sys_resource";
 	default:
 		return "unknown";
 	}
@@ -152,6 +154,23 @@ static void emit_outcome(int cap, int syscall_nr, __s64 result)
 		fail("Syscall outcome event was rejected");
 }
 
+static void emit_capset(__s64 result, __u64 effective, __u64 permitted,
+			__u64 inheritable)
+{
+	struct cap_event event = {
+		.pid = 1235,
+		.tid = 1235,
+		.syscall_ret = result,
+		.capset_effective = effective,
+		.capset_permitted = permitted,
+		.capset_inheritable = inheritable,
+		.event_type = CAP_EVENT_CAPSET,
+	};
+
+	if (handle_cap_event(NULL, &event, sizeof(event)) != 0)
+		fail("capset event was rejected");
+}
+
 static void setup_events(void)
 {
 	int i;
@@ -199,6 +218,14 @@ static void setup_events(void)
 	emit_check(CAP_NET_BIND_SERVICE, TEST_OPENAT_NR, 0);
 	emit_outcome(CAP_NET_BIND_SERVICE, TEST_OPENAT_NR, 0);
 	emit_check(CAP_CHOWN, TEST_OPENAT_NR, 0);
+
+	/* Failed capset payloads are diagnostic noise, not compatibility input. */
+	emit_capset(-EPERM, 1ULL << CAP_SYS_CHROOT,
+		    1ULL << CAP_SYS_CHROOT, 0);
+	emit_capset(0, (1ULL << CAP_NET_BIND_SERVICE) |
+		       (1ULL << CAP_SYS_RESOURCE),
+		    (1ULL << CAP_NET_BIND_SERVICE) |
+		       (1ULL << CAP_SYS_RESOURCE), 0);
 }
 
 typedef void (*output_fn)(void);
@@ -286,7 +313,16 @@ static void test_human_output(void)
 	expect_text(output, "link: 3 succeeded");
 	expect_text(output, "kill: 1 interrupted with -EINTR");
 	expect_text(output, "kill: 1 interrupted with -ERESTARTSYS");
-	expect_text(output, "CAPABILITIES WITH NO GRANTED CHECKS:");
+	expect_text(output, "CAPSET-ONLY CAPABILITIES:");
+	expect_text(output, "sys_resource (#24)");
+	expect_text(output,
+		    "Requested by successful capset in: effective, permitted");
+	expect_text(output, "compatibility constraint");
+	expect_text(output, "confirmed");
+	expect_text(output, "functional use");
+	expect_text(output, "Successful capset calls: 1");
+	expect_text(output, "Capset-only capabilities: 1");
+	expect_text(output, "CAPABILITIES WITH ONLY NOT-GRANTED CHECKS:");
 	expect_text(output, "Capability checks returning not granted: 1");
 	expect_text(output,
 		    "Outcomes of syscall invocations containing such a check:");
@@ -302,7 +338,8 @@ static void test_human_output(void)
 	expect_text(output, "Additional evidence required: 2");
 	expect_text(output, "Omitted after associated syscall success: 1");
 	expect_text(output, "Capability check not established as cause: 1");
-	expect_text(output, "CapabilityBoundingSet=net_bind_service");
+	expect_text(output,
+		    "CapabilityBoundingSet=net_bind_service sys_resource");
 	free(output);
 
 	service.bounding.caps[CAP_NET_BIND_SERVICE] = true;
@@ -312,11 +349,16 @@ static void test_human_output(void)
 	expect_text(output, "sys_admin: Manual investigation required");
 	expect_text(output, "Capability is absent from the configured");
 	expect_text(output, "Mixed capability-check results: net_bind_service");
-	expect_text(output, "Detailed evidence appears in CAPABILITIES WITH NO");
+	expect_text(output,
+		    "Capset-only compatibility capabilities: sys_resource");
+	expect_text(output, "sys_resource is absent from the configured");
+	expect_text(output,
+		    "Detailed evidence appears in CAPABILITIES WITH ONLY");
 	if (count_text(output, "mount: 1 failed with -EPERM") != 1 ||
 	    count_text(output, "mount: 1 failed with -ENOENT") != 1)
 		fail("Service recommendations duplicated syscall outcomes");
-	expect_text(output, "CapabilityBoundingSet=net_bind_service");
+	expect_text(output,
+		    "CapabilityBoundingSet=net_bind_service sys_resource");
 	free(output);
 	state.service_cfg = NULL;
 }
@@ -334,6 +376,11 @@ static void test_structured_output(void)
 	expect_text(output, "\"return_name\": \"EPERM\"");
 	expect_text(output, "\"return_name\": \"ENOENT\"");
 	expect_text(output, "\"not_granted_checks\": 1");
+	expect_text(output, "\"successful_capset_calls\": 1");
+	expect_text(output, "\"capset_only_capabilities\": [");
+	expect_text(output, "\"name\": \"sys_resource\"");
+	expect_text(output,
+		    "\"requested_sets\": [\"effective\", \"permitted\"]");
 	expect_text(output, "\"denied_syscalls\": [");
 	expect_text(output, "\"return_name\": \"ERESTARTSYS\",\n"
 		    "          \"errno\": null");
@@ -352,6 +399,9 @@ static void test_structured_output(void)
 	expect_text(output, "return_name: EPERM");
 	expect_text(output, "return_name: ENOENT");
 	expect_text(output, "not_granted_checks: 1");
+	expect_text(output, "successful_capset_calls: 1");
+	expect_text(output, "capset_only_capabilities:");
+	expect_text(output, "name: sys_resource");
 	expect_text(output, "denied_syscalls:");
 	expect_text(output, "return_name: ERESTARTSYS\n"
 		    "        errno: null");
@@ -381,6 +431,11 @@ int main(void)
 	if (state.app.checks[CAP_CHOWN].outcome_count != 0 ||
 	    state.app.checks[CAP_NET_BIND_SERVICE].outcome_count != 1)
 		fail("Syscall outcome was correlated to the wrong capability");
+	if (state.app.capset.successful_calls != 1 ||
+	    !cap_is_capset_only(CAP_SYS_RESOURCE) ||
+	    cap_is_capset_only(CAP_NET_BIND_SERVICE) ||
+	    cap_requested_by_capset(CAP_SYS_CHROOT))
+		fail("capset payloads were not filtered or classified correctly");
 	test_human_output();
 	test_structured_output();
 

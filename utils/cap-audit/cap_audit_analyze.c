@@ -190,6 +190,69 @@ static int cap_in_programmatic_set(int cap)
 	return state.app.checks[cap].granted > 0;
 }
 
+static int capset_only_count(void)
+{
+	int cap;
+	int count = 0;
+
+	for (cap = 0; cap <= CAP_LAST_CAP; cap++) {
+		if (cap_is_capset_only(cap))
+			count++;
+	}
+	return count;
+}
+
+static void print_capset_requested_sets(int cap, const char *prefix)
+{
+	__u64 mask = 1ULL << cap;
+	int first = 1;
+
+	printf("%s", prefix);
+	if (state.app.capset.effective & mask) {
+		printf("effective");
+		first = 0;
+	}
+	if (state.app.capset.permitted & mask) {
+		printf("%spermitted", first ? "" : ", ");
+		first = 0;
+	}
+	if (state.app.capset.inheritable & mask)
+		printf("%sinheritable", first ? "" : ", ");
+	printf("\n");
+}
+
+static void print_capset_only_section(void)
+{
+	int cap;
+	int found = 0;
+
+	printf("CAPSET-ONLY CAPABILITIES:\n");
+	print_rule('-');
+	for (cap = 0; cap <= CAP_LAST_CAP; cap++) {
+		if (!cap_is_capset_only(cap))
+			continue;
+
+		printf("  %s (#%d)\n", cap_name_safe(cap), cap);
+		print_capset_requested_sets(cap,
+			"    Requested by successful capset in: ");
+		printf("    Granted use observed: no\n");
+		print_wrapped_text("    Assessment: ",
+			"The current binary requested this capability in a "
+			"capset that completed successfully, but no granted "
+			"capability check was observed. This is a compatibility "
+			"constraint, not confirmed functional use.");
+		print_wrapped_text("    Recommendation: ",
+			"Retain it in deployment capability sets for the current "
+			"binary. Manually review the application, exercise relevant "
+			"code paths, and remove it from the application's capset "
+			"setup before removing it from the deployment boundary.");
+		printf("\n");
+		found = 1;
+	}
+	if (!found)
+		printf("  None\n\n");
+}
+
 static bool svc_is_root_service(const service_config_t *cfg)
 {
 	return !cfg->user_is_set || cfg->user_uid == 0;
@@ -256,8 +319,6 @@ static void svc_build_recommended_caps(bool caps[CAP_LAST_CAP + 1])
 	int cap;
 
 	for (cap = 0; cap <= CAP_LAST_CAP; cap++) {
-		struct cap_check *check = &state.app.checks[cap];
-
 		caps[cap] = false;
 		if (!include_cap_in_recommendations(cap))
 			continue;
@@ -265,7 +326,7 @@ static void svc_build_recommended_caps(bool caps[CAP_LAST_CAP + 1])
 		 * A denied check may be advisory or precede a fallback, so it
 		 * does not prove that the capability is required.
 		 */
-		if (cap_required_union(check))
+		if (cap_is_compat_requirement(cap))
 			caps[cap] = true;
 	}
 }
@@ -539,7 +600,7 @@ static void svc_print_denied_review(const service_config_t *cfg)
 			continue;
 
 		if (!found)
-			printf("    Capabilities with no granted checks:\n");
+			printf("    Capabilities with only not-granted checks:\n");
 		label = denial_review_label(assess_cap_denials(check));
 		printf("      %s: %s\n", cap_name_safe(cap),
 		       label ? label : "no assessment");
@@ -552,12 +613,13 @@ static void svc_print_denied_review(const service_config_t *cfg)
 
 	if (found)
 		print_wrapped_text("      ",
-			"Detailed evidence appears in CAPABILITIES WITH NO "
-			"GRANTED CHECKS above. No capability in that section is "
-			"added automatically. Add one only after confirming that "
-			"required functionality fails because it is absent.");
+			"Detailed evidence appears in CAPABILITIES WITH ONLY "
+			"NOT-GRANTED CHECKS above. A not-granted check does not "
+			"add a "
+			"capability automatically. A capability may still be "
+			"retained separately when a successful capset requested it.");
 	else
-		printf("    Capabilities with no granted checks: none\n");
+		printf("    Capabilities with only not-granted checks: none\n");
 }
 
 static void svc_print_recommended_denials(void)
@@ -589,6 +651,43 @@ static void svc_print_recommended_denials(void)
 		"not-granted checks do not change the generated configuration.");
 }
 
+static void svc_print_capset_only(const service_config_t *cfg)
+{
+	bool caps[CAP_LAST_CAP + 1] = { false };
+	int cap;
+	int found = 0;
+
+	for (cap = 0; cap <= CAP_LAST_CAP; cap++) {
+		if (!cap_is_capset_only(cap) ||
+		    !include_cap_in_recommendations(cap))
+			continue;
+		caps[cap] = true;
+		found = 1;
+	}
+	if (!found)
+		return;
+
+	printf("    Capset-only compatibility capabilities: ");
+	svc_print_cap_list(caps);
+	printf("\n");
+	print_wrapped_text("      ",
+		"The current-binary-compatible configuration retains these "
+		"capabilities. Detailed application-cleanup guidance appears "
+		"in CAPSET-ONLY CAPABILITIES above.");
+	if (!cfg->bounding.seen)
+		return;
+
+	for (cap = 0; cap <= CAP_LAST_CAP; cap++) {
+		if (!caps[cap] || cfg->bounding.caps[cap])
+			continue;
+		print_wrappedf("      Warning: ",
+			"%s is absent from the configured CapabilityBoundingSet. "
+			"The observed capset may fail until the application stops "
+			"requesting it or the capability is restored.",
+			cap_name_safe(cap));
+	}
+}
+
 static void svc_print_unused_bounding(const service_config_t *cfg)
 {
 	int cap;
@@ -601,6 +700,7 @@ static void svc_print_unused_bounding(const service_config_t *cfg)
 		struct cap_check *check = &state.app.checks[cap];
 
 		if (!cfg->bounding.caps[cap] ||
+		    cap_requested_by_capset(cap) ||
 		    cap_total_checks(check) > 0)
 			continue;
 		printf("    Configured but not observed: %s\n",
@@ -627,16 +727,16 @@ static void print_service_recommendations(void)
 
 	printf("SYSTEMD SERVICE RECOMMENDATIONS:\n");
 	print_rule('-');
-	printf("  Unit file: %s\n", state.service_file);
-	printf("  ExecStart: %s\n", cfg->exec_start ?
+	printf("  Current service context:\n");
+	printf("    Unit file: %s\n", state.service_file);
+	printf("    ExecStart: %s\n", cfg->exec_start ?
 	       cfg->exec_start : "(not configured)");
-	printf("  User: %s (uid=%u)\n", svc_user_name(cfg),
+	printf("    User: %s (uid=%u)\n", svc_user_name(cfg),
 	       cfg->user_is_set ? (unsigned int)cfg->user_uid : 0);
-	printf("  Group: %s (gid=%u)\n", group, (unsigned int)gid);
-	printf("  NoNewPrivileges: %s\n",
+	printf("    Group: %s (gid=%u)\n", group, (unsigned int)gid);
+	printf("    NoNewPrivileges: %s\n",
 	       cfg->no_new_privs ? "yes" : "no");
-	printf("\n");
-	printf("  Current CapabilityBoundingSet: ");
+	printf("    CapabilityBoundingSet: ");
 	svc_print_cap_set(&cfg->bounding);
 	printf("\n\n");
 
@@ -657,10 +757,15 @@ static void print_service_recommendations(void)
 				   "services.");
 	svc_print_denied_review(cfg);
 	svc_print_recommended_denials();
+	svc_print_capset_only(cfg);
 	svc_print_unused_bounding(cfg);
 	printf("\n");
 
-	printf("  Recommended [Service] configuration:\n");
+	if (capset_only_count() > 0)
+		printf("  Recommended current-binary-compatible [Service] "
+		       "configuration:\n");
+	else
+		printf("  Recommended [Service] configuration:\n");
 	printf("    [Service]\n");
 	printf("    User=%s\n", svc_user_name(cfg));
 	printf("    Group=%s\n", group);
@@ -739,7 +844,7 @@ static void print_denied_recommendation_review(void)
 		    cap_total_granted(check) > 0)
 			continue;
 		if (!found)
-			printf("  Capabilities with no granted checks:\n");
+			printf("  Capabilities with only not-granted checks:\n");
 
 		assessment = assess_cap_denials(check);
 		label = denial_review_label(assessment);
@@ -751,9 +856,9 @@ static void print_denied_recommendation_review(void)
 
 	if (found) {
 		print_wrapped_text("    ",
-			"Capabilities in this section are not added automatically. "
-			"Add one only after confirming that required functionality "
-			"fails because the capability is absent.");
+			"A not-granted check does not add a capability "
+			"automatically. A capability may still be retained "
+			"separately when a successful capset requested it.");
 		printf("\n");
 	}
 }
@@ -770,6 +875,7 @@ void analyze_capabilities(void)
 	int denied_inconclusive = 0;
 	int denied_succeeded = 0;
 	int denied_other = 0;
+	int capset_only = capset_only_count();
 	unsigned long total_checks = 0;
 	int i;
 	int first;
@@ -874,6 +980,8 @@ void analyze_capabilities(void)
 		if (!has_required)
 			printf("  None\n\n");
 	}
+
+	print_capset_only_section();
 
 	printf("CONDITIONAL CAPABILITIES:\n");
 	print_rule('-');
@@ -1055,7 +1163,7 @@ void analyze_capabilities(void)
 	if (!has_conditional)
 		printf("  None\n\n");
 
-	printf("CAPABILITIES WITH NO GRANTED CHECKS:\n");
+	printf("CAPABILITIES WITH ONLY NOT-GRANTED CHECKS:\n");
 	print_rule('-');
 	for (i = 0; i <= CAP_LAST_CAP; i++) {
 		struct cap_check *check;
@@ -1069,8 +1177,15 @@ void analyze_capabilities(void)
 			       cap_total_denied(check));
 			print_denied_outcomes(check, "    ");
 			print_denial_assessment(check, "    Assessment: ");
-			print_wrapped_text("    Recommendation: ",
-					   "Not added automatically.");
+			if (cap_is_capset_only(i))
+				print_wrapped_text("    Recommendation: ",
+					"Not added based on the not-granted checks. "
+					"Retained separately in compatible deployment "
+					"configurations because a successful capset "
+					"requested it.");
+			else
+				print_wrapped_text("    Recommendation: ",
+						   "Not added automatically.");
 			printf("\n");
 		}
 	}
@@ -1112,7 +1227,11 @@ void analyze_capabilities(void)
 	printf("  Total capability checks: %lu\n", total_checks);
 	printf("  Required capabilities: %d\n", required_count);
 	printf("  Conditional capabilities: %d\n", conditional_count);
-	printf("  Capabilities with no granted checks: %d\n", denied_count);
+	printf("  Successful capset calls: %lu\n",
+	       state.app.capset.successful_calls);
+	printf("  Capset-only capabilities: %d\n", capset_only);
+	printf("  Capabilities with only not-granted checks: %d\n",
+	       denied_count);
 	if (denied_count > 0) {
 		printf("    Assessment counts:\n");
 		if (denied_manual > 0)
@@ -1141,11 +1260,11 @@ void analyze_capabilities(void)
 		printf("\n");
 	} else if (state.service_cfg) {
 		print_service_recommendations();
-	} else if (required_count > 0) {
+	} else if (required_count > 0 || capset_only > 0) {
 		printf("RECOMMENDATIONS:\n");
 		print_rule('-');
 		print_denied_recommendation_review();
-		if (state.app.prog_type != UNSUPPORTED) {
+		if (state.app.prog_type != UNSUPPORTED && required_count > 0) {
 			printf("  Programmatic solution (%s):\n",
 			       state.app.prog_type == ELF ?
 			       "C with libcap-ng" :
@@ -1189,7 +1308,14 @@ void analyze_capabilities(void)
 			}
 		}
 
-		printf("  For systemd service:\n");
+		if (capset_only > 0)
+			print_wrapped_text("  Compatibility note: ",
+				"Deployment snippets retain capset-only capabilities "
+				"so the observed capset calls can still succeed. Remove "
+				"them from application capability setup before narrowing "
+				"these deployment sets.");
+		printf("  For systemd service%s:\n",
+		       capset_only > 0 ? " (current-binary-compatible)" : "");
 		if (state.capset_observed)
 			print_wrapped_text("    Note: ",
 					   "Ambient capabilities must include initialization requirements. The application drops to the operational set internally via capset.");
@@ -1199,7 +1325,7 @@ void analyze_capabilities(void)
 		printf("    AmbientCapabilities=");
 		first = 1;
 		for (i = 0; i <= CAP_LAST_CAP; i++) {
-			if (cap_required_union(&state.app.checks[i]) &&
+			if (cap_is_compat_requirement(i) &&
 			    include_cap_in_recommendations(i)) {
 				if (!first)
 					printf(" ");
@@ -1211,7 +1337,7 @@ void analyze_capabilities(void)
 		printf("    CapabilityBoundingSet=");
 		first = 1;
 		for (i = 0; i <= CAP_LAST_CAP; i++) {
-			if (cap_required_union(&state.app.checks[i]) &&
+			if (cap_is_compat_requirement(i) &&
 			    include_cap_in_recommendations(i)) {
 				if (!first)
 					printf(" ");
@@ -1227,7 +1353,7 @@ void analyze_capabilities(void)
 					   "File capabilities must include initialization requirements. The application drops to the operational set internally via capset.");
 		printf("    filecap /path/to/binary");
 		for (i = 0; i <= CAP_LAST_CAP; i++) {
-			if (cap_required_union(&state.app.checks[i]) &&
+			if (cap_is_compat_requirement(i) &&
 			    include_cap_in_recommendations(i))
 				printf(" %s", cap_name_safe(i));
 		}
@@ -1240,7 +1366,7 @@ void analyze_capabilities(void)
 		printf("    docker run --user $(id -u):$(id -g) \\\n");
 		printf("      --cap-drop=ALL \\\n");
 		for (i = 0; i <= CAP_LAST_CAP; i++) {
-			if (cap_required_union(&state.app.checks[i]) &&
+			if (cap_is_compat_requirement(i) &&
 			    include_cap_in_recommendations(i))
 				printf("      --cap-add=%s \\\n",
 				       cap_name_safe(i));
@@ -1259,7 +1385,7 @@ void analyze_capabilities(void)
 		printf("          - ALL\n");
 		printf("        add:\n");
 		for (i = 0; i <= CAP_LAST_CAP; i++) {
-			if (cap_required_union(&state.app.checks[i]) &&
+			if (cap_is_compat_requirement(i) &&
 			    include_cap_in_recommendations(i))
 				printf("          - %s\n", cap_name_safe(i));
 		}

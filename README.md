@@ -208,6 +208,17 @@ cap-audit
 ---------
 As of the 0.9 release of libcap-ng, there is a new utility **cap-audit**. This program can be used to determine the actual capabilities that a program needs. To do this, use it to run the application kind of the way one would use strace. Use '--' to separate the options to cap-audit from the program being audited. You need to use cap-audit as root because it places an eBPF program in the kernel to hook the capability checks to determine what was requested, was it granted, and what syscall did it originate from. When testing a daemon, pass command line options that keep it in the foreground. The following is an example checking sshd: 
 
+Cap-audit also records the capability masks installed by successful `capset`
+calls. A capability requested by `capset` without a confirmed granted check is
+reported separately under `CAPSET-ONLY CAPABILITIES`; it is not classified as
+required. Deployment snippets retain these capabilities for compatibility with
+the current binary because removing one from the deployment boundary can make
+the application's `capset` fail even when the capability is no longer
+functionally needed. Treat them as application-cleanup candidates: remove the
+capability from the application's setup, exercise representative code paths in
+additional runs, and only then remove it from the deployment boundary. Failed
+`capset` calls do not establish this compatibility constraint.
+
 cap-audit is optional and has to be enabled at build time:
 
 ```
@@ -352,13 +363,17 @@ REQUIRED CAPABILITIES:
     Checks: 1 granted, 0 denied
     Reason: Used by getxattr (syscall 191)
 
+CAPSET-ONLY CAPABILITIES:
+----------------------------------------------------------------------
+  None
+
 CONDITIONAL CAPABILITIES:
 ----------------------------------------------------------------------
   CAP_DAC_OVERRIDE
     Needed when fs.protected_symlinks = 1 for symlinks in world-writable directories
     Current value: 1 (capability needed)
 
-CAPABILITIES WITH NO GRANTED CHECKS:
+CAPABILITIES WITH ONLY NOT-GRANTED CHECKS:
 ----------------------------------------------------------------------
   dac_override (#1)
     Capability checks returning not granted: 2
@@ -384,13 +399,15 @@ SUMMARY:
   Total capability checks: 2349
   Required capabilities: 11
   Conditional capabilities: 1
-  Capabilities with no granted checks: 2
+  Successful capset calls: 0
+  Capset-only capabilities: 0
+  Capabilities with only not-granted checks: 2
     Assessment counts:
       Omitted after associated syscall success: 2
 
 RECOMMENDATIONS:
 ----------------------------------------------------------------------
-  Capabilities with no granted checks:
+  Capabilities with only not-granted checks:
     dac_override: Omitted; associated syscalls succeeded
     bpf: Omitted; associated syscalls succeeded
     Capabilities in this section are not added automatically. Add one only

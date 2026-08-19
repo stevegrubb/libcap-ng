@@ -1,7 +1,7 @@
 .\" SPDX-License-Identifier: GPL-2.0-or-later
 .\" Copyright (c) 2026 Red Hat Inc.
 
-.TH CAP-AUDIT "8" "March 2026" "Red Hat" "System Administration Utilities"
+.TH CAP-AUDIT "8" "August 2026" "Red Hat" "System Administration Utilities"
 .SH NAME
 cap-audit \- discover the minimal capability set for a program
 .SH SYNOPSIS
@@ -36,9 +36,20 @@ investigation. Other failures are retained as diagnostic evidence. EINTR and
 kernel restart results are treated as interruption evidence: interruption
 alone is inconclusive, while a mix of interrupted and successful invocations
 requires manual investigation because cap-audit cannot distinguish call sites
-or arguments. Capabilities with no granted checks are never added to automatic
-recommendations; users should add one only after confirming that required
-functionality fails because it is absent.
+or arguments. Capabilities with only not-granted checks are never added to
+automatic recommendations; users should add one only after confirming that
+required functionality fails because it is absent.
+.PP
+The capability masks installed by successful
+.BR capset (2)
+calls are also recorded. A capability requested by capset without a confirmed
+granted check is reported under CAPSET-ONLY CAPABILITIES rather than being
+classified as required. Deployment snippets retain it as a current-binary
+compatibility constraint because removing it from the deployment boundary can
+cause the application's capset to fail. To remove such a capability, first
+remove it from the application's capability setup, exercise representative
+code paths in additional runs, and then narrow the deployment boundary. Failed
+capset calls do not establish this constraint.
 .PP
 Runtime tracing requires root or the CAP_BPF, CAP_PERFMON, and CAP_SYS_PTRACE capabilities, along with kernel BTF data in
 \fI/sys/kernel/btf/vmlinux\fP.

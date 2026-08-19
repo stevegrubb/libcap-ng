@@ -87,6 +87,34 @@ static void print_yaml_outcomes(const struct cap_check *check)
 	}
 }
 
+static void print_yaml_capset_only(void)
+{
+	int cap;
+	int found = 0;
+
+	for (cap = 0; cap <= CAP_LAST_CAP; cap++) {
+		__u64 mask;
+
+		if (!cap_is_capset_only(cap))
+			continue;
+		if (!found)
+			printf("capset_only_capabilities:\n");
+		printf("  - number: %d\n", cap);
+		printf("    name: %s\n", cap_name_safe(cap));
+		printf("    requested_sets:\n");
+		mask = 1ULL << cap;
+		if (state.app.capset.effective & mask)
+			printf("      - effective\n");
+		if (state.app.capset.permitted & mask)
+			printf("      - permitted\n");
+		if (state.app.capset.inheritable & mask)
+			printf("      - inheritable\n");
+		found = 1;
+	}
+	if (!found)
+		printf("capset_only_capabilities: []\n");
+}
+
 void output_yaml(void)
 {
 	int i;
@@ -121,6 +149,8 @@ void output_yaml(void)
 
 	printf("capability_drop_observed: %s\n",
 	       state.capset_observed ? "true" : "false");
+	printf("successful_capset_calls: %lu\n",
+	       state.app.capset.successful_calls);
 
 	printf("required_capabilities:\n");
 	for (i = 0; i <= CAP_LAST_CAP; i++) {
@@ -142,6 +172,8 @@ void output_yaml(void)
 			}
 		}
 	}
+
+	print_yaml_capset_only();
 
 	if (state.capset_observed) {
 		printf("initialization_capabilities:\n");

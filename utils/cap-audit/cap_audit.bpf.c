@@ -40,6 +40,23 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
 
+#define CAP_VERSION_1	0x19980330
+#define CAP_VERSION_2	0x20071026
+#define CAP_VERSION_3	0x20080522
+
+struct cap_user_header {
+	__u32 version;
+	int pid;
+};
+
+struct cap_user_data {
+	__u32 effective;
+	__u32 permitted;
+	__u32 inheritable;
+};
+
+const volatile int capset_syscall_nr = -1;
+
 /*
  * BPF overview:
  * The BPF side attaches to capability helpers (cap_capable, ns_capable,
@@ -80,8 +97,11 @@
  * cap_capable(), and stack id; tracks per-capability statistics; and
  * streams finalized events to userspace through a ring buffer. A syscall
  * completion event correlates denied checks from one invocation with its raw
- * kernel return value. The cap_opts field carries the CAP_OPT_* flags so
- * userspace can identify known advisory call sites without treating
+ * kernel return value. Successful capset completion events also carry the
+ * requested masks so userspace can distinguish a current-binary compatibility
+ * constraint from confirmed capability use. The cap_opts field carries the
+ * CAP_OPT_* flags so userspace can identify known advisory call sites without
+ * treating
  * CAP_OPT_NOAUDIT as a standalone filter. CAP_OPT_NOAUDIT means "do not
  * audit" and is only a confirming signal alongside syscall and capability
  * matching. Fork/exit tracepoints keep the PID filter in sync so children
@@ -122,6 +142,7 @@ char LICENSE[] SEC("license") = "GPL";
 enum cap_event_type {
 	CAP_EVENT_CHECK,
 	CAP_EVENT_SYSCALL_RESULT,
+	CAP_EVENT_CAPSET,
 };
 
 struct cap_event {
@@ -139,6 +160,9 @@ struct cap_event {
 	__u32 cap_opts;
 	__s64 syscall_ret;
 	__u64 denied_caps;
+	__u64 capset_effective;
+	__u64 capset_permitted;
+	__u64 capset_inheritable;
 	__u32 event_type;
 };
 
@@ -251,7 +275,11 @@ struct {
 // it and a possible solution. The drawback is that it uses more memory.
 struct syscall_state {
 	__u64 denied_caps;
+	__u64 capset_effective;
+	__u64 capset_permitted;
+	__u64 capset_inheritable;
 	int nr;
+	__u8 capset_valid;
 };
 
 struct {
@@ -628,6 +656,48 @@ int BPF_KRETPROBE(trace_capable_ret, int ret)
 }
 
 /*
+ * read_capset_payload - copy capability masks from capset user arguments.
+ * @ctx: raw syscall entry context containing header and data pointers.
+ * @syscall: per-thread syscall state to populate.
+ *
+ * Marks the payload valid only for a recognized ABI and complete user read.
+ */
+static __always_inline void read_capset_payload(
+			struct trace_event_raw_sys_enter *ctx,
+			struct syscall_state *syscall)
+{
+	struct cap_user_header header;
+	struct cap_user_data data[2] = { 0 };
+	const void *header_ptr = (const void *)ctx->args[0];
+	const void *data_ptr = (const void *)ctx->args[1];
+
+	if (!header_ptr || !data_ptr)
+		return;
+	if (bpf_probe_read_user(&header, sizeof(header), header_ptr) != 0)
+		return;
+
+	if (header.version == CAP_VERSION_1) {
+		if (bpf_probe_read_user(&data[0], sizeof(data[0]),
+					data_ptr) != 0)
+			return;
+	} else if (header.version == CAP_VERSION_2 ||
+		   header.version == CAP_VERSION_3) {
+		if (bpf_probe_read_user(data, sizeof(data), data_ptr) != 0)
+			return;
+	} else {
+		return;
+	}
+
+	syscall->capset_effective = data[0].effective |
+				      ((__u64)data[1].effective << 32);
+	syscall->capset_permitted = data[0].permitted |
+				      ((__u64)data[1].permitted << 32);
+	syscall->capset_inheritable = data[0].inheritable |
+					((__u64)data[1].inheritable << 32);
+	syscall->capset_valid = 1;
+}
+
+/*
  * trace_sys_enter - remember syscall numbers on entry.
  * @ctx: raw_syscalls/sys_enter tracepoint context.
  *
@@ -647,6 +717,8 @@ int trace_sys_enter(struct trace_event_raw_sys_enter *ctx)
 		return 0;
 
 	syscall.nr = ctx->id;
+	if (should_record_pid(pid) && ctx->id == capset_syscall_nr)
+		read_capset_payload(ctx, &syscall);
 	bpf_map_update_elem(&current_syscalls, &pid_tgid, &syscall, BPF_ANY);
 	return 0;
 }
@@ -676,12 +748,41 @@ static __always_inline void emit_syscall_result(
 	bpf_ringbuf_submit(out, 0);
 }
 
+/* Emit masks installed by a successful capset call. */
+static __always_inline void emit_capset_result(
+				const struct syscall_state *syscall, __s64 ret)
+{
+	struct cap_event *out;
+	__u64 pid_tgid;
+
+	if (!syscall->capset_valid || ret != 0)
+		return;
+
+	out = bpf_ringbuf_reserve(&cap_events, sizeof(*out), 0);
+	if (!out)
+		return;
+
+	__builtin_memset(out, 0, sizeof(*out));
+	pid_tgid = bpf_get_current_pid_tgid();
+	out->timestamp_ns = bpf_ktime_get_ns();
+	out->pid = pid_tgid >> 32;
+	out->tid = (__u32)pid_tgid;
+	out->syscall_nr = syscall->nr;
+	out->syscall_ret = ret;
+	out->capset_effective = syscall->capset_effective;
+	out->capset_permitted = syscall->capset_permitted;
+	out->capset_inheritable = syscall->capset_inheritable;
+	out->event_type = CAP_EVENT_CAPSET;
+	bpf_ringbuf_submit(out, 0);
+}
+
 /*
  * trace_sys_exit - emit denied-check outcomes and clear syscall tracking.
  * @ctx: raw_syscalls/sys_exit tracepoint context.
  *
  * Emits the raw return value when the invocation contained denied capability
- * checks, then removes its per-thread state. Returns 0.
+ * checks. A successful capset also emits its requested masks. Removes the
+ * per-thread state before returning 0.
  */
 SEC("tracepoint/raw_syscalls/sys_exit")
 int trace_sys_exit(struct trace_event_raw_sys_exit *ctx)
@@ -696,8 +797,10 @@ int trace_sys_exit(struct trace_event_raw_sys_exit *ctx)
 		return 0;
 
 	syscall = bpf_map_lookup_elem(&current_syscalls, &pid_tgid);
-	if (syscall)
+	if (syscall) {
 		emit_syscall_result(syscall, ctx->ret);
+		emit_capset_result(syscall, ctx->ret);
+	}
 	bpf_map_delete_elem(&current_syscalls, &pid_tgid);
 	return 0;
 }

@@ -37,6 +37,8 @@ const char *cap_name_safe(int cap)
 		return "sys_chroot";
 	case CAP_SYS_ADMIN:
 		return "sys_admin";
+	case CAP_SYS_RESOURCE:
+		return "sys_resource";
 	default:
 		return "unknown";
 	}
@@ -150,6 +152,9 @@ static void setup_analysis(service_config_t *service)
 	state.service_file = "/tmp/recommendation.service";
 	state.service_cfg = service;
 	state.capset_observed = 1;
+	state.app.capset.effective = 1ULL << CAP_SYS_RESOURCE;
+	state.app.capset.permitted = 1ULL << CAP_SYS_RESOURCE;
+	state.app.capset.successful_calls = 1;
 
 	service->user_raw = "validation-user";
 	service->user_uid = 1000;
@@ -159,6 +164,7 @@ static void setup_analysis(service_config_t *service)
 	service->exec_start = "/usr/bin/recommendation-target";
 	service->bounding.seen = true;
 	service->bounding.caps[CAP_SYS_ADMIN] = true;
+	service->bounding.caps[CAP_SYS_RESOURCE] = true;
 
 	check = &state.app.checks[CAP_CHOWN];
 	check->count = 1;
@@ -188,15 +194,23 @@ int main(void)
 {
 	static const char *const denied_guidance[] = {
 		"Detailed evidence appears in",
-		"CAPABILITIES WITH NO GRANTED CHECKS",
-		"No",
-		"capability in that section",
-		"added",
+		"CAPABILITIES WITH ONLY NOT-GRANTED CHECKS",
+		"not-granted check",
+		"does not add",
+		"capability",
 		"automatically",
-		"confirming",
-		"required functionality",
-		"fails",
-		"absent",
+		"successful capset",
+	};
+	static const char *const capset_guidance[] = {
+		"CAPSET-ONLY CAPABILITIES",
+		"sys_resource",
+		"application's",
+		"capset",
+		"setup",
+		"before",
+		"removing",
+		"deployment",
+		"boundary",
 	};
 	service_config_t service;
 	char *output;
@@ -206,10 +220,10 @@ int main(void)
 
 	expect_line(output,
 		    "    AmbientCapabilities=dac_override fowner "
-		    "net_bind_service sys_chroot");
+		    "net_bind_service sys_chroot sys_resource");
 	expect_line(output,
 		    "    CapabilityBoundingSet=dac_override fowner "
-		    "net_bind_service sys_chroot");
+		    "net_bind_service sys_chroot sys_resource");
 	expect_line(output,
 		    "    Initialization capabilities: dac_override fowner "
 		    "net_bind_service");
@@ -225,8 +239,23 @@ int main(void)
 		fail("Denied-only capability lacked investigation guidance");
 	if (!strstr(output, "Configured but not observed: sys_admin"))
 		fail("Unused bounding capability was not reported as removable");
+	if (strstr(output, "Configured but not observed: sys_resource"))
+		fail("Capset-only capability was reported as directly removable");
 	if (!strstr(output, "Consider removing from CapabilityBoundingSet"))
 		fail("Unused bounding capability lacked removal guidance");
+	if (!strstr(output, "CAPSET-ONLY CAPABILITIES:") ||
+	    !strstr(output, "sys_resource (#24)") ||
+	    !strstr(output, "Capset-only compatibility capabilities: ") ||
+	    !strstr(output, "Recommended current-binary-compatible [Service]"))
+		fail("Capset-only capability lacked compatibility diagnostics");
+	if (!strstr(output, "  Current service context:\n") ||
+	    !strstr(output,
+		    "    CapabilityBoundingSet: sys_admin sys_resource\n"))
+		fail("Current service context was not labeled");
+	if (!contains_tokens(output, capset_guidance,
+			     sizeof(capset_guidance) /
+			     sizeof(capset_guidance[0])))
+		fail("Capset-only capability lacked coordinated removal guidance");
 
 	free(output);
 	puts("cap-audit service recommendation tests passed");

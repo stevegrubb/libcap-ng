@@ -95,6 +95,46 @@ static void print_json_outcomes(const struct cap_check *check)
 	printf("\n      ]\n");
 }
 
+static void print_json_capset_only(void)
+{
+	int cap;
+	int first_cap = 1;
+
+	printf("  \"capset_only_capabilities\": [\n");
+	for (cap = 0; cap <= CAP_LAST_CAP; cap++) {
+		char *name_json;
+		__u64 mask;
+		int first_set = 1;
+
+		if (!cap_is_capset_only(cap))
+			continue;
+		name_json = json_escape(capng_capability_to_name(cap));
+		if (!first_cap)
+			printf(",\n");
+		printf("    {\n");
+		printf("      \"number\": %d,\n", cap);
+		printf("      \"name\": \"%s\",\n",
+		       name_json ? name_json : "");
+		printf("      \"requested_sets\": [");
+		mask = 1ULL << cap;
+		if (state.app.capset.effective & mask) {
+			printf("\"effective\"");
+			first_set = 0;
+		}
+		if (state.app.capset.permitted & mask) {
+			printf("%s\"permitted\"", first_set ? "" : ", ");
+			first_set = 0;
+		}
+		if (state.app.capset.inheritable & mask)
+			printf("%s\"inheritable\"", first_set ? "" : ", ");
+		printf("]\n");
+		printf("    }");
+		first_cap = 0;
+		free(name_json);
+	}
+	printf("\n  ]");
+}
+
 void output_json(void)
 {
 	int i;
@@ -140,6 +180,8 @@ void output_json(void)
 
 	printf("  \"capability_drop_observed\": %s,\n",
 	       state.capset_observed ? "true" : "false");
+	printf("  \"successful_capset_calls\": %lu,\n",
+	       state.app.capset.successful_calls);
 
 	printf("  \"required_capabilities\": [\n");
 	first_cap = 1;
@@ -177,7 +219,8 @@ void output_json(void)
 			free(reason_json);
 		}
 	}
-	printf("\n  ]");
+	printf("\n  ],\n");
+	print_json_capset_only();
 
 	if (state.capset_observed) {
 		printf(",\n  \"initialization_capabilities\": [\n");

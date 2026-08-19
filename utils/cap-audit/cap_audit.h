@@ -44,6 +44,7 @@
 enum cap_event_type {
 	CAP_EVENT_CHECK,
 	CAP_EVENT_SYSCALL_RESULT,
+	CAP_EVENT_CAPSET,
 };
 
 struct cap_event {
@@ -61,6 +62,9 @@ struct cap_event {
 	__u32 cap_opts;
 	__s64 syscall_ret;
 	__u64 denied_caps;
+	__u64 capset_effective;
+	__u64 capset_permitted;
+	__u64 capset_inheritable;
 	__u32 event_type;
 };
 
@@ -91,6 +95,13 @@ struct cap_outcome_summary {
 	unsigned long permission_failed;
 	unsigned long other_failed;
 	unsigned long interrupted;
+};
+
+struct capset_usage {
+	__u64 effective;
+	__u64 permitted;
+	__u64 inheritable;
+	unsigned long successful_calls;
 };
 
 struct cap_check {
@@ -140,6 +151,7 @@ struct app_caps {
 	char kernel_version[64];
 	int file_caps;
 	int file_setpcap;
+	struct capset_usage capset;
 };
 
 typedef struct {
@@ -240,6 +252,11 @@ unsigned long cap_total_denied(const struct cap_check *check)
 const char *cap_union_reason(const struct cap_check *check)
 	__attr_access ((__read_only__, 1))
 	__attribute_pure__;
+void record_successful_capset(const struct cap_event *event)
+	__attr_access ((__read_only__, 1));
+int cap_requested_by_capset(int cap) __attribute_pure__;
+int cap_is_capset_only(int cap) __attribute_pure__;
+int cap_is_compat_requirement(int cap) __attribute_pure__;
 int add_cap_syscall_outcome(struct cap_check *check, int syscall_nr,
 			    __s64 result)
 	__attr_access ((__read_write__, 1));
