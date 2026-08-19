@@ -19,9 +19,12 @@ cap_audit_path_test_SOURCES = cap_audit_path_test.c \
 	${top_srcdir}/utils/cap-audit/cap_audit_path.c
 
 if BUILD_CAP_AUDIT
-check_PROGRAMS += cap_audit_namespace_test cap_audit_service_test
+check_PROGRAMS += cap_audit_namespace_test cap_audit_recommendation_test \
+	cap_audit_service_test
 cap_audit_namespace_test_SOURCES = cap_audit_namespace_test.c \
 	${top_srcdir}/utils/cap-audit/cap_audit_event.c \
+	${top_srcdir}/utils/cap-audit/cap_audit_analyze.c
+cap_audit_recommendation_test_SOURCES = cap_audit_recommendation_test.c \
 	${top_srcdir}/utils/cap-audit/cap_audit_analyze.c
 cap_audit_service_test_SOURCES = cap_audit_service_test.c \
 	${top_srcdir}/utils/cap-audit/cap_audit_service.c

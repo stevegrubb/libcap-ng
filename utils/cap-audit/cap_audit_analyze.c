@@ -261,8 +261,11 @@ static void svc_build_recommended_caps(bool caps[CAP_LAST_CAP + 1])
 		caps[cap] = false;
 		if (!include_cap_in_recommendations(cap))
 			continue;
-		if (cap_required_union(check) ||
-		    cap_total_denied(check) > 0)
+		/*
+		 * A denied check may be advisory or precede a fallback, so it
+		 * does not prove that the capability is required.
+		 */
+		if (cap_required_union(check))
 			caps[cap] = true;
 	}
 }
@@ -363,7 +366,15 @@ static void svc_print_denied_caps(const service_config_t *cfg)
 		       cap_name_safe(cap), denied);
 		svc_print_denied_syscalls(check);
 		printf(")\n");
-		if (by_bounding)
+		if (!cap_required_union(check))
+			print_wrapped_text("      ",
+					   "Denied checks alone do not prove that a "
+					   "capability is required. Treat denied-only "
+					   "capabilities as candidates for manual "
+					   "investigation and add one only if its "
+					   "associated functionality is confirmed "
+					   "to fail.");
+		else if (by_bounding)
 			print_wrapped_text("      ",
 					   "Consider adding to CapabilityBoundingSet if this functionality is needed.");
 		found = 1;
