@@ -320,6 +320,26 @@ int main(void)
 	if (strstr(output,
 		   "A listed capability is retained separately because a"))
 		fail("Unrelated capset caveat was shown for denied capabilities");
+	expect_line(output, "    NoNewPrivileges=no");
+	if (!contains_tokens(output,
+		(const char *const[]) {
+			"The service was audited",
+			"Enabling it was not validated",
+			"configuration retains",
+			"NoNewPrivileges=no",
+			"functionality that starts child",
+			"processes or helpers",
+		}, 6))
+		fail("Disabled NoNewPrivileges lacked compatibility guidance");
+
+	free(output);
+	service.no_new_privs = true;
+	output = capture_analysis();
+	expect_line(output, "    NoNewPrivileges=yes");
+	if (strstr(output,
+		   "The service was audited with this setting disabled"))
+		fail("Enabled NoNewPrivileges received disabled-setting guidance");
+	service.no_new_privs = false;
 
 	free(output);
 	state.app.checks[CAP_SYS_RESOURCE].count = 1;

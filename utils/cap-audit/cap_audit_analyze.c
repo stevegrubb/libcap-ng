@@ -888,7 +888,12 @@ static void svc_print_generated_config(const service_config_t *cfg,
 	printf("    CapabilityBoundingSet=");
 	svc_print_cap_list(caps->bounding);
 	printf("\n");
-	printf("    NoNewPrivileges=yes\n");
+	/*
+	 * Enabling NoNewPrivileges was not tested when the service was traced
+	 * without it, so preserve the setting that governed the audit.
+	 */
+	printf("    NoNewPrivileges=%s\n",
+	       cfg->no_new_privs ? "yes" : "no");
 }
 
 static void print_service_recommendations(void)
@@ -935,6 +940,13 @@ static void print_service_recommendations(void)
 				   "AmbientCapabilities omitted because ambient "
 				   "capabilities are not meaningful for root "
 				   "services.");
+	if (!cfg->no_new_privs)
+		print_wrapped_text("    NoNewPrivileges: ",
+			"The service was audited with this setting disabled. "
+			"Enabling it was not validated, so the generated "
+			"configuration retains NoNewPrivileges=no. Test the "
+			"change separately, including functionality that starts "
+			"child processes or helpers, before enabling it.");
 	svc_print_denied_review(cfg);
 	svc_print_recommended_denials();
 	svc_print_capset_only(cfg);

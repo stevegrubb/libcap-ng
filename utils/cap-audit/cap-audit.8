@@ -90,6 +90,12 @@ not have been exercised. Cap-audit does not generate a configuration that
 removes them; targeted testing or manual review must first confirm that each
 configured capability is unnecessary.
 .PP
+The generated service configuration preserves the
+.B NoNewPrivileges=
+setting used for the audit. When the setting is disabled, enabling it has not
+been validated by the trace and must be tested separately, including service
+functionality that starts child processes or helper programs.
+.PP
 Cap-audit does not load the environment configured by
 .B Environment=
 or
