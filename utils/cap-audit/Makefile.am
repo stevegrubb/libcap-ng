@@ -81,4 +81,6 @@ vmlinux.h: Makefile
 	$(AM_V_GEN)$(BPFTOOL) btf dump file /sys/kernel/btf/vmlinux format c > $@
 endif
 
+if BUILD_CAP_AUDIT
 man_MANS = cap-audit.8
+endif
