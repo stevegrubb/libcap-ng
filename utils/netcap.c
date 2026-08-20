@@ -462,6 +462,9 @@ NETCAP_TESTABLE int parse_u32_hex_or_dec(const char *s, unsigned int *out)
 	int base = 10;
 	const char *p;
 
+	/* strtoul accepts signs, but these kernel fields are unsigned. */
+	if (*s == '+' || *s == '-')
+		return -1;
 	for (p = s; *p; p++) {
 		if ((*p >= 'a' && *p <= 'f') || (*p >= 'A' && *p <= 'F')) {
 			base = 16;
@@ -472,12 +475,13 @@ NETCAP_TESTABLE int parse_u32_hex_or_dec(const char *s, unsigned int *out)
 		base = 16;
 	if (base == 10 && strlen(s) > 3 && s[0] == '0')
 		base = 16;
+	errno = 0;
 	v = strtoul(s, &end, base);
-	if (end == s || *end)
+	if (errno == ERANGE || end == s || *end)
 		return -1;
 	/*
-	 * /proc and diag inputs are meant to fit in u32 fields. Reject values
-	 * above that range instead of silently truncating them into new ids.
+	 * /proc and diag inputs are meant to fit in u32 fields. On platforms
+	 * where unsigned long is wider, reject values that would be truncated.
 	 */
 	if (v > UINT_MAX)
 		return -1;
