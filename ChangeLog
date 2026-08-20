@@ -3,6 +3,9 @@
 - Don't drop netcap --advanced if only VSOCK kernel headers are missing
 - In cap-audit, verify executable is being passed
 - Add a systemd simulator to cap-audit: use --service to test a service file
+- Improve cap-audit recommendations by correlating syscall outcomes
+- Allow supplying vmlinux.h for reproducible cap-audit builds
+- Restore --with-python/--without-python as generic Python configure options
 - Fix on-demand bash completion loading for the utilities
 
 0.9.3
