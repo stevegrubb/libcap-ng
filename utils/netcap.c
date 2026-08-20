@@ -68,13 +68,15 @@ static char *tacct = NULL;
 #define NETCAP_TESTABLE static
 #endif
 
-#ifdef HAVE_NETCAP_ADVANCED
+/*
+ * VSOCK is the production user of this parser. Keep it available to the
+ * direct utility test even when configure disables all advanced support.
+ */
 #if defined(HAVE_NETCAP_VSOCK) || defined(NETCAP_TEST)
 NETCAP_TESTABLE int parse_u32_hex_or_dec(const char *s, unsigned int *out)
 	__attr_access ((__read_only__, 1))
 	__attr_access ((__write_only__, 2))
 	__wur;
-#endif
 #endif
 
 #ifndef NETCAP_NO_MAIN
@@ -452,7 +454,6 @@ static void read_packet(void)
 }
 #endif
 
-#ifdef HAVE_NETCAP_ADVANCED
 #if defined(HAVE_NETCAP_VSOCK) || defined(NETCAP_TEST)
 NETCAP_TESTABLE int parse_u32_hex_or_dec(const char *s, unsigned int *out)
 {
@@ -485,6 +486,7 @@ NETCAP_TESTABLE int parse_u32_hex_or_dec(const char *s, unsigned int *out)
 }
 #endif
 
+#ifdef HAVE_NETCAP_ADVANCED
 #ifndef NETCAP_NO_MAIN
 static int read_diag_messages(int fd, int proto, const char *type)
 {
