@@ -1426,7 +1426,7 @@ void analyze_capabilities(void)
 				printf("    capng_clear(CAPNG_SELECT_BOTH);\n");
 				print_updatev_wrapped("    capng_updatev(CAPNG_ADD, "
 						      "CAPNG_EFFECTIVE|CAPNG_PERMITTED",
-						      "", "-1);\n");
+						      "CAP_", "-1);\n");
 				printf("    if (capng_change_id(uid, gid, "
 				       "CAPNG_DROP_SUPP_GRP | "
 				       "CAPNG_CLEAR_BOUNDING)) {\n");

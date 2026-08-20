@@ -374,6 +374,23 @@ int main(void)
 		fail("System context was presented as capability evidence");
 
 	free(output);
+	setup_analysis(&service);
+	state.service_file = NULL;
+	state.service_cfg = NULL;
+	state.capset_observed = 0;
+	memset(&state.app.capset, 0, sizeof(state.app.capset));
+	output = capture_analysis();
+	if (!contains_tokens(output,
+		(const char *const[]) {
+			"capng_updatev(CAPNG_ADD",
+			"CAP_DAC_OVERRIDE",
+			"CAP_FOWNER",
+			"CAP_NET_BIND_SERVICE",
+			"-1);",
+		}, 5) || strstr(output, ", DAC_OVERRIDE"))
+		fail("C recommendation did not use CAP_ constants");
+
+	free(output);
 	puts("cap-audit service recommendation tests passed");
 	return 0;
 }
