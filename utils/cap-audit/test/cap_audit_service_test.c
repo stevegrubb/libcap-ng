@@ -258,6 +258,37 @@ static void test_exec_start_privilege_prefixes(const char *dir)
 	expect_parse_failure(dir, "double-bang.service", double_bang_unit);
 }
 
+static void test_exec_start_environment_words(const char *dir)
+{
+	service_config_t cfg;
+	const char unit[] =
+		"[Service]\n"
+		"ExecStart=/usr/bin/firewalld --nofork --nopid "
+		"$FIREWALLD_ARGS --label=$KEEP\n";
+	const char literal_unit[] =
+		"[Service]\n"
+		"ExecStart=:/usr/bin/true $LITERAL_ARG\n";
+
+	if (parse_unit(dir, "environment.service", unit, &cfg) != 0)
+		fail("ExecStart environment argument should parse");
+	if (cfg.exec_argc != 4 ||
+	    strcmp(cfg.exec_argv[0], "/usr/bin/firewalld") ||
+	    strcmp(cfg.exec_argv[1], "--nofork") ||
+	    strcmp(cfg.exec_argv[2], "--nopid") ||
+	    strcmp(cfg.exec_argv[3], "--label=$KEEP"))
+		fail("Standalone ExecStart environment argument was not omitted");
+	free_config(&cfg);
+
+	if (parse_unit(dir, "literal-environment.service", literal_unit,
+		       &cfg) != 0)
+		fail("ExecStart=: environment argument should parse");
+	if (cfg.exec_argc != 2 ||
+	    strcmp(cfg.exec_argv[0], "/usr/bin/true") ||
+	    strcmp(cfg.exec_argv[1], "$LITERAL_ARG"))
+		fail("ExecStart=: must disable environment argument omission");
+	free_config(&cfg);
+}
+
 int main(void)
 {
 	char dir[] = "/tmp/libcap-ng-service-XXXXXX";
@@ -271,6 +302,7 @@ int main(void)
 	test_invalid_credentials(dir);
 	test_sink_validation();
 	test_exec_start_privilege_prefixes(dir);
+	test_exec_start_environment_words(dir);
 
 	rmdir(dir);
 	puts("cap-audit service credential tests passed");

@@ -449,7 +449,7 @@ out:
 	return rc;
 }
 
-static int strip_exec_prefixes(service_config_t *cfg)
+static int strip_exec_prefixes(service_config_t *cfg, int *no_env_expand)
 {
 	const char *arg0;
 	char *copy;
@@ -463,6 +463,8 @@ static int strip_exec_prefixes(service_config_t *cfg)
 	while (arg0[offset] == '-' || arg0[offset] == '@' ||
 	       arg0[offset] == ':' || arg0[offset] == '+' ||
 	       arg0[offset] == '!') {
+		if (arg0[offset] == ':')
+			*no_env_expand = 1;
 		if (arg0[offset] == '+') {
 			fprintf(stderr,
 				"Error: ExecStart '+' prefix is unsupported\n");
@@ -495,10 +497,44 @@ static int strip_exec_prefixes(service_config_t *cfg)
 	return 0;
 }
 
+static int is_exec_environment_word(const char *arg)
+{
+	const unsigned char *pos = (const unsigned char *)arg;
+
+	if (*pos++ != '$' || (!isalpha(*pos) && *pos != '_'))
+		return 0;
+	while (isalnum(*pos) || *pos == '_')
+		pos++;
+
+	return *pos == '\0';
+}
+
+static void omit_exec_environment_words(service_config_t *cfg)
+{
+	size_t src;
+	size_t dst = 1;
+
+	/*
+	 * The service environment is unavailable here. An unset standalone
+	 * $NAME expands to zero arguments under systemd, so do not pass the
+	 * unresolved placeholder literally to the audited application.
+	 */
+	for (src = 1; src < cfg->exec_argc; src++) {
+		if (is_exec_environment_word(cfg->exec_argv[src])) {
+			free(cfg->exec_argv[src]);
+			continue;
+		}
+		cfg->exec_argv[dst++] = cfg->exec_argv[src];
+	}
+	cfg->exec_argv[dst] = NULL;
+	cfg->exec_argc = dst;
+}
+
 static int set_exec_start(service_config_t *cfg, const char *value)
 {
 	char **argv = NULL;
 	size_t argc = 0;
+	int no_env_expand = 0;
 
 	free_exec_argv(cfg);
 	cfg->exec_start_no_setuid = false;
@@ -512,7 +548,11 @@ static int set_exec_start(service_config_t *cfg, const char *value)
 
 	cfg->exec_argv = argv;
 	cfg->exec_argc = argc;
-	return strip_exec_prefixes(cfg);
+	if (strip_exec_prefixes(cfg, &no_env_expand) != 0)
+		return -1;
+	if (!no_env_expand)
+		omit_exec_environment_words(cfg);
+	return 0;
 }
 
 static int cap_from_name(const char *name)

@@ -90,6 +90,18 @@ not have been exercised. Cap-audit does not generate a configuration that
 removes them; targeted testing or manual review must first confirm that each
 configured capability is unnecessary.
 .PP
+Cap-audit does not load the environment configured by
+.B Environment=
+or
+.BR EnvironmentFile= .
+A standalone
+.B $NAME
+argument in
+.B ExecStart=
+is therefore treated as unset and omitted. Supply an explicit command after
+.B --
+when a non-empty expansion is needed for the audit.
+.PP
 A single
 .B !
 prefix on the
