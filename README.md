@@ -131,8 +131,9 @@ Libcap-ng 0.6 and later has python bindings. (Only python3 is supported from 0.8
        error()
    ```
 
-The one caveat is that printing capabilities from python does not work. But
-you can still manipulate capabilities, though.
+The Python bindings also provide `capng_print_caps_numeric()` and
+`capng_print_caps_text()` for printing capabilities or returning them as a
+Python string.
 
 Ambient Capabilities
 --------------------
@@ -176,8 +177,9 @@ make
 make install
 ```
 
-If you want python bindings, add that option to the configure command. The
-`netcap --advanced` feature also depends on newer Linux kernel headers. When
+Use `--with-python` or `--with-python3` to enable the Python 3 bindings, or
+`--without-python` to disable them. The `netcap --advanced` feature also
+depends on newer Linux kernel headers. When
 the core inet/netlink diag headers are not available, such as on older build
 roots, `configure` will automatically opt out of advanced mode and report that
 in its output while still building the rest of libcap-ng. VSOCK reporting
@@ -206,7 +208,36 @@ kernels.
 
 cap-audit
 ---------
-As of the 0.9 release of libcap-ng, there is a new utility **cap-audit**. This program can be used to determine the actual capabilities that a program needs. To do this, use it to run the application kind of the way one would use strace. Use '--' to separate the options to cap-audit from the program being audited. You need to use cap-audit as root because it places an eBPF program in the kernel to hook the capability checks to determine what was requested, was it granted, and what syscall did it originate from. When testing a daemon, pass command line options that keep it in the foreground. The following is an example checking sshd: 
+As of the 0.9 release of libcap-ng, there is a new utility **cap-audit**. This
+program can be used to determine the actual capabilities that a program needs.
+To do this, use it to run the application kind of the way one would use
+strace. Use `--` to separate the options to cap-audit from the program being
+audited. Runtime tracing requires root or the `CAP_BPF`, `CAP_PERFMON`, and
+`CAP_SYS_PTRACE` capabilities. When testing a daemon directly, pass command
+line options that keep it in the foreground. The following is an example
+checking sshd:
+
+The `--service` option audits a systemd service unit. It parses and runs
+`ExecStart` while simulating the unit's credentials, capability sets, and
+`NoNewPrivileges` setting. By default, cap-audit traces the unit's `ExecStart`
+command:
+
+```
+cap-audit --service /usr/lib/systemd/system/sshd.service
+```
+
+Arguments beginning with `-` after `--` replace the parsed `ExecStart`
+arguments, while a complete command after `--` replaces `ExecStart` entirely:
+
+```
+cap-audit --service /usr/lib/systemd/system/sshd.service -- -D
+cap-audit --service service-file -- /usr/sbin/sshd -D
+```
+
+This is a focused service simulator rather than a complete systemd execution
+environment. In particular, it does not load `Environment` or
+`EnvironmentFile`; see the cap-audit(8) man page for the supported settings
+and `ExecStart` prefix limitations.
 
 Cap-audit also records the capability masks installed by successful `capset`
 calls. A capability requested by `capset` without a confirmed granted check is
@@ -420,7 +451,7 @@ RECOMMENDATIONS:
     #include <stdlib.h>
     ...
     capng_clear(CAPNG_SELECT_BOTH);
-    capng_updatev(CAPNG_ADD, CAPNG_EFFECTIVE|CAPNG_PERMITTED, CHOWN, DAC_READ_SEARCH, SETGID, SETUID, NET_BIND_SERVICE, NET_ADMIN, SYS_CHROOT, SYS_ADMIN, SYS_RESOURCE, AUDIT_WRITE, MAC_ADMIN, -1);
+    capng_updatev(CAPNG_ADD, CAPNG_EFFECTIVE|CAPNG_PERMITTED, CAP_CHOWN, CAP_DAC_READ_SEARCH, CAP_SETGID, CAP_SETUID, CAP_NET_BIND_SERVICE, CAP_NET_ADMIN, CAP_SYS_CHROOT, CAP_SYS_ADMIN, CAP_SYS_RESOURCE, CAP_AUDIT_WRITE, CAP_MAC_ADMIN, -1);
     if (capng_change_id(uid, gid, CAPNG_DROP_SUPP_GRP | CAPNG_CLEAR_BOUNDING)) {
 	perror("capng_change_id");
 	exit(EXIT_FAILURE);
@@ -476,4 +507,4 @@ RECOMMENDATIONS:
 Reporting
 ---------
 Report any bugs in this package to:
-https://github.com/stevegrubb/libcap-ng/issue
+https://github.com/stevegrubb/libcap-ng/issues
