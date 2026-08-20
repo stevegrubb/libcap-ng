@@ -180,6 +180,7 @@ static void setup_analysis(service_config_t *service)
 	service->ambient.seen = true;
 	service->ambient.caps[CAP_SYS_ADMIN] = true;
 	service->bounding.seen = true;
+	service->bounding.caps[CAP_SYS_PTRACE] = true;
 	service->bounding.caps[CAP_SYS_ADMIN] = true;
 	service->bounding.caps[CAP_SYS_RESOURCE] = true;
 
@@ -263,18 +264,13 @@ int main(void)
 			"AmbientCapabilities=dac_override fowner "
 				"net_bind_service sys_chroot sys_admin sys_resource",
 			"CapabilityBoundingSet=dac_override fowner "
-				"net_bind_service sys_chroot sys_admin sys_resource",
+				"net_bind_service sys_chroot sys_ptrace sys_admin "
+				"sys_resource",
 		}, 3))
 		fail("Compatible configuration did not retain unit capabilities");
-	if (!contains_tokens(output,
-		(const char *const[]) {
-			"Candidate observed-workload-minimized [Service]",
-			"AmbientCapabilities=dac_override fowner "
-				"net_bind_service sys_chroot sys_resource",
-			"CapabilityBoundingSet=dac_override fowner "
-				"net_bind_service sys_chroot sys_resource",
-		}, 3))
-		fail("Observed-workload candidate did not omit unobserved caps");
+	if (strstr(output, "observed-workload-minimized") ||
+	    count_text(output, "  Recommended ") != 1)
+		fail("A second configuration removed unobserved capabilities");
 	expect_line(output,
 		    "    Initialization capabilities: dac_override fowner "
 		    "net_bind_service");
@@ -288,16 +284,22 @@ int main(void)
 			     sizeof(denied_guidance) /
 			     sizeof(denied_guidance[0])))
 		fail("Denied-only capability lacked investigation guidance");
-	if (!strstr(output,
-		    "Configured but not observed in this run: sys_admin"))
+	if (count_text(output,
+		       "    Configured but not observed in this run:") != 1)
 		fail("Unused bounding capability was not reported as removable");
-	if (strstr(output,
-		   "Configured but not observed in this run: sys_resource"))
-		fail("Capset-only capability was reported as directly removable");
-	if (!strstr(output, "Present in the current AmbientCapabilities and") ||
-	    !strstr(output, "Relevant functionality may not have been") ||
-	    !strstr(output, "Retained in the current-service-compatible") ||
-	    !strstr(output, "manual review and targeted testing"))
+	expect_line(output,
+		    "      AmbientCapabilities and CapabilityBoundingSet: "
+		    "sys_admin");
+	expect_line(output,
+		    "      CapabilityBoundingSet only: sys_ptrace");
+	if (!contains_tokens(output,
+		(const char *const[]) {
+			"Relevant functionality may not have been",
+			"Retained in the",
+			"current-service-compatible configuration",
+			"manual review",
+			"targeted testing",
+		}, 5))
 		fail("Unobserved configured capability lacked safe guidance");
 	if (!strstr(output, "CAPSET-ONLY CAPABILITIES:") ||
 	    !strstr(output, "sys_resource (#24)") ||
@@ -308,7 +310,8 @@ int main(void)
 	if (!strstr(output, "  Current service context:\n") ||
 	    !strstr(output, "    AmbientCapabilities: sys_admin\n") ||
 	    !strstr(output,
-		    "    CapabilityBoundingSet: sys_admin sys_resource\n"))
+		    "    CapabilityBoundingSet: sys_ptrace sys_admin "
+		    "sys_resource\n"))
 		fail("Current service context was not labeled");
 	if (!contains_tokens(output, capset_guidance,
 			     sizeof(capset_guidance) /
@@ -337,8 +340,6 @@ int main(void)
 	expect_line(output, "    CapabilityBoundingSet=");
 	if (strstr(output, "    CapabilityBoundingSet=(none)"))
 		fail("Empty recommendation used invalid systemd syntax");
-	if (strstr(output, "Candidate observed-workload-minimized"))
-		fail("Minimized candidate was printed without configured caps");
 	if (!strstr(output, "CAPABILITY-RELATED SYSTEM CONTEXT:") ||
 	    !strstr(output, "kernel.yama.ptrace_scope = 1") ||
 	    !strstr(output, "fs.suid_dumpable = 2") ||

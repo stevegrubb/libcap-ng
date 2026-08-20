@@ -86,9 +86,8 @@ executable.
 Capabilities explicitly configured in the unit but not observed during the
 trace are retained in a current-service-compatible recommendation. They are
 also identified as removal candidates because the relevant functionality may
-not have been exercised. When such capabilities exist, cap-audit emits a
-separate observed-workload-minimized candidate that omits them. Apply that
-candidate only after targeted testing or manual review confirms that each
+not have been exercised. Cap-audit does not generate a configuration that
+removes them; targeted testing or manual review must first confirm that each
 configured capability is unnecessary.
 .PP
 A single
