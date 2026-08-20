@@ -35,6 +35,7 @@ NETCAP_ADVANCED_ENABLED = @NETCAP_ADVANCED_ENABLED@
 bin_PROGRAMS = pscap netcap filecap
 man_MANS = pscap.8 netcap.8 filecap.8
 bashcompletiondir = ${datadir}/bash-completion/completions
+bashcompletioncommands = cap-audit filecap netcap pscap
 
 pscap_SOURCES = pscap.c proc-account.c proc-account.h \
 	proc-output.c proc-output.h proc-sanitize.c proc-sanitize.h \
@@ -58,6 +59,13 @@ install-exec-hook:
 	$(MKDIR_P) ${DESTDIR}${bashcompletiondir}
 	$(INSTALL_DATA) ${srcdir}/libcap-ng.bash_completion \
 		${DESTDIR}${bashcompletiondir}/libcap-ng.bash_completion
+	cd ${DESTDIR}${bashcompletiondir} && \
+	for command in $(bashcompletioncommands); do \
+		$(LN_S) -f libcap-ng.bash_completion $$command || exit 1; \
+	done
 
 uninstall-hook:
+	for command in $(bashcompletioncommands); do \
+		rm -f ${DESTDIR}${bashcompletiondir}/$$command; \
+	done
 	rm -f ${DESTDIR}${bashcompletiondir}/libcap-ng.bash_completion
