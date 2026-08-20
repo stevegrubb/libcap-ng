@@ -158,6 +158,9 @@ enum denial_assessment assess_cap_denials(const struct cap_check *check)
 		return DENIAL_ASSESSMENT_MIXED_INTERRUPTED;
 	if (has_unmatched_denied_syscall(check))
 		return DENIAL_ASSESSMENT_INCONCLUSIVE;
+	/* A success must not hide correlated failures for other reasons. */
+	if (summary.succeeded > 0 && summary.other_failed > 0)
+		return DENIAL_ASSESSMENT_MIXED_OTHER;
 	if (summary.succeeded > 0)
 		return DENIAL_ASSESSMENT_SUCCEEDED;
 	if (summary.interrupted > 0 || check->outcome_count == 0)
@@ -172,6 +175,8 @@ const char *denial_assessment_name(enum denial_assessment assessment)
 		return "permission_failure";
 	case DENIAL_ASSESSMENT_MIXED_INTERRUPTED:
 		return "mixed_success_interruption";
+	case DENIAL_ASSESSMENT_MIXED_OTHER:
+		return "mixed_success_other_failure";
 	case DENIAL_ASSESSMENT_INCONCLUSIVE:
 		return "inconclusive";
 	case DENIAL_ASSESSMENT_SUCCEEDED:

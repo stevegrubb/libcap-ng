@@ -617,14 +617,35 @@ static void print_denial_assessment(const struct cap_check *check,
 			"is absent.", evidence);
 		break;
 	case DENIAL_ASSESSMENT_MIXED_INTERRUPTED:
+		if (summary.other_failed > 0)
+			print_wrappedf(indent,
+				"Associated syscall outcomes: %lu succeeded, %lu "
+				"non-permission %s, and %lu %s. Cap-audit cannot "
+				"determine whether they came from the same call site "
+				"or used the same arguments. Manual investigation is "
+				"required to confirm that required functionality "
+				"completed or was safely retried.", summary.succeeded,
+				summary.other_failed,
+				failure_word(summary.other_failed),
+				summary.interrupted,
+				interruption_word(summary.interrupted));
+		else
+			print_wrappedf(indent,
+				"Associated syscall outcomes: %lu succeeded and %lu "
+				"%s. Cap-audit cannot determine whether they came "
+				"from the same call site or used the same arguments. "
+				"Manual investigation is required to confirm that "
+				"required functionality completed or was safely "
+				"retried.", summary.succeeded, summary.interrupted,
+				interruption_word(summary.interrupted));
+		break;
+	case DENIAL_ASSESSMENT_MIXED_OTHER:
 		print_wrappedf(indent,
-			"Associated syscall outcomes: %lu succeeded and %lu %s. "
-			"Cap-audit "
-			"cannot determine whether they came from the same call site "
-			"or used the same arguments. Manual investigation is required "
-			"to confirm that required functionality completed or was "
-			"safely retried.", summary.succeeded, summary.interrupted,
-			interruption_word(summary.interrupted));
+			"Associated syscall invocations: %lu succeeded and %lu "
+			"failed for non-permission reasons. The not-granted "
+			"capability checks are not established as the cause of "
+			"those failures. The capability is not automatically "
+			"recommended.", summary.succeeded, summary.other_failed);
 		break;
 	case DENIAL_ASSESSMENT_INCONCLUSIVE:
 		if (check->outcome_count == 0)
@@ -669,6 +690,8 @@ static const char *denial_review_label(enum denial_assessment assessment)
 	case DENIAL_ASSESSMENT_PERMISSION:
 	case DENIAL_ASSESSMENT_MIXED_INTERRUPTED:
 		return "Manual investigation required";
+	case DENIAL_ASSESSMENT_MIXED_OTHER:
+		return "Omitted; successes and non-permission failures observed";
 	case DENIAL_ASSESSMENT_INCONCLUSIVE:
 		return "Additional evidence required";
 	case DENIAL_ASSESSMENT_SUCCEEDED:
@@ -1151,6 +1174,7 @@ void analyze_capabilities(void)
 	int context_count;
 	int denied_count = 0;
 	int denied_manual = 0;
+	int denied_mixed_other = 0;
 	int denied_inconclusive = 0;
 	int denied_succeeded = 0;
 	int denied_other = 0;
@@ -1312,6 +1336,9 @@ void analyze_capabilities(void)
 			case DENIAL_ASSESSMENT_INCONCLUSIVE:
 				denied_inconclusive++;
 				break;
+			case DENIAL_ASSESSMENT_MIXED_OTHER:
+				denied_mixed_other++;
+				break;
 			case DENIAL_ASSESSMENT_SUCCEEDED:
 				denied_succeeded++;
 				break;
@@ -1343,6 +1370,9 @@ void analyze_capabilities(void)
 		if (denied_inconclusive > 0)
 			printf("      Additional evidence required: %d\n",
 			       denied_inconclusive);
+		if (denied_mixed_other > 0)
+			printf("      Omitted after mixed success/non-permission "
+			       "failure: %d\n", denied_mixed_other);
 		if (denied_succeeded > 0)
 			printf("      Omitted after associated syscall success: %d\n",
 			       denied_succeeded);

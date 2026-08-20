@@ -21,6 +21,7 @@
 #define TEST_BIND_NR		1005
 #define TEST_LINK_NR		1006
 #define TEST_KILL_NR		1007
+#define TEST_ACCESS_NR		1008
 #define TEST_ERESTARTSYS	512
 
 struct audit_state state;
@@ -39,6 +40,8 @@ const char *cap_name_safe(int cap)
 		return "chown";
 	case CAP_DAC_OVERRIDE:
 		return "dac_override";
+	case CAP_DAC_READ_SEARCH:
+		return "dac_read_search";
 	case CAP_FOWNER:
 		return "fowner";
 	case CAP_KILL:
@@ -73,6 +76,8 @@ const char *syscall_name_from_nr(int nr)
 		return "link";
 	case TEST_KILL_NR:
 		return "kill";
+	case TEST_ACCESS_NR:
+		return "access";
 	default:
 		return NULL;
 	}
@@ -201,6 +206,12 @@ static void setup_events(void)
 		emit_check(CAP_FOWNER, TEST_LINK_NR, 0);
 		emit_outcome(CAP_FOWNER, TEST_LINK_NR, 0);
 	}
+	for (i = 0; i < 2; i++) {
+		emit_check(CAP_DAC_READ_SEARCH, TEST_ACCESS_NR, 0);
+		emit_outcome(CAP_DAC_READ_SEARCH, TEST_ACCESS_NR, 0);
+	}
+	emit_check(CAP_DAC_READ_SEARCH, TEST_ACCESS_NR, 0);
+	emit_outcome(CAP_DAC_READ_SEARCH, TEST_ACCESS_NR, -ENOENT);
 
 	emit_check(CAP_KILL, TEST_KILL_NR, 0);
 	emit_outcome(CAP_KILL, TEST_KILL_NR, -EINTR);
@@ -311,6 +322,8 @@ static void test_human_output(void)
 	expect_text(output, "process_vm_readv: 20 succeeded");
 	expect_text(output, "process_vm_readv: 1 interrupted with -EINTR");
 	expect_text(output, "link: 3 succeeded");
+	expect_text(output, "access: 2 succeeded");
+	expect_text(output, "access: 1 failed with -ENOENT");
 	expect_text(output, "kill: 1 interrupted with -EINTR");
 	expect_text(output, "kill: 1 interrupted with -ERESTARTSYS");
 	expect_text(output, "CAPSET-ONLY CAPABILITIES:");
@@ -334,9 +347,20 @@ static void test_human_output(void)
 	expect_text(output, "openat: outcome unavailable");
 	expect_text(output, "kill: Additional evidence required");
 	expect_text(output, "fowner: Omitted; associated syscalls succeeded");
+	expect_text(output,
+		    "dac_read_search: Omitted; successes and non-permission "
+		    "failures observed");
+	expect_text(output,
+		    "Associated syscall invocations: 2 succeeded and 1 failed");
+	expect_text(output, "non-permission reasons");
+	expect_text(output,
+		    "not-granted capability checks are not established");
+	expect_text(output, "cause of those failures");
 	expect_text(output, "Manual investigation required: 2");
 	expect_text(output, "Additional evidence required: 2");
 	expect_text(output, "Omitted after associated syscall success: 1");
+	expect_text(output,
+		    "Omitted after mixed success/non-permission failure: 1");
 	expect_text(output, "Capability check not established as cause: 1");
 	expect_text(output,
 		    "CapabilityBoundingSet=net_bind_service sys_resource");
@@ -370,6 +394,8 @@ static void test_structured_output(void)
 	output = capture_output(output_json);
 	expect_text(output, "\"assessment\": \"permission_failure\"");
 	expect_text(output, "\"assessment\": \"mixed_success_interruption\"");
+	expect_text(output,
+		    "\"assessment\": \"mixed_success_other_failure\"");
 	expect_text(output, "\"assessment\": \"denial_not_established\"");
 	expect_text(output, "\"assessment\": \"inconclusive\"");
 	expect_text(output, "\"assessment\": \"succeeded_despite_denial\"");
@@ -393,6 +419,7 @@ static void test_structured_output(void)
 	output = capture_output(output_yaml);
 	expect_text(output, "assessment: permission_failure");
 	expect_text(output, "assessment: mixed_success_interruption");
+	expect_text(output, "assessment: mixed_success_other_failure");
 	expect_text(output, "assessment: denial_not_established");
 	expect_text(output, "assessment: inconclusive");
 	expect_text(output, "assessment: succeeded_despite_denial");
