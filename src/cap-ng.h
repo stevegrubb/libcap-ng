@@ -27,6 +27,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <linux/capability.h>
+#include <sys/types.h>
 #include <unistd.h>
 
 // The next macro originates in sys/cdefs.h
@@ -55,7 +56,7 @@ typedef enum {  CAPNG_NO_FLAG=0, CAPNG_DROP_SUPP_GRP=1,
 		CAPNG_APPLY_STAGED_GROUPS=16,
 		CAPNG_APPLY_BOUNDING=32 } capng_flags_t;
 
-#define CAPNG_UNSET_ROOTID -1
+#define CAPNG_UNSET_ROOTID ((uid_t)-1)
 #define CAPNG_SUPPORTS_AMBIENT 1
 
 // These functions manipulate process capabilities
@@ -74,8 +75,8 @@ int capng_change_id(int uid, int gid, capng_flags_t flag) __wur;
 int capng_stage_additional_groups(const gid_t *gids, size_t count) __wur;
 
 // These functions are used for file based capabilities
-int capng_get_rootid(void);
-int capng_set_rootid(int rootid);
+uid_t capng_get_rootid(void);
+int capng_set_rootid(uid_t rootid);
 int capng_get_caps_fd(int fd) __wur;
 int capng_apply_caps_fd(int fd) __wur;
 

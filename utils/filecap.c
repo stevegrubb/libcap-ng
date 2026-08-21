@@ -23,6 +23,7 @@
  */
 
 #include "config.h"
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -94,7 +95,7 @@ static int check_file(const char *fpath,
 				       "set", "file");
 			}
 
-			int rootid = capng_get_rootid();
+			uid_t rootid = capng_get_rootid();
 			printf("%s %-22s ",
 			       permitted ? "permitted" : "effective",  fpath);
 
@@ -105,7 +106,7 @@ static int check_file(const char *fpath,
 						CAPNG_PERMITTED);
 
 			if (rootid != CAPNG_UNSET_ROOTID)
-				printf(" %d", rootid);
+				printf(" %ju", (uintmax_t)rootid);
 			printf("\n");
 		}
 		close(fd);

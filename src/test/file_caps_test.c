@@ -44,8 +44,24 @@ enum mock_revision {
 };
 
 static enum mock_revision mock_revision;
+#ifdef VFS_CAP_REVISION_3
+static struct vfs_ns_cap_data written_data;
+#else
+static struct vfs_cap_data written_data;
+#endif
+static size_t written_size;
+static unsigned int write_count;
 
 static __le32 cpu_to_le32(uint32_t value)
+{
+#if __BYTE_ORDER == __BIG_ENDIAN
+	return bswap_32(value);
+#else
+	return value;
+#endif
+}
+
+static uint32_t le32_to_cpu(__le32 value)
 {
 #if __BYTE_ORDER == __BIG_ENDIAN
 	return bswap_32(value);
@@ -108,6 +124,24 @@ ssize_t fgetxattr(int fd, const char *name, void *value, size_t size)
 	return xattr_size;
 }
 
+int fsetxattr(int fd, const char *name, const void *value, size_t size,
+		int flags)
+{
+	(void)fd;
+	(void)flags;
+	if (strcmp(name, "security.capability") != 0 ||
+						size > sizeof(written_data)) {
+		errno = EINVAL;
+		return -1;
+	}
+
+	memset(&written_data, 0, sizeof(written_data));
+	memcpy(&written_data, value, size);
+	written_size = size;
+	write_count++;
+	return 0;
+}
+
 static void check_numeric_caps(const char *expected)
 {
 	char *actual;
@@ -123,8 +157,47 @@ static void check_numeric_caps(const char *expected)
 	free(actual);
 }
 
+static void check_written_caps(int fd, uid_t rootid, uint32_t revision,
+			       size_t expected_size)
+{
+	uint32_t magic;
+
+	capng_clear(CAPNG_SELECT_CAPS);
+	if (capng_update(CAPNG_ADD, CAPNG_EFFECTIVE | CAPNG_PERMITTED,
+							CAP_CHOWN) != 0)
+		abort();
+	if (capng_set_rootid(rootid) != 0)
+		abort();
+	if (capng_get_rootid() != rootid)
+		abort();
+
+	written_size = 0;
+	write_count = 0;
+	if (capng_apply_caps_fd(fd) != 0)
+		abort();
+	if (write_count != 1 || written_size != expected_size)
+		abort();
+
+	magic = le32_to_cpu(written_data.magic_etc);
+	if (magic != (revision | VFS_CAP_FLAGS_EFFECTIVE))
+		abort();
+	if (le32_to_cpu(written_data.data[0].permitted) !=
+							(1U << CAP_CHOWN))
+		abort();
+	if (le32_to_cpu(written_data.data[0].inheritable) != 0)
+		abort();
+#ifdef VFS_CAP_REVISION_3
+	if (revision == VFS_CAP_REVISION_3 &&
+			le32_to_cpu(written_data.rootid) != (uint32_t)rootid)
+		abort();
+#endif
+}
+
 int main(void)
 {
+	FILE *file;
+	int fd;
+
 #ifdef VFS_CAP_REVISION_3
 	mock_revision = MOCK_REVISION_3;
 	if (capng_get_caps_fd(-1) != 0) {
@@ -165,6 +238,22 @@ int main(void)
 		puts("Revision 2 load retained a rootid");
 		abort();
 	}
+
+	file = tmpfile();
+	if (file == NULL)
+		abort();
+	fd = fileno(file);
+	check_written_caps(fd, CAPNG_UNSET_ROOTID, VFS_CAP_REVISION_2,
+			 XATTR_CAPS_SZ_2);
+#ifdef VFS_CAP_REVISION_3
+	check_written_caps(fd, 0, VFS_CAP_REVISION_3, XATTR_CAPS_SZ_3);
+	check_written_caps(fd, 4242, VFS_CAP_REVISION_3, XATTR_CAPS_SZ_3);
+	check_written_caps(fd, (uid_t)UINT32_C(0x80000000),
+			 VFS_CAP_REVISION_3, XATTR_CAPS_SZ_3);
+	check_written_caps(fd, CAPNG_UNSET_ROOTID, VFS_CAP_REVISION_2,
+			 XATTR_CAPS_SZ_2);
+#endif
+	fclose(file);
 
 	return EXIT_SUCCESS;
 }

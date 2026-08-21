@@ -177,7 +177,7 @@ struct cap_ng
 	struct __user_cap_header_struct hdr;
 	cap_data_t data;
 	capng_states_t state;
-	__le32 rootid;
+	uid_t rootid;  // Host endian; only the V3 xattr field is little endian
 	__u32 bounds[VFS_CAP_U32];
 	__u32 ambient[VFS_CAP_U32];
 	unsigned char bounds_state_changed;
@@ -428,7 +428,11 @@ static void init(void)
 #if VFS_CAP_REVISION == VFS_CAP_REVISION_1
 	m.vfs_cap_ver = 1;
 #else
-	m.vfs_cap_ver = 2; // Intentionally set to 2 for both 2 & 3
+	/*
+	 * V2 is the default even when V3 is available. The kernel promotes a
+	 * V2 write from a user namespace to V3 and records the namespace root.
+	 */
+	m.vfs_cap_ver = 2;
 #endif
 
 	memset(&m.data, 0, sizeof(cap_data_t));
@@ -520,7 +524,7 @@ void capng_setpid(int pid)
 	m.hdr.pid = pid;
 }
 
-int capng_get_rootid(void)
+uid_t capng_get_rootid(void)
 {
 #ifdef VFS_CAP_REVISION_3
 	return m.rootid;
@@ -529,7 +533,7 @@ int capng_get_rootid(void)
 #endif
 }
 
-int capng_set_rootid(int rootid)
+int capng_set_rootid(uid_t rootid)
 {
 #ifdef VFS_CAP_REVISION_3
 	if (m.state == CAPNG_NEW)
@@ -537,10 +541,8 @@ int capng_set_rootid(int rootid)
 	if (m.state == CAPNG_ERROR)
 		return -1;
 
-	if (rootid < 0 && rootid != CAPNG_UNSET_ROOTID)
-		return -1;
-
 	m.rootid = rootid;
+	/* An explicit root ID needs V3's additional on-disk field. */
 	if (rootid == CAPNG_UNSET_ROOTID)
 		m.vfs_cap_ver = 2;
 	else
@@ -1065,18 +1067,22 @@ static int save_data(struct vfs_cap_data *filedata, int *size)
 		filedata->data[0].inheritable = FIXUP(m.data.v3[0].inheritable);
 		filedata->data[1].permitted = FIXUP(m.data.v3[1].permitted);
 		filedata->data[1].inheritable = FIXUP(m.data.v3[1].inheritable);
-		filedata->magic_etc = FIXUP(VFS_CAP_REVISION_2 | eff);
-		*size = XATTR_CAPS_SZ_2;
-	}
 #ifdef VFS_CAP_REVISION_3
-	if (m.vfs_cap_ver == 3) {
-		// Kernel doesn't support namespaces with non-0 rootid
-		if (m.rootid != 0)
-			return -1;
-		filedata->rootid = FIXUP(m.rootid);
-		*size = XATTR_CAPS_SZ_3;
-	}
+		/*
+		 * V3 adds rootid to the V2 capability words. Its revision, rootid,
+		 * and 24-byte size must be written together as one xattr format.
+		 */
+		if (m.vfs_cap_ver == 3) {
+			filedata->magic_etc = FIXUP(VFS_CAP_REVISION_3 | eff);
+			filedata->rootid = FIXUP(m.rootid);
+			*size = XATTR_CAPS_SZ_3;
+		} else
 #endif
+		{
+			filedata->magic_etc = FIXUP(VFS_CAP_REVISION_2 | eff);
+			*size = XATTR_CAPS_SZ_2;
+		}
+	}
 
 	return 0;
 }

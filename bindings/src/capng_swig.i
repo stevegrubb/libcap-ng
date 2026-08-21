@@ -48,6 +48,7 @@ signed
 %enddef
 #define __attribute(X) /*nothing*/
 typedef unsigned __u32;
+typedef unsigned uid_t;
 #define __extension__ /*nothing*/
 %include "./caps.h"
 
@@ -65,3 +66,7 @@ typedef unsigned __u32;
 }
 
 %include "./capng.h"
+
+/* SWIG does not emit macros containing a C cast. */
+#undef CAPNG_UNSET_ROOTID
+%constant uid_t CAPNG_UNSET_ROOTID = (uid_t)-1;
