@@ -1369,17 +1369,31 @@ int capng_lock(void)
 {
 	int rc = 0;
 
-	// If either fail, return -1 since something is not right
-#ifdef PR_SET_SECUREBITS
-	if (prctl(PR_SET_SECUREBITS,
-			1 << SECURE_NOROOT |
-			1 << SECURE_NOROOT_LOCKED |
-			1 << SECURE_NO_SETUID_FIXUP |
-			1 << SECURE_NO_SETUID_FIXUP_LOCKED, 0, 0, 0) < 0)
+#if defined(PR_GET_SECUREBITS) && defined(PR_SET_SECUREBITS)
+	int securebits;
+	unsigned int locked;
+
+	securebits = prctl(PR_GET_SECUREBITS, 0UL, 0UL, 0UL, 0UL);
+	if (securebits < 0) {
 		rc = -1;
+	} else {
+		/*
+		 * PR_SET_SECUREBITS replaces the complete word. Preserve bits set
+		 * by the caller, including policy bits added by newer kernels.
+		 */
+		locked = (unsigned int)securebits |
+			1U << SECURE_NOROOT |
+			1U << SECURE_NOROOT_LOCKED |
+			1U << SECURE_NO_SETUID_FIXUP |
+			1U << SECURE_NO_SETUID_FIXUP_LOCKED;
+		if (locked != (unsigned int)securebits &&
+			prctl(PR_SET_SECUREBITS, (unsigned long)locked,
+						0UL, 0UL, 0UL) < 0)
+			rc = -1;
+	}
 #endif
 #ifdef PR_SET_NO_NEW_PRIVS
-	if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) < 0)
+	if (prctl(PR_SET_NO_NEW_PRIVS, 1UL, 0UL, 0UL, 0UL) < 0)
 		rc += -2;
 #endif
 	return rc;
