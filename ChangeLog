@@ -1,4 +1,8 @@
 0.9.5
+- Fix broken utility_logic_test when run as a 32 bit app
+- Install the cap-audit man page conditionally
+- Fix V3 file capability usage
+- Preserve existing securebits in capng_lock
 
 0.9.4
 - Add bluetooth collection to netcap --advanced
