@@ -343,48 +343,105 @@ if test x"${ac_cv_have_decl_PR_CAP_AMBIENT}" = x"no" ; then
 fi
 AM_CONDITIONAL(BUILD_LIBDROP_AMBIENT, test x"${ac_cv_have_decl_PR_CAP_AMBIENT}" = x"yes")
 
-AC_CHECK_PROG(swig_found, swig, yes, no)
-if test x"${swig_found}" = x"no" ; then
-	AC_MSG_WARN("Swig not found - python bindings will not be made")
-fi
-AM_CONDITIONAL(HAVE_SWIG, test x"${swig_found}" = x"yes")
-
-dnl Keep --without-python as a generic alias. A version-specific option
-dnl takes precedence because it is processed after the generic option.
+dnl Python 2 is no longer supported, so the generic Python option controls
+dnl the Python 3 bindings. A version-specific option takes precedence because
+dnl it is processed after the generic option.
 AC_ARG_WITH(python,
-AS_HELP_STRING([--without-python],[disable building all python bindings]),
+AS_HELP_STRING([--with-python],
+	[enable Python 3 bindings (use --without-python to disable)]),
 use_python3=$withval,
 use_python3=auto)
 
-withval=""
 AC_MSG_CHECKING(whether to create python3 bindings)
 AC_ARG_WITH(python3,
-AS_HELP_STRING([--with-python3],[enable building python3 bindings]),
+AS_HELP_STRING([--with-python3],[enable Python 3 bindings]),
 use_python3=$withval)
+AC_ARG_VAR([PYTHON3_CONFIG], [path to the Python 3 configuration helper])
+
+python3_failure=
 if test x$use_python3 = xno ; then
 	AC_MSG_RESULT(no)
+	swig_found=no
 else
 	AC_MSG_RESULT(investigating)
-	AC_PATH_PROG([use_python3], [python3-config], [no])
-	if test ${use_python3} = no ; then
-		if test ${withval} = yes ; then
-			echo "Python3 bindings were selected but python3-config was not found."
-			echo "Please ensure that it's installed or pass --without-python3 to ./configure"
-			exit 1
+	AC_CHECK_PROG(swig_found, swig, yes, no)
+	if test x$swig_found = xno ; then
+		python3_failure="SWIG was not found"
+	fi
+
+	if test -z "$python3_failure" ; then
+		AM_PATH_PYTHON([3.1], [],
+			[python3_failure="a usable Python 3 interpreter was not found"])
+	fi
+
+	if test -z "$python3_failure" ; then
+		dnl Prefer the configuration helper installed beside the selected
+		dnl interpreter. The versioned fallback avoids mixing installations
+		dnl when several Python 3 versions are present in PATH.
+		if test -n "$PYTHON3_CONFIG" ; then
+			AC_MSG_CHECKING([for a Python 3 configuration helper])
+			AC_MSG_RESULT([$PYTHON3_CONFIG])
+		elif test -x "${PYTHON}-config" ; then
+			PYTHON3_CONFIG="${PYTHON}-config"
+			AC_MSG_CHECKING([for a Python 3 configuration helper])
+			AC_MSG_RESULT([$PYTHON3_CONFIG])
+		else
+			AC_PATH_PROGS([PYTHON3_CONFIG],
+				[python${PYTHON_VERSION}-config python3-config], [no])
 		fi
-		echo "Python3 bindings will NOT be built"
+		if test x$PYTHON3_CONFIG = xno ; then
+			python3_failure="a Python 3 configuration helper was not found"
+		fi
+	fi
+
+	if test -z "$python3_failure" ; then
+		AC_MSG_CHECKING([whether $PYTHON3_CONFIG provides build flags])
+		if PYTHON3_CFLAGS=`"$PYTHON3_CONFIG" --cflags 2>/dev/null` &&
+		   PYTHON3_INCLUDES=`"$PYTHON3_CONFIG" --includes 2>/dev/null` &&
+		   PYTHON3_LIBS=`"$PYTHON3_CONFIG" --libs 2>/dev/null` ; then
+			AC_MSG_RESULT(yes)
+		else
+			AC_MSG_RESULT(no)
+			python3_failure="$PYTHON3_CONFIG could not provide build flags"
+		fi
+	fi
+
+	if test -z "$python3_failure" ; then
+		python3_major=`"$PYTHON" -c \
+			'import sys; print(sys.version_info.major)'`
+		python3_minor=`"$PYTHON" -c \
+			'import sys; print(sys.version_info.minor)'`
+		AC_MSG_CHECKING([whether Python.h matches $PYTHON])
+		save_CPPFLAGS=$CPPFLAGS
+		CPPFLAGS="$CPPFLAGS $PYTHON3_INCLUDES"
+		AC_COMPILE_IFELSE(
+			[AC_LANG_PROGRAM([[#include <Python.h>
+#if PY_MAJOR_VERSION != $python3_major || \
+	PY_MINOR_VERSION != $python3_minor
+#error Python.h does not match the selected interpreter
+#endif]], [[]])],
+			[AC_MSG_RESULT(yes)],
+			[AC_MSG_RESULT(no)
+			 python3_failure="Python.h is missing or does not match $PYTHON"])
+		CPPFLAGS=$save_CPPFLAGS
+	fi
+
+	if test -n "$python3_failure" ; then
+		if test x$use_python3 = xyes ; then
+			AC_MSG_ERROR([$python3_failure])
+		fi
+		AC_MSG_NOTICE([$python3_failure - Python 3 bindings will not be built])
+		use_python3=no
 	else
-	echo "Python3 bindings WILL be built"
-	use_python3=yes
-	AM_PATH_PYTHON([3.1],, [:])
-	PYTHON3_CFLAGS=`python3-config --cflags 2> /dev/null`
-	PYTHON3_LIBS=`python3-config --libs 2> /dev/null`
-	PYTHON3_INCLUDES=`python3-config --includes 2> /dev/null`
-	AC_SUBST(PYTHON3_CFLAGS)
-	AC_SUBST(PYTHON3_LIBS)
-	AC_SUBST(PYTHON3_INCLUDES)
+		AC_MSG_NOTICE([Python 3 bindings will be built])
+		use_python3=yes
 	fi
 fi
+AC_SUBST(PYTHON3_CONFIG)
+AC_SUBST(PYTHON3_CFLAGS)
+AC_SUBST(PYTHON3_LIBS)
+AC_SUBST(PYTHON3_INCLUDES)
+AM_CONDITIONAL(HAVE_SWIG, test x"${swig_found}" = x"yes")
 AM_CONDITIONAL(USE_PYTHON3, test ${use_python3} = "yes")
 
 AC_CONFIG_FILES([Makefile src/Makefile src/libcap-ng.pc src/test/Makefile
