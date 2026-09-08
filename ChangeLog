@@ -7,6 +7,7 @@
 - In cap-audit, reject unsupported systemd unit syntax
 - Fix tree branch drawing for repeated socket owners in netcap --advanced
 - Fix utility builds with musl libc
+- Ensure capng_change_id is multi-thread safe
 
 0.9.5
 - Fix broken utility_logic_test when run as a 32 bit app

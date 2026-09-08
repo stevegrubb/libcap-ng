@@ -243,6 +243,45 @@ static int gid_in_list(const gid_t *gids, size_t count, gid_t gid)
 	return 0;
 }
 
+/*
+ * get_passwd - resolve an account into private storage for a transition.
+ * @uid: target user ID.
+ * @pw: destination account record.
+ *
+ * Returns the allocated string buffer backing @pw, or NULL on lookup or
+ * allocation failure. The caller must retain it until group setup is done.
+ * getpwuid() storage can be overwritten by another thread's account lookup;
+ * thread-local capability state does not protect that libc-owned storage.
+ */
+static char *get_passwd(uid_t uid, struct passwd *pw)
+{
+	long hint = sysconf(_SC_GETPW_R_SIZE_MAX);
+	size_t size = hint > 0 ? (size_t)hint : 1024;
+
+	for (;;) {
+		struct passwd *result;
+		char *buf = malloc(size);
+		int rc;
+
+		if (buf == NULL)
+			return NULL;
+		rc = getpwuid_r(uid, pw, buf, size, &result);
+		if (rc == 0 && result != NULL)
+			return buf;
+		free(buf);
+		if (rc != ERANGE) {
+			errno = rc;
+			return NULL;
+		}
+		/* NSS records can exceed the initial sysconf size suggestion. */
+		if (size > SIZE_MAX / 2) {
+			errno = ENOMEM;
+			return NULL;
+		}
+		size *= 2;
+	}
+}
+
 static int get_additional_groups(const struct passwd *pw, gid_t gid,
 				 gid_t **gids, size_t *count)
 {
@@ -1142,7 +1181,8 @@ int capng_change_id(int uid, int gid, capng_flags_t flag)
 	};
 	unsigned int tmp_caps = 0;
 	int rc, ret;
-	struct passwd *pw = NULL;
+	struct passwd pw;
+	char *pw_buf = NULL;
 	gid_t *gids = NULL, *merged = NULL;
 	size_t gid_cnt = 0, merged_cnt = 0;
 
@@ -1244,7 +1284,7 @@ if (HAVE_PR_CAPBSET_DROP) {
 			goto err_out;
 		}
 	}
-	// Apply a caller-prepared bounding set only when it is explicitly dirty.
+	// Apply a caller-prepared bounding set only when it is explicitly dirty
 	if ((flag & CAPNG_APPLY_BOUNDING) && m.bounds_state_changed) {
 		rc = capng_apply(CAPNG_SELECT_BOUNDS);
 		if (rc) {
@@ -1265,8 +1305,8 @@ if (HAVE_PR_CAPBSET_DROP) {
 
 	// Resolve the passwd entry once when natural group setup is requested.
 	if ((flag & CAPNG_INIT_SUPP_GRP) && uid != -1) {
-		pw = getpwuid(uid);
-		if (pw == NULL) {
+		pw_buf = get_passwd(uid, &pw);
+		if (pw_buf == NULL) {
 			ret = -10;
 			goto err_out;
 		}
@@ -1277,10 +1317,10 @@ if (HAVE_PR_CAPBSET_DROP) {
 	if ((flag & CAPNG_INIT_SUPP_GRP) &&
 			(flag & CAPNG_APPLY_STAGED_GROUPS)) {
 		if (uid != -1) {
-			gid_t base_gid = gid != -1 ? (gid_t)gid : pw->pw_gid;
+			gid_t base_gid = gid != -1 ? (gid_t)gid : pw.pw_gid;
 
 			// Build the natural target account group list first.
-			rc = get_additional_groups(pw, base_gid, &gids,
+			rc = get_additional_groups(&pw, base_gid, &gids,
 						   &gid_cnt);
 			if (rc) {
 				ret = -15;
@@ -1300,10 +1340,10 @@ if (HAVE_PR_CAPBSET_DROP) {
 			goto err_out;
 		}
 	} else if ((flag & CAPNG_INIT_SUPP_GRP) && uid != -1) {
-		gid_t base_gid = gid != -1 ? (gid_t)gid : pw->pw_gid;
+		gid_t base_gid = gid != -1 ? (gid_t)gid : pw.pw_gid;
 
 		// Preserve the long-standing initgroups-only behavior.
-		if (initgroups(pw->pw_name, base_gid)) {
+		if (initgroups(pw.pw_name, base_gid)) {
 			ret = -5;
 			goto err_out;
 		}
@@ -1365,6 +1405,7 @@ err_out:
 	prctl(PR_SET_KEEPCAPS, 0, 0, 0, 0);
 out:
 	// Staged gids are one-shot state, so always clear them before return.
+	free(pw_buf);
 	free(gids);
 	free(merged);
 	clear_staged_additional_groups(&m);
