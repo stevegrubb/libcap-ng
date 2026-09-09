@@ -27,6 +27,152 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+
+/* Only SETGID/SETUID checks need deferring, not an unbounded event history. */
+struct keepcaps_checks {
+	unsigned long granted;
+	unsigned long denied;
+	int first_granted_syscall;
+};
+
+struct keepcaps_window {
+	struct keepcaps_window *next;
+	__u32 pid;
+	__u32 tid;
+	__u64 granted_caps;
+	/* Indexed by capability - CAP_SETGID (SETGID=6, SETUID=7). */
+	struct keepcaps_checks checks[2];
+};
+
+/* Return the link owning this thread's window, or the empty tail link. */
+static struct keepcaps_window **find_keepcaps_window(const struct cap_event *e)
+{
+	struct keepcaps_window **link = &state.keepcaps_windows;
+
+	while (*link && ((*link)->pid != e->pid || (*link)->tid != e->tid))
+		link = &(*link)->next;
+	return link;
+}
+
+/*
+ * Commit deferred checks as initialization only for a completed pair.
+ * Without the closing prctl, keep the original operational classification:
+ * a daemon may intentionally leave KEEPCAPS set while doing normal work.
+ */
+static void finish_keepcaps_window(struct keepcaps_window **link, bool complete)
+{
+	struct keepcaps_window *window = *link;
+	int cap;
+
+	if (complete)
+		state.keepcaps_init_caps |= window->granted_caps;
+	else {
+		state.keepcaps_incomplete = true;
+		fprintf(stderr, "Warning: PID %u TID %u enabled "
+			"PR_SET_KEEPCAPS, but no successful disable was observed "
+			"before exec, exit, or the end of tracing; retaining "
+			"the original capability classification.\n",
+			window->pid, window->tid);
+	}
+	for (cap = CAP_SETGID; cap <= CAP_SETUID; cap++) {
+		struct cap_check *check = &state.app.checks[cap];
+		const struct keepcaps_checks *pending =
+			&window->checks[cap - CAP_SETGID];
+
+		if (complete) {
+			check->count += pending->granted + pending->denied;
+			check->granted += pending->granted;
+			check->denied += pending->denied;
+			if (pending->granted && !check->needed) {
+				check->needed = 1;
+				update_reason_to(&check->reason,
+						 pending->first_granted_syscall);
+			}
+		} else {
+			check->op_count += pending->granted + pending->denied;
+			check->op_granted += pending->granted;
+			check->op_denied += pending->denied;
+			if (pending->granted && !check->op_needed) {
+				check->op_needed = 1;
+				update_reason_to(&check->op_reason,
+						 pending->first_granted_syscall);
+			}
+		}
+	}
+	*link = window->next;
+	free(window);
+}
+
+/* Track successful flag changes, not nested calls or another thread's flag. */
+static void handle_keepcaps(const struct cap_event *e)
+{
+	struct keepcaps_window **link;
+
+	if (e->syscall_ret != 0 || e->keepcaps > 1)
+		return;
+	link = find_keepcaps_window(e);
+	if (e->keepcaps) {
+		if (*link)
+			return;
+		*link = calloc(1, sizeof(**link));
+		if (!*link) {
+			state.keepcaps_incomplete = true;
+			fprintf(stderr, "Warning: unable to track KEEPCAPS "
+				"transition for PID %u TID %u\n", e->pid, e->tid);
+			return;
+		}
+		(*link)->pid = e->pid;
+		(*link)->tid = e->tid;
+	} else if (*link)
+		finish_keepcaps_window(link, true);
+}
+
+/*
+ * Match credential-changing syscalls, including legacy 32-bit ID variants.
+ * SETUID/SETGID checks from unrelated operations within the window must not
+ * be relabeled. libcap-ng closes KEEPCAPS before its final capset, so this
+ * bracket identifies ID changes, not the exact final capability-drop point.
+ */
+static int is_id_change(const struct cap_event *e)
+{
+	static const char *const uid_calls[] = {
+		"setuid", "setreuid", "setresuid", "setfsuid",
+	};
+	static const char *const gid_calls[] = {
+		"setgid", "setregid", "setresgid", "setfsgid", "setgroups",
+	};
+	const char *const *calls;
+	const char *name;
+	size_t count, i;
+
+	if (e->capability == CAP_SETUID) {
+		calls = uid_calls;
+		count = sizeof(uid_calls) / sizeof(uid_calls[0]);
+	} else if (e->capability == CAP_SETGID) {
+		calls = gid_calls;
+		count = sizeof(gid_calls) / sizeof(gid_calls[0]);
+	} else
+		return 0;
+	name = syscall_name_from_nr(e->syscall_nr);
+	if (!name)
+		return 0;
+	for (i = 0; i < count; i++) {
+		size_t len = strlen(calls[i]);
+
+		if (!strncmp(name, calls[i], len) &&
+		    (!name[len] || !strcmp(name + len, "32")))
+			return 1;
+	}
+	return 0;
+}
+
+/* Flush unmatched windows before any output format consumes the counters. */
+void finish_cap_events(void)
+{
+	while (state.keepcaps_windows)
+		finish_keepcaps_window(&state.keepcaps_windows, false);
+}
 
 static int is_always_noise(const struct cap_event *e)
 {
@@ -155,6 +301,17 @@ int handle_cap_event(void *ctx __attribute__((unused)), void *data,
 	const struct cap_event *e = data;
 	int op_phase = state.capset_observed;
 
+	if (e->event_type == CAP_EVENT_KEEPCAPS) {
+		handle_keepcaps(e);
+		return 0;
+	}
+	if (e->event_type == CAP_EVENT_TASK_END) {
+		struct keepcaps_window **link = find_keepcaps_window(e);
+
+		if (*link)
+			finish_keepcaps_window(link, false);
+		return 0;
+	}
 	if (e->event_type == CAP_EVENT_SYSCALL_RESULT) {
 		handle_syscall_result(e);
 		return 0;
@@ -220,18 +377,36 @@ int handle_cap_event(void *ctx __attribute__((unused)), void *data,
 
 	if (e->capability >= 0 && e->capability <= CAP_LAST_CAP) {
 		struct cap_check *check;
+		struct keepcaps_window *window = NULL;
 
 		check = &state.app.checks[e->capability];
 		check->capability = e->capability;
+		/* Keep denial/outcome evidence even while phase accounting waits. */
+		if (e->result == 0)
+			add_denied_syscall(check, e->syscall_nr);
+		if (state.keepcaps_windows && is_id_change(e))
+			window = *find_keepcaps_window(e);
+		if (window && e->result > 0)
+			window->granted_caps |= 1ULL << e->capability;
+		if (window && op_phase) {
+			struct keepcaps_checks *pending =
+				&window->checks[e->capability - CAP_SETGID];
+
+			if (e->result > 0) {
+				if (!pending->granted)
+					pending->first_granted_syscall = e->syscall_nr;
+				pending->granted++;
+			} else if (e->result == 0)
+				pending->denied++;
+			return 0;
+		}
 
 		if (op_phase) {
 			check->op_count++;
 			if (e->result > 0)
 				check->op_granted++;
-			else if (e->result == 0) {
+			else if (e->result == 0)
 				check->op_denied++;
-				add_denied_syscall(check, e->syscall_nr);
-			}
 			if (e->result > 0 && check->op_needed != 1) {
 				check->op_needed = 1;
 				update_reason_to(&check->op_reason, e->syscall_nr);
@@ -240,10 +415,8 @@ int handle_cap_event(void *ctx __attribute__((unused)), void *data,
 			check->count++;
 			if (e->result > 0)
 				check->granted++;
-			else if (e->result == 0) {
+			else if (e->result == 0)
 				check->denied++;
-				add_denied_syscall(check, e->syscall_nr);
-			}
 
 			if (e->result > 0 && check->needed != 1) {
 				check->needed = 1;

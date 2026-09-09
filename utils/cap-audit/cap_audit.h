@@ -45,6 +45,8 @@ enum cap_event_type {
 	CAP_EVENT_CHECK,
 	CAP_EVENT_SYSCALL_RESULT,
 	CAP_EVENT_CAPSET,
+	CAP_EVENT_KEEPCAPS,
+	CAP_EVENT_TASK_END,
 };
 
 struct cap_event {
@@ -63,6 +65,8 @@ struct cap_event {
 	__u32 event_type;
 	/* Kernel capset arguments proved this SETPCAP check optional. */
 	__u32 capset_inh_optional;
+	__u32 tid;
+	__u32 keepcaps;
 };
 
 enum syscall_outcome_class {
@@ -192,6 +196,10 @@ struct audit_state {
 	int sync_pipe[2];
 	char **target_argv;
 	int capset_observed;
+	/* Pending per-thread credential transitions, owned by event handling. */
+	struct keepcaps_window *keepcaps_windows;
+	__u64 keepcaps_init_caps;
+	bool keepcaps_incomplete;
 	__u32 baseline_user_ns_inum;
 	bool foreign_target_ns_observed;
 	volatile sig_atomic_t stop;
@@ -204,6 +212,7 @@ extern int audit_machine;
 
 int handle_cap_event(void *ctx, void *data, size_t data_sz)
 	__attr_access ((__read_only__, 2));
+void finish_cap_events(void);
 void analyze_capabilities(void);
 void output_json(void);
 void output_yaml(void);

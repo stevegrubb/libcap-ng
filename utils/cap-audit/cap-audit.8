@@ -58,6 +58,25 @@ the old inheritable and permitted sets. Other CAP_SETPCAP checks are retained, a
 explicit successful capset requests and configured service capabilities.
 This decision does not depend on the executable's file capabilities.
 .PP
+UID/GID and supplementary-group capability checks between successful
+.B PR_SET_KEEPCAPS
+enable and disable calls on the same thread are classified as initialization,
+even when an intermediate capset has already occurred. This recognizes the
+temporary identity capabilities used by
+.BR capng_change_id (3).
+Checks outside that credential-changing pattern retain their usual phase.
+If no successful disable is observed before exec, thread exit, or the end of
+tracing, cap-audit warns and retains the original phase classification.
+JSON and YAML also report this as
+.BR keepcaps_transition_incomplete .
+.PP
+Service recommendations identify requested SETUID/SETGID capabilities whose
+observed use is confined to initialization, including a completed KEEPCAPS
+transition. These are not needed for observed operation, but remain in the
+deployment configuration because the unchanged application needs them during
+startup. Unexercised paths still require review and testing before changing
+the application's retained capabilities.
+.PP
 Runtime tracing requires root or the CAP_BPF and CAP_PERFMON capabilities, along with kernel BTF data in
 \fI/sys/kernel/btf/vmlinux\fP.
 .SH OPTIONS

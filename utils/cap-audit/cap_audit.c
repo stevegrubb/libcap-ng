@@ -50,9 +50,10 @@
  * When the tool observes a capset syscall from the initial PID, it splits
  * capability accounting into initialization and operational phases. The
  * initialization phase covers all capability checks from process start to
- * the first capset. The operational phase covers everything after. This
- * separation allows the tool to distinguish capabilities needed for one-time
- * setup (binding privileged ports, chroot, loading restricted configuration)
+ * the first capset, plus UID/GID changes bracketed by successful keepcaps
+ * enable/disable calls on the same thread. The operational phase covers
+ * other checks after the first capset. This distinguishes capabilities needed
+ * for one-time setup (binding ports, chroot, loading restricted configuration)
  * from capabilities needed for ongoing operation. Recommendations for
  * programmatic capability dropping use only the operational set, while
  * deployment recommendations (file capabilities, systemd, containers) use
@@ -416,6 +417,8 @@ int main(int argc, char **argv)
 		goto err_target_path;
 	}
 	state.skel->rodata->capset_syscall_nr = state.app.capset_nr;
+	state.skel->rodata->prctl_syscall_nr =
+		audit_name_to_syscall("prctl", audit_machine);
 	err = cap_audit_bpf__load(state.skel);
 	if (err) {
 		fprintf(stderr, "Error: Failed to load BPF program: %s\n",
@@ -574,6 +577,7 @@ int main(int argc, char **argv)
 	 * not discard SYS_ADMIN/SETPCAP merely because the target has exited.
 	 */
 	ring_buffer__poll(state.rb, 0);
+	finish_cap_events();
 
 	if (state.json_output)
 		output_json();

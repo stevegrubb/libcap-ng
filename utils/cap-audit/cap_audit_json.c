@@ -180,6 +180,8 @@ void output_json(void)
 
 	printf("  \"capability_drop_observed\": %s,\n",
 	       state.capset_observed ? "true" : "false");
+	printf("  \"keepcaps_transition_incomplete\": %s,\n",
+	       state.keepcaps_incomplete ? "true" : "false");
 	printf("  \"successful_capset_calls\": %lu,\n",
 	       state.app.capset.successful_calls);
 

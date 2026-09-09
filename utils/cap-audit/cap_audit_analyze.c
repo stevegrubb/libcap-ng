@@ -874,6 +874,37 @@ static void svc_print_generated_config(const service_config_t *cfg,
 	       cfg->no_new_privs ? "yes" : "no");
 }
 
+/*
+ * A configured/requested identity capability is not necessarily a capability
+ * to retain after initialization. The unchanged daemon still needs it in its
+ * deployment boundary to perform the transition; never suggest removing it
+ * there merely because a matched keepcaps pair explains its observed use.
+ */
+static void svc_print_transition_caps(const service_config_t *cfg)
+{
+	int cap;
+
+	if (!state.capset_observed || state.keepcaps_incomplete)
+		return;
+	for (cap = CAP_SETGID; cap <= CAP_SETUID; cap++) {
+		if (!(state.keepcaps_init_caps & (1ULL << cap)) ||
+		    state.app.checks[cap].op_count ||
+		    !((cfg->bounding.seen && cfg->bounding.caps[cap]) ||
+		      (cfg->ambient.seen && cfg->ambient.caps[cap]) ||
+		      cap_requested_by_capset(cap)))
+			continue;
+		print_wrappedf("    Credential transition: ",
+			"%s is requested by the unit or application, but is not "
+			"needed for observed operation. Its KEEPCAPS-bracketed "
+			"credential changes are initialization work; no "
+			"operational checks were observed. Keep it available "
+			"for startup in the deployment configuration, including "
+			"CapabilityBoundingSet. Review and test unexercised paths "
+			"before removing it from the application's retained set.",
+			cap_name_safe(cap));
+	}
+}
+
 static void print_service_recommendations(void)
 {
 	const service_config_t *cfg = state.service_cfg;
@@ -913,6 +944,7 @@ static void print_service_recommendations(void)
 		svc_print_phase_caps("Initialization capabilities: ", 0);
 		svc_print_phase_caps("Operational capabilities: ", 1);
 	}
+	svc_print_transition_caps(cfg);
 	if (is_root)
 		print_wrapped_text("    ",
 				   "AmbientCapabilities omitted because ambient "
@@ -1226,6 +1258,10 @@ void analyze_capabilities(void)
 	} else {
 		print_wrapped_text("",
 				   "INITIALIZATION CAPABILITIES (before capability drop):");
+		if (state.keepcaps_init_caps)
+			print_wrapped_text("  ",
+				"Includes UID/GID changes within completed KEEPCAPS "
+				"transitions, even after an intermediate capset.");
 		print_rule('-');
 		for (i = 0; i <= CAP_LAST_CAP; i++) {
 			struct cap_check *check = &state.app.checks[i];

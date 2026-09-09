@@ -44,6 +44,7 @@
 #define CAP_VERSION_2	0x20071026
 #define CAP_VERSION_3	0x20080522
 #define CAP_SETPCAP	8
+#define PR_SET_KEEPCAPS	8
 
 struct cap_user_header {
 	__u32 version;
@@ -57,6 +58,7 @@ struct cap_user_data {
 };
 
 const volatile int capset_syscall_nr = -1;
+const volatile int prctl_syscall_nr = -1;
 
 /*
  * BPF overview:
@@ -138,6 +140,8 @@ enum cap_event_type {
 	CAP_EVENT_CHECK,
 	CAP_EVENT_SYSCALL_RESULT,
 	CAP_EVENT_CAPSET,
+	CAP_EVENT_KEEPCAPS,
+	CAP_EVENT_TASK_END,
 };
 
 struct cap_event {
@@ -155,6 +159,8 @@ struct cap_event {
 	__u64 capset_inheritable;
 	__u32 event_type;
 	__u32 capset_inh_optional;
+	__u32 tid;
+	__u32 keepcaps;
 };
 
 // This sets the limit for how many child processes can be traced.
@@ -204,6 +210,8 @@ struct syscall_state {
 	__u64 capset_optional_cred;
 	int nr;
 	__u8 capset_valid;
+	__u8 keepcaps_valid;
+	__u8 keepcaps;
 };
 
 struct {
@@ -350,6 +358,7 @@ int BPF_KPROBE(trace_cap_capable, const struct cred *cred,
 	struct syscall_state *syscall;
 
 	ev.pid = pid_tgid >> 32;
+	ev.tid = (__u32)pid_tgid;
 	if (!should_record_pid(ev.pid))
 		return 0;
 
@@ -462,6 +471,11 @@ int trace_sys_enter(struct trace_event_raw_sys_enter *ctx)
 	syscall.nr = ctx->id;
 	if (should_record_pid(pid) && ctx->id == capset_syscall_nr)
 		read_capset_payload(ctx, &syscall);
+	if (should_record_pid(pid) && ctx->id == prctl_syscall_nr &&
+	    (int)ctx->args[0] == PR_SET_KEEPCAPS && ctx->args[1] <= 1) {
+		syscall.keepcaps_valid = 1;
+		syscall.keepcaps = ctx->args[1];
+	}
 	bpf_map_update_elem(&current_syscalls, &pid_tgid, &syscall, BPF_ANY);
 	return 0;
 }
@@ -515,13 +529,37 @@ static __always_inline void emit_capset_result(
 	bpf_ringbuf_submit(out, 0);
 }
 
+/* Report keepcaps completion; failed prctls must not change phase tracking. */
+static __always_inline void emit_keepcaps_result(
+				const struct syscall_state *syscall, __s64 ret)
+{
+	struct cap_event *out;
+	__u64 pid_tgid;
+
+	if (!syscall->keepcaps_valid)
+		return;
+	out = bpf_ringbuf_reserve(&cap_events, sizeof(*out), 0);
+	if (!out)
+		return;
+	__builtin_memset(out, 0, sizeof(*out));
+	pid_tgid = bpf_get_current_pid_tgid();
+	out->pid = pid_tgid >> 32;
+	out->tid = (__u32)pid_tgid;
+	out->syscall_nr = syscall->nr;
+	out->syscall_ret = ret;
+	out->keepcaps = syscall->keepcaps;
+	out->event_type = CAP_EVENT_KEEPCAPS;
+	bpf_ringbuf_submit(out, 0);
+}
+
 /*
  * trace_sys_exit - emit denied-check outcomes and clear syscall tracking.
  * @ctx: raw_syscalls/sys_exit tracepoint context.
  *
  * Emits the raw return value when the invocation contained denied capability
- * checks. A successful capset also emits its requested masks. Removes the
- * per-thread state before returning 0.
+ * checks. A successful capset also emits its requested masks, and keepcaps
+ * prctls emit their result so userspace can pair credential transitions.
+ * Removes the per-thread state before returning 0.
  */
 SEC("tracepoint/raw_syscalls/sys_exit")
 int trace_sys_exit(struct trace_event_raw_sys_exit *ctx)
@@ -539,6 +577,7 @@ int trace_sys_exit(struct trace_event_raw_sys_exit *ctx)
 	if (syscall) {
 		emit_syscall_result(syscall, ctx->ret);
 		emit_capset_result(syscall, ctx->ret);
+		emit_keepcaps_result(syscall, ctx->ret);
 	}
 	bpf_map_delete_elem(&current_syscalls, &pid_tgid);
 	return 0;
@@ -572,6 +611,24 @@ int trace_sched_process_fork(struct trace_event_raw_sched_process_fork *ctx)
 	return 0;
 }
 
+/* Do not pair keepcaps calls across exec, thread exit, or TID reuse. */
+static __always_inline void emit_task_end(__u32 tid)
+{
+	struct cap_event *out;
+	__u32 pid = bpf_get_current_pid_tgid() >> 32;
+
+	if (!should_record_pid(pid))
+		return;
+	out = bpf_ringbuf_reserve(&cap_events, sizeof(*out), 0);
+	if (!out)
+		return;
+	__builtin_memset(out, 0, sizeof(*out));
+	out->pid = pid;
+	out->tid = tid;
+	out->event_type = CAP_EVENT_TASK_END;
+	bpf_ringbuf_submit(out, 0);
+}
+
 /*
  * trace_sched_process_exec - mark a traced PID as post-exec.
  * @ctx: sched_process_exec tracepoint data.
@@ -586,6 +643,8 @@ int trace_sched_process_exec(struct trace_event_raw_sched_process_exec *ctx)
 	__u8 *val;
 	__u8 new_val = 2;
 
+	/* A non-leader exec changes TID; close the old thread's window. */
+	emit_task_end(ctx->old_pid);
 	pid = bpf_get_current_pid_tgid() >> 32;
 	val = bpf_map_lookup_elem(&target_pids, &pid);
 	if (val)
@@ -606,6 +665,7 @@ int trace_sched_process_exit(struct trace_event_raw_sched_process_template *ctx)
 {
 	__u32 pid;
 
+	emit_task_end((__u32)bpf_get_current_pid_tgid());
 	pid = ctx->pid;
 	bpf_map_delete_elem(&target_pids, &pid);
 

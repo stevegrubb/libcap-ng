@@ -25,7 +25,16 @@
 #define TEST_KILL_NR		1007
 #define TEST_ACCESS_NR		1008
 #define TEST_CAPSET_NR		1009
+#define TEST_ID_NR		1010
 #define TEST_ERESTARTSYS	512
+
+static const char *const id_calls[] = {
+	"setuid", "setuid32", "setreuid", "setreuid32",
+	"setresuid", "setresuid32", "setfsuid", "setfsuid32",
+	"setgid", "setgid32", "setregid", "setregid32",
+	"setresgid", "setresgid32", "setfsgid", "setfsgid32",
+	"setgroups", "setgroups32",
+};
 
 struct audit_state state;
 int audit_machine;
@@ -49,6 +58,10 @@ const char *cap_name_safe(int cap)
 		return "fowner";
 	case CAP_KILL:
 		return "kill";
+	case CAP_SETGID:
+		return "setgid";
+	case CAP_SETUID:
+		return "setuid";
 	case CAP_SETPCAP:
 		return "setpcap";
 	case CAP_NET_BIND_SERVICE:
@@ -66,6 +79,9 @@ const char *cap_name_safe(int cap)
 
 const char *syscall_name_from_nr(int nr)
 {
+	if (nr >= TEST_ID_NR &&
+	    nr - TEST_ID_NR < (int)(sizeof(id_calls) / sizeof(id_calls[0])))
+		return id_calls[nr - TEST_ID_NR];
 	switch (nr) {
 	case TEST_MOUNT_NR:
 		return "mount";
@@ -142,6 +158,7 @@ static void emit_check(int cap, int syscall_nr, int result)
 {
 	struct cap_event event = {
 		.pid = 1234,
+		.tid = 1234,
 		.capability = cap,
 		.result = result,
 		.syscall_nr = syscall_nr,
@@ -247,27 +264,27 @@ static void setup_events(void)
 
 typedef void (*output_fn)(void);
 
-static char *capture_output(output_fn output)
+static char *capture_output(output_fn output, int fd)
 {
 	FILE *capture;
 	char *text;
 	long len;
-	int saved_stdout;
+	int saved_fd;
 
 	capture = tmpfile();
 	if (!capture)
 		fail("Failed to create output file");
-	saved_stdout = dup(STDOUT_FILENO);
-	if (saved_stdout < 0)
-		fail("Failed to save stdout");
-	if (fflush(stdout) || dup2(fileno(capture), STDOUT_FILENO) < 0)
-		fail("Failed to capture stdout");
+	saved_fd = dup(fd);
+	if (saved_fd < 0)
+		fail("Failed to save output descriptor");
+	if (fflush(NULL) || dup2(fileno(capture), fd) < 0)
+		fail("Failed to capture output");
 
 	output();
 
-	if (fflush(stdout) || dup2(saved_stdout, STDOUT_FILENO) < 0)
-		fail("Failed to restore stdout");
-	close(saved_stdout);
+	if (fflush(NULL) || dup2(saved_fd, fd) < 0)
+		fail("Failed to restore output descriptor");
+	close(saved_fd);
 	if (fseek(capture, 0, SEEK_END) != 0)
 		fail("Failed to seek captured output");
 	len = ftell(capture);
@@ -317,7 +334,7 @@ static void test_human_output(void)
 	};
 	char *output;
 
-	output = capture_output(analyze_capabilities);
+	output = capture_output(analyze_capabilities, STDOUT_FILENO);
 	expect_text(output, "mount: 1 failed with -EPERM");
 	expect_text(output, "mount: 1 failed with -ENOENT");
 #ifdef EBADFD
@@ -375,7 +392,7 @@ static void test_human_output(void)
 	service.bounding.caps[CAP_NET_BIND_SERVICE] = true;
 	state.service_file = "/tmp/outcome.service";
 	state.service_cfg = &service;
-	output = capture_output(analyze_capabilities);
+	output = capture_output(analyze_capabilities, STDOUT_FILENO);
 	expect_text(output, "sys_admin: Manual investigation required");
 	expect_text(output, "Capability is absent from the configured");
 	expect_text(output, "Mixed capability-check results: net_bind_service");
@@ -397,7 +414,7 @@ static void test_structured_output(void)
 {
 	char *output;
 
-	output = capture_output(output_json);
+	output = capture_output(output_json, STDOUT_FILENO);
 	expect_text(output, "\"assessment\": \"permission_failure\"");
 	expect_text(output, "\"assessment\": \"mixed_success_interruption\"");
 	expect_text(output,
@@ -422,7 +439,7 @@ static void test_structured_output(void)
 	expect_text(output, "\"count\": 20");
 	free(output);
 
-	output = capture_output(output_yaml);
+	output = capture_output(output_yaml, STDOUT_FILENO);
 	expect_text(output, "assessment: permission_failure");
 	expect_text(output, "assessment: mixed_success_interruption");
 	expect_text(output, "assessment: mixed_success_other_failure");
@@ -529,7 +546,7 @@ static void test_optional_setpcap(void)
 	emit_capset(0, 1ULL << CAP_SETPCAP, 1ULL << CAP_SETPCAP, 0);
 	if (!cap_is_capset_only(CAP_SETPCAP))
 		fail("Explicit SETPCAP capset request was suppressed");
-	output = capture_output(analyze_capabilities);
+	output = capture_output(analyze_capabilities, STDOUT_FILENO);
 	expect_text(output, "CapabilityBoundingSet=setpcap");
 	free(output);
 }
@@ -556,8 +573,246 @@ static void test_event_reasons(void)
 	free(check->op_reason);
 }
 
+/* Emit the completion of a keepcaps prctl on a selected target thread. */
+static void emit_keepcaps(__u32 tid, int enabled, __s64 ret)
+{
+	struct cap_event event = {
+		.pid = 1234,
+		.tid = tid,
+		.event_type = CAP_EVENT_KEEPCAPS,
+		.keepcaps = enabled,
+		.syscall_ret = ret,
+	};
+
+	handle_cap_event(NULL, &event, sizeof(event));
+}
+
+/* Free diagnostic storage so repeated synthetic runs also test ownership. */
+static void reset_keepcaps_test(void)
+{
+	int cap;
+
+	if (state.keepcaps_windows)
+		fail("Test leaked a keepcaps window");
+	for (cap = 0; cap <= CAP_LAST_CAP; cap++) {
+		free(state.app.checks[cap].reason);
+		free(state.app.checks[cap].op_reason);
+		free(state.app.checks[cap].denied_syscalls);
+		free(state.app.checks[cap].outcomes);
+	}
+	memset(&state, 0, sizeof(state));
+	state.app.pid = 1234;
+	state.app.exe = "/usr/bin/keepcaps-target";
+	state.app.prog_type = ELF;
+	state.app.capset_nr = TEST_CAPSET_NR;
+}
+
+/* Model capng_change_id's temporary set, ID changes, then final capset. */
+static void test_keepcaps_transition(void)
+{
+	struct cap_event capset = {
+		.pid = 1234,
+		.syscall_nr = TEST_CAPSET_NR,
+		.event_type = CAP_EVENT_CAPSET,
+		.capset_permitted = (1ULL << CAP_SETGID) |
+			(1ULL << CAP_SETUID) | (1ULL << CAP_NET_BIND_SERVICE),
+	};
+	service_config_t service = { 0 };
+	char *output, *operational;
+
+	reset_keepcaps_test();
+	emit_keepcaps(1234, 1, 0);
+	handle_cap_event(NULL, &capset, sizeof(capset));
+	emit_check(CAP_SETGID, TEST_ID_NR + 12, 1); /* setresgid */
+	emit_check(CAP_SETGID, TEST_ID_NR + 16, 1); /* setgroups */
+	emit_check(CAP_SETUID, TEST_ID_NR + 4, 1); /* setresuid */
+	emit_keepcaps(1234, 0, 0);
+	capset.capset_permitted = 1ULL << CAP_NET_BIND_SERVICE;
+	handle_cap_event(NULL, &capset, sizeof(capset));
+	emit_check(CAP_NET_BIND_SERVICE, TEST_BIND_NR, 1);
+	finish_cap_events();
+	if (state.app.checks[CAP_SETGID].granted != 2 ||
+	    state.app.checks[CAP_SETUID].granted != 1 ||
+	    state.app.checks[CAP_SETGID].op_count ||
+	    state.app.checks[CAP_SETUID].op_count ||
+	    state.app.checks[CAP_NET_BIND_SERVICE].op_granted != 1 ||
+	    state.keepcaps_incomplete ||
+	    !cap_is_compat_requirement(CAP_SETUID) ||
+	    !cap_is_compat_requirement(CAP_SETGID))
+		fail("Credential-transition checks were not initialization");
+	if (strcmp(state.app.checks[CAP_SETGID].reason, "Used by setresgid") ||
+	    strcmp(state.app.checks[CAP_SETUID].reason, "Used by setresuid"))
+		fail("Credential-transition reasons were lost");
+	output = capture_output(analyze_capabilities, STDOUT_FILENO);
+	expect_text(output, "capng_updatev(CAPNG_ADD");
+	if (strstr(output, "CAP_SETUID") || strstr(output, "CAP_SETGID"))
+		fail("Programmatic snippet retained identity capabilities");
+	free(output);
+
+	output = capture_output(output_json, STDOUT_FILENO);
+	expect_text(output, "\"keepcaps_transition_incomplete\": false");
+	operational = strstr(output, "\"operational_capabilities\"");
+	if (!operational || strstr(operational, "\"name\": \"setuid\"") ||
+	    strstr(operational, "\"name\": \"setgid\""))
+		fail("JSON retained transition capabilities as operational");
+	free(output);
+	output = capture_output(output_yaml, STDOUT_FILENO);
+	expect_text(output, "keepcaps_transition_incomplete: false");
+	operational = strstr(output, "operational_capabilities:");
+	if (!operational || strstr(operational, "name: setuid") ||
+	    strstr(operational, "name: setgid"))
+		fail("YAML retained transition capabilities as operational");
+	free(output);
+
+	/* Both application requests and explicit unit requests get guidance. */
+	state.service_cfg = &service;
+	state.service_file = "/tmp/keepcaps.service";
+	output = capture_output(analyze_capabilities, STDOUT_FILENO);
+	expect_text(output, "Credential transition: setgid is requested");
+	expect_text(output, "Credential transition: setuid is requested");
+	expect_text(output, "CapabilityBoundingSet=setgid setuid net_bind_service");
+	free(output);
+	state.keepcaps_incomplete = true;
+	output = capture_output(analyze_capabilities, STDOUT_FILENO);
+	if (strstr(output, "Credential transition:"))
+		fail("Incomplete tracing still claimed capabilities unneeded");
+	free(output);
+	state.keepcaps_incomplete = false;
+	state.app.capset.permitted = 0;
+	service.bounding.seen = true;
+	service.bounding.caps[CAP_SETUID] = true;
+	output = capture_output(analyze_capabilities, STDOUT_FILENO);
+	expect_text(output, "Credential transition: setuid is requested");
+	if (strstr(output, "Credential transition: setgid is requested"))
+		fail("Unrequested capability labeled requested");
+	free(output);
+	emit_check(CAP_SETUID, TEST_ID_NR, 1);
+	emit_check(CAP_SETGID, TEST_ID_NR + 8, 0);
+	service.bounding.caps[CAP_SETGID] = true;
+	output = capture_output(analyze_capabilities, STDOUT_FILENO);
+	if (strstr(output, "Credential transition:"))
+		fail("Operational UID/GID checks did not block unneeded guidance");
+	free(output);
+	reset_keepcaps_test();
+	/* Checks before the first capset are already initialization work. */
+	emit_keepcaps(1234, 1, 0);
+	emit_check(CAP_SETUID, TEST_ID_NR, 1);
+	emit_keepcaps(1234, 0, 0);
+	if (state.app.checks[CAP_SETUID].count != 1 ||
+	    state.app.checks[CAP_SETUID].granted != 1 ||
+	    state.app.checks[CAP_SETUID].op_count || state.capset_observed)
+		fail("Pre-capset credential checks were lost or double counted");
+	reset_keepcaps_test();
+}
+
+/* Exercise thread isolation, repeat enables, denials, and every ID variant. */
+static void test_keepcaps_scope(void)
+{
+	struct cap_event other = {
+		.pid = 1234,
+		.tid = 1235,
+		.capability = CAP_SETUID,
+		.syscall_nr = TEST_ID_NR,
+		.result = 1,
+		.event_type = CAP_EVENT_CHECK,
+	};
+	size_t i;
+
+	reset_keepcaps_test();
+	/* The ordinary capset-only case must keep genuine operational use. */
+	emit_check(CAP_SETUID, TEST_ID_NR, 1);
+	emit_check(CAP_SETPCAP, TEST_CAPSET_NR, 1);
+	emit_check(CAP_SETUID, TEST_ID_NR, 1);
+	if (state.app.checks[CAP_SETUID].granted != 1 ||
+	    state.app.checks[CAP_SETUID].op_granted != 1)
+		fail("Capset-only phase tracking changed");
+	reset_keepcaps_test();
+	state.capset_observed = 1;
+	emit_keepcaps(1234, 1, 0);
+	for (i = 0; i < sizeof(id_calls) / sizeof(id_calls[0]); i++) {
+		emit_check(i < 8 ? CAP_SETUID : CAP_SETGID, TEST_ID_NR + i, 1);
+		emit_keepcaps(1234, 1, 0); /* Setting a flag is not nesting. */
+	}
+	emit_check(CAP_SETUID, TEST_ID_NR, 0);
+	emit_outcome(CAP_SETUID, TEST_ID_NR, -EPERM);
+	emit_check(CAP_SETUID, TEST_IOCTL_NR, 1); /* Not an ID change. */
+	emit_check(CAP_SETGID, -1, 1); /* Unknown syscall: do not guess. */
+	handle_cap_event(NULL, &other, sizeof(other));
+	emit_keepcaps(1235, 0, 0); /* Another thread cannot close the pair. */
+	if (!state.keepcaps_windows || state.app.checks[CAP_SETUID].granted)
+		fail("Another thread closed the keepcaps window");
+	emit_keepcaps(1235, 1, 0);
+	handle_cap_event(NULL, &other, sizeof(other));
+	emit_keepcaps(1234, 0, 0);
+	emit_keepcaps(1235, 0, 0);
+	if (state.app.checks[CAP_SETUID].granted != 9 ||
+	    state.app.checks[CAP_SETUID].denied != 1 ||
+	    state.app.checks[CAP_SETGID].granted != 10 ||
+	    state.app.checks[CAP_SETUID].op_granted != 2 ||
+	    state.app.checks[CAP_SETGID].op_granted != 1 ||
+	    state.app.checks[CAP_SETUID].outcome_count != 1 ||
+	    state.app.checks[CAP_SETUID].outcomes[0].result != -EPERM ||
+	    strcmp(state.app.checks[CAP_SETUID].op_reason, "Used by ioctl"))
+		fail("Keepcaps scope, reasons, or denial evidence changed");
+	reset_keepcaps_test();
+}
+
+/* Incomplete/failed pairs warn and must not erase operational requirements. */
+static void test_keepcaps_incomplete(void)
+{
+	struct cap_event end = {
+		.pid = 1234,
+		.tid = 1234,
+		.event_type = CAP_EVENT_TASK_END,
+	};
+	char *output;
+
+	reset_keepcaps_test();
+	state.capset_observed = 1;
+	emit_keepcaps(1234, 1, -EPERM);
+	emit_check(CAP_SETUID, TEST_ID_NR, 1);
+	emit_keepcaps(1234, 0, 0);
+	if (state.app.checks[CAP_SETUID].op_granted != 1 ||
+	    state.keepcaps_windows || state.keepcaps_init_caps)
+		fail("Failed keepcaps enable changed phase accounting");
+	emit_keepcaps(1234, 1, 0);
+	emit_check(CAP_SETUID, TEST_ID_NR, 1);
+	emit_check(CAP_SETGID, TEST_ID_NR + 8, 0);
+	emit_outcome(CAP_SETGID, TEST_ID_NR + 8, -EPERM);
+	emit_keepcaps(1234, 0, -EPERM);
+	output = capture_output(finish_cap_events, STDERR_FILENO);
+	expect_text(output, "Warning: PID 1234 TID 1234");
+	expect_text(output, "no successful disable was observed");
+	free(output);
+	if (!state.keepcaps_incomplete || state.keepcaps_windows ||
+	    state.app.checks[CAP_SETUID].op_granted != 2 ||
+	    state.app.checks[CAP_SETGID].op_denied != 1 ||
+	    state.app.checks[CAP_SETGID].outcome_count != 1 ||
+	    state.keepcaps_init_caps)
+		fail("Incomplete keepcaps pair lost original accounting");
+	output = capture_output(output_json, STDOUT_FILENO);
+	expect_text(output, "\"keepcaps_transition_incomplete\": true");
+	free(output);
+	output = capture_output(output_yaml, STDOUT_FILENO);
+	expect_text(output, "keepcaps_transition_incomplete: true");
+	free(output);
+	reset_keepcaps_test();
+	state.capset_observed = 1;
+	emit_keepcaps(1234, 1, 0);
+	emit_check(CAP_SETUID, TEST_ID_NR, 1);
+	handle_cap_event(NULL, &end, sizeof(end));
+	emit_keepcaps(1234, 0, 0);
+	if (!state.keepcaps_incomplete || state.keepcaps_windows ||
+	    state.app.checks[CAP_SETUID].op_granted != 1)
+		fail("Keepcaps calls paired across exec/exit");
+	reset_keepcaps_test();
+}
+
 int main(void)
 {
+	test_keepcaps_transition();
+	test_keepcaps_scope();
+	test_keepcaps_incomplete();
 	test_capset_without_setpcap();
 	test_event_reasons();
 	test_optional_setpcap();
