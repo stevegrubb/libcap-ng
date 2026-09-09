@@ -1,3 +1,5 @@
+0.9.7
+
 0.9.6
 - Fix supplementary group changes in capng_change_id
 - Reduce cap-audit size and memory use; builds now require llvm-strip
