@@ -148,6 +148,70 @@ static void test_tree_groups(void)
 	free_model(&m);
 }
 
+static void test_inet6_proc_reports(void)
+{
+	char path[] = "/tmp/netcap-inet6-XXXXXX";
+	char proc_addr[33];
+	struct in6_addr addr;
+	uint32_t words[4];
+	struct model m = { 0 };
+	struct process_info owner = {
+		.pid = 1234, .uid = 1000, .comm = "owner", .caps = "(none)",
+		.defenses = { "yes", "no", "disabled", NULL },
+	};
+	struct endpoint *e;
+	FILE *file;
+	char *text;
+	int fd, saved;
+
+	if (inet_pton(AF_INET6, "::1", &addr) != 1)
+		fail("Cannot build IPv6 address fixture");
+	/* Match procfs, which prints the address as four native-endian u32s. */
+	memcpy(words, &addr, sizeof(words));
+	snprintf(proc_addr, sizeof(proc_addr), "%08X%08X%08X%08X",
+		 words[0], words[1], words[2], words[3]);
+	fd = mkstemp(path);
+	if (fd < 0 || !(file = fdopen(fd, "w")))
+		fail("Cannot create inet6 table fixture");
+	fprintf(file, "header\n"
+		"0: %s:AD4D 00000000000000000000000000000000:0000 "
+		"0A 00000000:00000000 00:00000000 00000000 1000 0 4242\n",
+		proc_addr);
+	if (fclose(file))
+		fail("Cannot write inet6 table fixture");
+	if (add_inode_proc(&m, 4242, &owner))
+		fail("Cannot create inet6 socket ownership fixture");
+	parse_inet_file(&m, path, "tcp6", AF_INET6);
+	unlink(path);
+
+	if (m.eps_n != 1)
+		fail("IPv6 procfs endpoint was not parsed");
+	e = &m.eps[0];
+	if (strcmp(e->bind, "::1") ||
+	    strcmp(e->label, "tcp6:[::1]:44365") || e->port != 44365 ||
+	    e->plane != PLANE_INET_LOOPBACK || strcmp(e->ifname, "lo"))
+		fail("IPv6 procfs endpoint identity changed");
+
+	file = capture_output(&saved);
+	render_tree(&m);
+	text = finish_output(file, saved);
+	if (!strstr(text, "INET (loopback)") || !strstr(text, "[::1]") ||
+	    !strstr(text, "44365") || strstr(text, "::1.0.0.0"))
+		fail("Tree report changed the IPv6 endpoint");
+	free(text);
+
+	file = capture_output(&saved);
+	render_json(&m);
+	text = finish_output(file, saved);
+	if (!strstr(text, "\"addr\": \"::1\"") ||
+	    !strstr(text, "\"label\": \"tcp6:[::1]:44365\"") ||
+	    !strstr(text, "\"bind\": \"::1\"") ||
+	    !strstr(text, "\"port\": 44365") || strstr(text, "::1.0.0.0"))
+		fail("JSON report changed the IPv6 endpoint");
+	free(text);
+	free_model(&m);
+}
+
 #ifdef HAVE_NETCAP_VSOCK
 static void test_vsock_owners(void)
 {
@@ -225,6 +289,7 @@ int main(void)
 {
 	test_process_rendering();
 	test_tree_groups();
+	test_inet6_proc_reports();
 #ifdef HAVE_NETCAP_VSOCK
 	test_vsock_owners();
 #endif

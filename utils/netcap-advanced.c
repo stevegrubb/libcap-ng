@@ -1899,15 +1899,17 @@ static void parse_inet_file(struct model *m, const char *path,
 			if (strlen(laddrh) != 32)
 				continue;
 			for (i = 0; i < 4; i++) {
-				uint32_t host;
-				uint32_t net;
+				uint32_t word;
 
-				if (sscanf(laddrh + (i * 8), "%8x", &host) != 1) {
+				if (sscanf(laddrh + (i * 8), "%8x", &word) != 1) {
 					ok = 0;
 					break;
 				}
-				net = htonl(host);
-				memcpy(bytes + (i * 4), &net, sizeof(net));
+				/*
+				 * procfs prints each address word as a native-endian
+				 * u32. Preserve that representation for inet_ntop().
+				 */
+				memcpy(bytes + (i * 4), &word, sizeof(word));
 			}
 			if (!ok)
 				continue;
