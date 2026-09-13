@@ -46,6 +46,17 @@ static int gid_in_list(const gid_t *gids, size_t count, gid_t gid)
 	return 0;
 }
 
+static size_t gid_count_in_list(const gid_t *gids, size_t count, gid_t gid)
+{
+	size_t i, matches = 0;
+
+	for (i = 0; i < count; i++) {
+		if (gids[i] == gid)
+			matches++;
+	}
+	return matches;
+}
+
 static int rc_in_list(int rc, const int *allowed, size_t count)
 {
 	size_t i;
@@ -163,8 +174,10 @@ static void check_groups(const gid_t *expected, size_t expected_cnt)
 		fail("Failed to get current additional groups");
 	if (actual_cnt != expected_cnt)
 		fail("Unexpected additional group count");
+	/* The kernel may reorder supplementary groups applied by setgroups(). */
 	for (i = 0; i < expected_cnt; i++) {
-		if (actual[i] != expected[i])
+		if (gid_count_in_list(actual, actual_cnt, expected[i]) !=
+		    gid_count_in_list(expected, expected_cnt, expected[i]))
 			fail("Unexpected additional group value");
 	}
 	free(actual);
