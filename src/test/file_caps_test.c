@@ -71,6 +71,10 @@ static uint32_t le32_to_cpu(__le32 value)
 }
 
 /*
+ * Mock every xattr function referenced by cap-ng.o. Some static C libraries
+ * put them in one archive member, so leaving one unresolved would pull in
+ * definitions that conflict with the other mocks.
+ *
  * Return only the selected ABI prefix. Poisoning the remainder makes any
  * access beyond the returned length deterministic, like a dirty stack slot.
  */
@@ -139,6 +143,17 @@ int fsetxattr(int fd, const char *name, const void *value, size_t size,
 	memcpy(&written_data, value, size);
 	written_size = size;
 	write_count++;
+	return 0;
+}
+
+int fremovexattr(int fd, const char *name)
+{
+	(void)fd;
+	if (strcmp(name, "security.capability") != 0) {
+		errno = EINVAL;
+		return -1;
+	}
+
 	return 0;
 }
 
