@@ -1,4 +1,7 @@
 0.9.7
+- fix IPv6 procfs address decoding in netcap
+- fix UTF8 text wrapping
+- Correct capng_apply_caps_fd behavior
 
 0.9.6
 - Fix supplementary group changes in capng_change_id
