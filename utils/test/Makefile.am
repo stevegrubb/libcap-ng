@@ -22,6 +22,7 @@ utility_logic_test_SOURCES = utility_logic_test.c \
 	${top_srcdir}/utils/proc-output.c \
 	${top_srcdir}/utils/proc-sanitize.c
 utility_logic_test_CPPFLAGS = $(AM_CPPFLAGS) -DNETCAP_NO_MAIN -DNETCAP_TEST
+utility_logic_test_LDFLAGS = -Wl,--wrap=newlocale
 utility_logic_test_LDADD = ${top_builddir}/src/libcap-ng.la
 
 pscap_test_SOURCES = pscap_test.c \

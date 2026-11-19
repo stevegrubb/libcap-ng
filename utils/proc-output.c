@@ -15,11 +15,13 @@
 
 #include "config.h"
 #include <errno.h>
+#include <langinfo.h>
 #include <limits.h>
 #include <locale.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
 #include <wchar.h>
@@ -135,41 +137,68 @@ static void scan_color_state(const char *text, int from, int to,
 	}
 }
 
+/* Return the length of one UTF-8 character, or one byte for malformed input. */
+static size_t utf8_char_len(const char *text)
+{
+	const unsigned char *s = (const unsigned char *)text;
+	size_t len, i;
+
+	if (s[0] < 0xc2 || s[0] > 0xf4 || s[1] < 0x80 || s[1] > 0xbf)
+		return 1;
+	if (s[0] <= 0xdf)
+		return 2;
+	/* Reject overlong encodings, surrogates, and values above U+10FFFF. */
+	if ((s[0] == 0xe0 && s[1] < 0xa0) || (s[0] == 0xed && s[1] >= 0xa0) ||
+	    (s[0] == 0xf0 && s[1] < 0x90) || (s[0] == 0xf4 && s[1] >= 0x90))
+		return 1;
+	len = s[0] <= 0xef ? 3 : 4;
+	for (i = 2; i < len; i++)
+		if (s[i] < 0x80 || s[i] > 0xbf)
+			return 1;
+	return len;
+}
+
 /*
  * wrap_ansi - choose a wrap index for text containing ANSI SGR escapes.
- * @text: source string to wrap.
- * @from: byte offset where this line starts.
- * @limit: maximum visible columns to include.
- * @columns: optional destination for columns before the returned byte offset.
+ * @text: source string starting at this line.
+ * @limit: maximum visible columns or fallback bytes to include.
+ * @utf8: whether the current locale supplies UTF-8 column widths.
+ * @columns: optional destination for the measured width before the wrap.
  *
  * Returns the byte offset where output should continue; SGR bytes do not
  * count toward @limit.
  */
-static int wrap_ansi(const char *text, int from, int limit, int *columns)
+static int wrap_ansi(const char *text, int limit, int utf8, int *columns)
 {
 	int i;
 	int vis = 0;
-	int break_at = -1;
+	int break_at = 0;
 	int break_vis = 0;
 	int width = 0;
 	size_t len = 1;
 
-	for (i = from; text[i]; ) {
-		mbstate_t state = { 0 };
-		wchar_t wc;
-
+	for (i = 0; text[i]; ) {
 		if (text[i] == '\033' && text[i + 1] == '[') {
 			i = skip_ansi_sgr(text, i);
 			continue;
 		}
-		len = mbrtowc(&wc, text + i, MB_CUR_MAX, &state);
-		if (len == (size_t)-1 || len == (size_t)-2) {
-			len = 1;
-			width = 1;
+		if (!utf8) {
+			/* Count bytes without wrapping inside a UTF-8 character. */
+			len = utf8_char_len(text + i);
+			width = len;
 		} else {
-			width = wcwidth(wc);
-			if (width < 0)
+			mbstate_t state = { 0 };
+			wchar_t wc;
+
+			len = mbrtowc(&wc, text + i, MB_CUR_MAX, &state);
+			if (len == (size_t)-1 || len == (size_t)-2) {
+				len = 1;
 				width = 1;
+			} else {
+				width = wcwidth(wc);
+				if (width < 0)
+					width = 1;
+			}
 		}
 		if (width > limit - vis)
 			break;
@@ -180,16 +209,22 @@ static int wrap_ansi(const char *text, int from, int limit, int *columns)
 		i += len;
 		vis += width;
 	}
-	if (text[i] && break_at > from) {
+	if (text[i] && break_at) {
 		i = break_at;
 		vis = break_vis;
-	} else if (text[i] && i == from) {
+	} else if (text[i] && i == 0) {
 		i += len;
 		vis = width;
 	}
 	if (columns)
 		*columns = vis;
 	return i;
+}
+
+static int is_utf8_codeset(const char *codeset)
+{
+	return strcasecmp(codeset, "UTF-8") == 0 ||
+	       strcasecmp(codeset, "UTF8") == 0;
 }
 
 /*
@@ -207,13 +242,15 @@ void proc_print_wrapped(const char *head, const char *cont, const char *text,
 	char active[32] = "";
 	int pos = 0;
 	int first = 1;
+	int utf8;
 	locale_t locale, previous = (locale_t)0;
 
 	locale = newlocale(LC_CTYPE_MASK, "C.UTF-8", (locale_t)0);
 	if (!locale)
 		locale = newlocale(LC_CTYPE_MASK, "", (locale_t)0);
-	if (locale)
+	if (locale && is_utf8_codeset(nl_langinfo_l(CODESET, locale)))
 		previous = uselocale(locale);
+	utf8 = previous != (locale_t)0 || is_utf8_codeset(nl_langinfo(CODESET));
 
 	while (1) {
 		const char *lead = first ? head : cont;
@@ -221,7 +258,7 @@ void proc_print_wrapped(const char *head, const char *cont, const char *text,
 		int avail;
 		int to;
 
-		wrap_ansi(lead, 0, INT_MAX, &lead_len);
+		wrap_ansi(lead, INT_MAX, utf8, &lead_len);
 		avail = width - lead_len;
 		if (avail < 10)
 			avail = 10;
@@ -230,7 +267,7 @@ void proc_print_wrapped(const char *head, const char *cont, const char *text,
 			break;
 		}
 
-		to = wrap_ansi(text, pos, avail, NULL);
+		to = pos + wrap_ansi(text + pos, avail, utf8, NULL);
 		printf("%s", lead);
 		if (!first && active[0])
 			fputs(active, stdout);

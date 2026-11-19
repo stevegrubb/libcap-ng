@@ -8,7 +8,9 @@
  */
 
 #include "config.h"
+#include <errno.h>
 #include <limits.h>
+#include <locale.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,10 +21,52 @@
 
 int parse_u32_hex_or_dec(const char *s, unsigned int *out);
 
+static int force_c_locale;
+
+locale_t __real_newlocale(int mask, const char *name, locale_t base);
+
+locale_t __wrap_newlocale(int mask, const char *name, locale_t base)
+{
+	/* Exercise the fallback even on systems with C.UTF-8 installed. */
+	if (force_c_locale) {
+		if (strcmp(name, "C.UTF-8") == 0) {
+			errno = ENOENT;
+			return (locale_t)0;
+		}
+		if (!*name)
+			name = "C";
+	}
+	return __real_newlocale(mask, name, base);
+}
+
 static void fail(const char *msg)
 {
 	fprintf(stderr, "%s\n", msg);
 	exit(EXIT_FAILURE);
+}
+
+static FILE *capture_stdout(int *saved)
+{
+	FILE *file = tmpfile();
+
+	*saved = dup(STDOUT_FILENO);
+	if (!file || *saved < 0 || fflush(stdout) ||
+	    dup2(fileno(file), STDOUT_FILENO) < 0)
+		fail("Cannot capture stdout");
+	return file;
+}
+
+static void read_stdout(FILE *file, int saved, char *output, size_t size)
+{
+	size_t len;
+
+	if (fflush(stdout) || dup2(saved, STDOUT_FILENO) < 0)
+		fail("Cannot restore stdout");
+	close(saved);
+	rewind(file);
+	len = fread(output, 1, size - 1, file);
+	output[len] = '\0';
+	fclose(file);
 }
 
 static void test_tree_output(void)
@@ -34,13 +78,9 @@ static void test_tree_output(void)
 		"\033[31malpha beta \033[0m\n\033[31mgamma\033[0m\n"
 		"root\n├─ child\n│  └─ grandchild\n└─ last\n";
 	char prefix[32], long_prefix[601], output[2048];
-	FILE *file = tmpfile();
-	int saved = dup(STDOUT_FILENO);
-	size_t len;
+	int saved;
+	FILE *file = capture_stdout(&saved);
 
-	if (!file || saved < 0 || fflush(stdout) ||
-	    dup2(fileno(file), STDOUT_FILENO) < 0)
-		fail("Cannot capture tree output");
 	proc_print_wrapped("", "", "cap_chown, cap_setuid", 12);
 	proc_print_wrapped("", "", "alpha beta gamma", 12);
 	proc_print_wrapped("", "", "abcdefghijklmn", 10);
@@ -60,18 +100,50 @@ static void test_tree_output(void)
 	memset(long_prefix, ' ', sizeof(long_prefix) - 1);
 	long_prefix[sizeof(long_prefix) - 1] = '\0';
 	proc_tree_print_node(long_prefix, 1, "deep", 80);
-	if (fflush(stdout) || dup2(saved, STDOUT_FILENO) < 0)
-		fail("Cannot restore stdout");
-	close(saved);
-	rewind(file);
-	len = fread(output, 1, sizeof(output) - 1, file);
-	output[len] = '\0';
-	fclose(file);
+	read_stdout(file, saved, output, sizeof(output));
 	if (strncmp(output, expected, strlen(expected)) ||
 	    strncmp(output + strlen(expected), long_prefix,
 		    strlen(long_prefix)) ||
 	    strcmp(output + strlen(expected) + strlen(long_prefix), "└─ deep\n"))
 		fail("Unexpected wrapped tree output");
+}
+
+static void test_utf8_tree_output(void)
+{
+	const char *cjk = "中文测试甲";
+	const char *expected_utf8 = "中文测试甲\n├─ abcdefghijklm\n│  n\n";
+	const char *expected_fallback =
+		"中文测\n试甲\n"
+		"123456789\né\n"
+		"12345678\n😀\n"
+		"123456789\xff\n中\n"
+		"123456789\xe4\n\xb8\n"
+		"123456789\xed\n\xa0\x80\n";
+	char output[256];
+	size_t utf8_len = 0;
+	int saved;
+	FILE *file = capture_stdout(&saved);
+	locale_t locale = newlocale(LC_CTYPE_MASK, "C.UTF-8", (locale_t)0);
+
+	if (locale) {
+		freelocale(locale);
+		proc_print_wrapped("", "", cjk, 10);
+		proc_tree_print_node("", 0, "abcdefghijklmn", 16);
+		utf8_len = strlen(expected_utf8);
+	}
+	force_c_locale = 1;
+	proc_print_wrapped("", "", cjk, 10);
+	proc_print_wrapped("", "", "123456789é", 10);
+	proc_print_wrapped("", "", "12345678😀", 10);
+	proc_print_wrapped("", "", "123456789\xff中", 10);
+	proc_print_wrapped("", "", "123456789\xe4\xb8", 10);
+	proc_print_wrapped("", "", "123456789\xed\xa0\x80", 10);
+	force_c_locale = 0;
+	read_stdout(file, saved, output, sizeof(output));
+	if (utf8_len && strncmp(output, expected_utf8, utf8_len))
+		fail("Unexpected display width for UTF-8 tree output");
+	if (strcmp(output + utf8_len, expected_fallback))
+		fail("Unexpected UTF-8 tree output in the C locale");
 }
 
 static void test_parse_u32_hex_or_dec(void)
@@ -148,6 +220,7 @@ static void test_list_inode_iteration(void)
 int main(void)
 {
 	test_tree_output();
+	test_utf8_tree_output();
 	test_parse_u32_hex_or_dec();
 	test_list_inode_iteration();
 	puts("Direct utility logic tests passed");
