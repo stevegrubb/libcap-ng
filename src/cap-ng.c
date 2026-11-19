@@ -158,6 +158,13 @@ static void update_ambient_set(capng_act_t action, unsigned int capability,
 #error VFS_CAP_U32 does not match the library, you need a new version
 #endif
 
+#if VFS_CAP_REVISION == VFS_CAP_REVISION_1
+#define VFS_CAP_DEFAULT_WRITE_VERSION 1
+#else
+/* The kernel can promote a V2 namespace write to V3 and record its root. */
+#define VFS_CAP_DEFAULT_WRITE_VERSION 2
+#endif
+
 
 // States: new, allocated, initted, updated, applied
 typedef enum { CAPNG_NEW, CAPNG_ERROR, CAPNG_ALLOCATED, CAPNG_INIT,
@@ -464,15 +471,7 @@ static void init(void)
 		return;
 	}
 
-#if VFS_CAP_REVISION == VFS_CAP_REVISION_1
-	m.vfs_cap_ver = 1;
-#else
-	/*
-	 * V2 is the default even when V3 is available. The kernel promotes a
-	 * V2 write from a user namespace to V3 and records the namespace root.
-	 */
-	m.vfs_cap_ver = 2;
-#endif
+	m.vfs_cap_ver = VFS_CAP_DEFAULT_WRITE_VERSION;
 
 	memset(&m.data, 0, sizeof(cap_data_t));
 #ifdef HAVE_SYSCALL_H
@@ -767,9 +766,10 @@ static int load_data(const struct vfs_cap_data *filedata, int size)
 	switch (magic & VFS_CAP_REVISION_MASK)
 	{
 		case VFS_CAP_REVISION_1:
-			m.vfs_cap_ver = 1;
 			if (size != XATTR_CAPS_SZ_1)
 				return -1;
+			/* Modern kernels require V2 or V3 for xattr writes. */
+			m.vfs_cap_ver = VFS_CAP_DEFAULT_WRITE_VERSION;
 			words = 1;
 			break;
 		case VFS_CAP_REVISION_2:
