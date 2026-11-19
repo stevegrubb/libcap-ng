@@ -9,13 +9,20 @@
  * later version.
  */
 
+#ifndef _XOPEN_SOURCE
+#define _XOPEN_SOURCE 700
+#endif
+
 #include "config.h"
 #include <errno.h>
+#include <limits.h>
+#include <locale.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
+#include <wchar.h>
 #include "proc-output.h"
 
 #define PROC_COLOR_RESET	"\033[0m"
@@ -133,32 +140,55 @@ static void scan_color_state(const char *text, int from, int to,
  * @text: source string to wrap.
  * @from: byte offset where this line starts.
  * @limit: maximum visible columns to include.
+ * @columns: optional destination for columns before the returned byte offset.
  *
  * Returns the byte offset where output should continue; SGR bytes do not
  * count toward @limit.
  */
-static int wrap_ansi(const char *text, int from, int limit)
+static int wrap_ansi(const char *text, int from, int limit, int *columns)
 {
 	int i;
 	int vis = 0;
 	int break_at = -1;
+	int break_vis = 0;
+	int width = 0;
+	size_t len = 1;
 
-	for (i = from; text[i] && vis < limit; ) {
+	for (i = from; text[i]; ) {
+		mbstate_t state = { 0 };
+		wchar_t wc;
+
 		if (text[i] == '\033' && text[i + 1] == '[') {
 			i = skip_ansi_sgr(text, i);
 			continue;
 		}
-		if (text[i] == ' ' || text[i] == ',')
-			break_at = i + 1;
-		i++;
-		vis++;
+		len = mbrtowc(&wc, text + i, MB_CUR_MAX, &state);
+		if (len == (size_t)-1 || len == (size_t)-2) {
+			len = 1;
+			width = 1;
+		} else {
+			width = wcwidth(wc);
+			if (width < 0)
+				width = 1;
+		}
+		if (width > limit - vis)
+			break;
+		if (text[i] == ' ' || text[i] == ',') {
+			break_at = i + len;
+			break_vis = vis + width;
+		}
+		i += len;
+		vis += width;
 	}
-	if (!text[i])
-		return i;
-	if (break_at > from)
-		return break_at;
-	if (i == from)
-		return from + 1;
+	if (text[i] && break_at > from) {
+		i = break_at;
+		vis = break_vis;
+	} else if (text[i] && i == from) {
+		i += len;
+		vis = width;
+	}
+	if (columns)
+		*columns = vis;
 	return i;
 }
 
@@ -177,21 +207,30 @@ void proc_print_wrapped(const char *head, const char *cont, const char *text,
 	char active[32] = "";
 	int pos = 0;
 	int first = 1;
+	locale_t locale, previous = (locale_t)0;
+
+	locale = newlocale(LC_CTYPE_MASK, "C.UTF-8", (locale_t)0);
+	if (!locale)
+		locale = newlocale(LC_CTYPE_MASK, "", (locale_t)0);
+	if (locale)
+		previous = uselocale(locale);
 
 	while (1) {
 		const char *lead = first ? head : cont;
-		int lead_len = strlen(lead);
-		int avail = width - lead_len;
+		int lead_len;
+		int avail;
 		int to;
 
+		wrap_ansi(lead, 0, INT_MAX, &lead_len);
+		avail = width - lead_len;
 		if (avail < 10)
 			avail = 10;
 		if (!text[pos]) {
 			printf("%s\n", lead);
-			return;
+			break;
 		}
 
-		to = wrap_ansi(text, pos, avail);
+		to = wrap_ansi(text, pos, avail, NULL);
 		printf("%s", lead);
 		if (!first && active[0])
 			fputs(active, stdout);
@@ -205,7 +244,12 @@ void proc_print_wrapped(const char *head, const char *cont, const char *text,
 		pos = to;
 		first = 0;
 		if (!text[pos])
-			return;
+			break;
+	}
+	if (locale) {
+		if (previous)
+			uselocale(previous);
+		freelocale(locale);
 	}
 }
 
