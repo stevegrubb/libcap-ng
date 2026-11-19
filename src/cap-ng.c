@@ -1150,7 +1150,12 @@ int capng_apply_caps_fd(int fd)
 		errno = EINVAL;
 		return -1;
 	}
-	if (capng_have_capabilities(CAPNG_SELECT_CAPS) == CAPNG_NONE)
+	if (capng_have_capabilities(CAPNG_SELECT_CAPS) == CAPNG_NONE &&
+		m.data.v3[0].permitted == 0 &&
+		m.data.v3[0].inheritable == 0 &&
+		(m.vfs_cap_ver == 1 ||
+		 (m.data.v3[1].permitted == 0 &&
+		  m.data.v3[1].inheritable == 0)))
 		rc = fremovexattr(fd, XATTR_NAME_CAPS);
 	else {
 		if (save_data(&filedata, &size)) {
