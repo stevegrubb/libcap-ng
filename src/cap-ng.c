@@ -1217,6 +1217,13 @@ int capng_change_id(int uid, int gid, capng_flags_t flag)
 		goto out;
 	}
 
+	/*
+	 * DROP overrides INIT even when gid == -1 makes DROP a no-op.
+	 * Resolve this before requesting SETGID or looking up the account.
+	 */
+	if (flag & CAPNG_DROP_SUPP_GRP)
+		flag &= ~CAPNG_INIT_SUPP_GRP;
+
 	// Make sure the temporary transition caps we may need are present.
 #ifdef PR_CAPBSET_DROP
 if (HAVE_PR_CAPBSET_DROP) {

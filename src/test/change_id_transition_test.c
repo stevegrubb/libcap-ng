@@ -17,6 +17,7 @@
 
 static struct __user_cap_data_struct current_caps[2];
 static unsigned int group_calls;
+static size_t group_count;
 static unsigned int uid_calls;
 static int keepcaps;
 static gid_t expected_gid = 7;
@@ -115,10 +116,13 @@ int prctl(int option, ...)
  */
 int setgroups(size_t count, const gid_t *groups)
 {
-	check(count > 0 && groups != NULL, "Missing supplementary groups");
+	check((count == 0 && groups == NULL) ||
+	      (count > 0 && groups != NULL), "Invalid supplementary groups");
 	group_calls++;
-	if (current_caps[0].effective & (1U << CAP_SETGID))
+	if (current_caps[0].effective & (1U << CAP_SETGID)) {
+		group_count = count;
 		return 0;
+	}
 	errno = EPERM;
 	return -1;
 }
@@ -252,7 +256,53 @@ static void prepare_transition(void)
 	current_caps[0].permitted = current_caps[0].effective;
 	memset(&lookup, 0, sizeof(lookup));
 	group_calls = uid_calls = 0;
+	group_count = 2;
 	capng_clear(CAPNG_SELECT_ALL);
+}
+
+/*
+ * test_drop_precedence - require DROP to suppress INIT in every ID mode.
+ *
+ * Returns no value; checks that a new gid clears supplementary groups,
+ * gid == -1 preserves them, and neither case resolves the target account.
+ */
+static void test_drop_precedence(void)
+{
+	int init, change_uid, change_gid;
+
+	for (init = 0; init <= 1; init++) {
+		for (change_uid = 1; change_uid >= 0; change_uid--) {
+			for (change_gid = 1; change_gid >= 0; change_gid--) {
+				capng_flags_t flags = CAPNG_DROP_SUPP_GRP;
+
+				prepare_transition();
+				expected_gid = 9;
+				if (init)
+					flags |= CAPNG_INIT_SUPP_GRP;
+				/* An ignored INIT must not need SETGID either. */
+				if (!change_gid) {
+					current_caps[0].effective &=
+						~(1U << CAP_SETGID);
+					current_caps[0].permitted &=
+						~(1U << CAP_SETGID);
+				}
+				check(capng_change_id(change_uid ? 42 : -1,
+						     change_gid ? 9 : -1, flags) == 0,
+				      "Supplementary group drop failed");
+				check(group_calls == (unsigned int)change_gid &&
+				      group_count == (change_gid ? 0 : 2),
+				      "DROP did not control supplementary groups");
+				check(lookup.calls == 0,
+				      "DROP performed an unnecessary account lookup");
+				check(uid_calls == (unsigned int)change_uid &&
+				      !keepcaps,
+				      "Incorrect drop transition cleanup");
+				check(current_caps[0].effective == 0 &&
+				      current_caps[0].permitted == 0,
+				      "Drop retained temporary capabilities");
+			}
+		}
+	}
 }
 
 /*
@@ -338,5 +388,6 @@ int main(void)
 		}
 	}
 	test_account_lookup();
+	test_drop_precedence();
 	return EXIT_SUCCESS;
 }
