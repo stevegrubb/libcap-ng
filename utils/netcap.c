@@ -152,7 +152,8 @@ static int collect_process_info(void)
 		capng_setpid(pid);
 		if (capng_get_caps_process())
 			continue;
-		caps = capng_have_capabilities(CAPNG_SELECT_CAPS);
+		/* Match the permitted set displayed below, including dormant bits. */
+		caps = capng_have_permitted_capabilities();
 		if (caps <= CAPNG_NONE)
 			continue;
 		if (caps == CAPNG_FULL) {

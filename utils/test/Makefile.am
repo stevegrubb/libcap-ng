@@ -40,5 +40,6 @@ netcap_advanced_test_SOURCES = netcap_advanced_test.c \
 	${top_srcdir}/utils/proc-sanitize.c \
 	${top_srcdir}/utils/proc-status.c
 netcap_advanced_test_CPPFLAGS = $(AM_CPPFLAGS) -D_GNU_SOURCE
+netcap_advanced_test_LDFLAGS = -Wl,--wrap=capng_get_caps_process
 netcap_advanced_test_LDADD = ${top_builddir}/src/libcap-ng.la
 endif

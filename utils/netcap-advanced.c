@@ -1185,7 +1185,7 @@ static char *extract_unit_from_cgroup(int pid)
 /*
  * caps_summary_for_pid - format capability summary for one process.
  * @pid: process ID inspected through libcap-ng APIs.
- * @privileged: out flag set when notable privileged effective caps exist.
+ * @privileged: out flag set when notable privileged permitted caps exist.
  * @has_amb: out flag set when ambient capabilities are present.
  * @has_bnd: out flag set when bounding set entries are present.
  *
@@ -1215,14 +1215,15 @@ static char *caps_summary_for_pid(int pid, int *privileged, int *has_amb,
 	if (capng_get_caps_process())
 		return xstrdup("(none)");
 
-	if (capng_have_capability(CAPNG_EFFECTIVE, CAP_SYS_ADMIN) ||
-	    capng_have_capability(CAPNG_EFFECTIVE, CAP_SYS_PTRACE) ||
-	    capng_have_capability(CAPNG_EFFECTIVE, CAP_DAC_READ_SEARCH) ||
-	    capng_have_capability(CAPNG_EFFECTIVE, CAP_NET_ADMIN) ||
-	    capng_have_capability(CAPNG_EFFECTIVE, CAP_NET_RAW))
+	/* Permitted bits remain available even if temporarily not effective. */
+	if (capng_have_capability(CAPNG_PERMITTED, CAP_SYS_ADMIN) ||
+	    capng_have_capability(CAPNG_PERMITTED, CAP_SYS_PTRACE) ||
+	    capng_have_capability(CAPNG_PERMITTED, CAP_DAC_READ_SEARCH) ||
+	    capng_have_capability(CAPNG_PERMITTED, CAP_NET_ADMIN) ||
+	    capng_have_capability(CAPNG_PERMITTED, CAP_NET_RAW))
 		*privileged = 1;
 
-	c = capng_have_capabilities(CAPNG_SELECT_CAPS);
+	c = capng_have_permitted_capabilities();
 	if (c == CAPNG_FULL) {
 		strncpy(out, "(full)", sizeof(out));
 		out[sizeof(out) - 1] = 0;

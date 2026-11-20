@@ -8,6 +8,52 @@ static void fail(const char *message)
 	exit(EXIT_FAILURE);
 }
 
+static int capability_case;
+
+/* Keep the actual libcap-ng set queries, with deterministic process sets. */
+int __wrap_capng_get_caps_process(void)
+{
+	int cap;
+
+	capng_clear(CAPNG_SELECT_ALL);
+	if (capability_case == 3) {
+		capng_fill(CAPNG_SELECT_CAPS);
+		for (cap = 0; cap <= CAP_LAST_CAP; cap++)
+			if (capng_update(CAPNG_DROP, CAPNG_EFFECTIVE, cap))
+				fail("Cannot clear effective capability fixture");
+	} else if (capability_case) {
+		capng_type_t type = CAPNG_PERMITTED;
+
+		if (capability_case == 2)
+			type |= CAPNG_EFFECTIVE;
+		if (capng_update(CAPNG_ADD, type, CAP_NET_RAW))
+			fail("Cannot stage permitted capability fixture");
+	}
+	return 0;
+}
+
+static void test_permitted_summary(void)
+{
+	static const char *const expected[] = {
+		"(none)", "net_raw", "net_raw", "(full)",
+	};
+	char *summary, *ambient;
+	int privileged, has_ambient, has_bounds;
+
+	for (capability_case = 0; capability_case < 4; capability_case++) {
+		summary = caps_summary_for_pid(getpid(), &privileged,
+				&has_ambient, &has_bounds, &ambient);
+		if (!summary || strcmp(summary, expected[capability_case]))
+			fail("Capability summary did not report the permitted set");
+		if (privileged != (capability_case != 0))
+			fail("Retained permitted capabilities lost their risk flag");
+		if (has_ambient || has_bounds || ambient)
+			fail("Capability summary invented ambient or bounding bits");
+		free(summary);
+		free(ambient);
+	}
+}
+
 static FILE *capture_output(int *saved)
 {
 	FILE *file = tmpfile();
@@ -287,6 +333,7 @@ static void test_bluetooth_tables(void)
 
 int main(void)
 {
+	test_permitted_summary();
 	test_process_rendering();
 	test_tree_groups();
 	test_inet6_proc_reports();

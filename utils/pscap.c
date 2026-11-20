@@ -387,8 +387,8 @@ int main(int argc, char *argv[])
 		if (capng_get_caps_process())
 			continue;
 
-		// And print out anything with capabilities
-		caps = capng_have_capabilities(CAPNG_SELECT_CAPS);
+		/* Permitted bits can be raised even when effective is empty. */
+		caps = capng_have_permitted_capabilities();
 		safe_cmd = sanitize_untrusted_field(cmd);
 		if (!safe_cmd)
 			continue;
