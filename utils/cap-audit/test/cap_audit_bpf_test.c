@@ -165,10 +165,105 @@ static void test_namespace(__u32 inum)
 	      "Capability event lost task identity or result");
 }
 
+static void test_thread_lifecycle(void)
+{
+	struct trace_event_raw_sched_process_fork fork_event = {
+		.parent_pid = 10, .child_pid = 11,
+	};
+	struct trace_event_raw_sched_process_template exit_event = { .pid = 10 };
+	struct trace_event_raw_sched_process_exec exec_event = {
+		.pid = 10, .old_pid = 11,
+	};
+	struct trace_event_raw_sys_enter syscall = { .id = 123 };
+	struct pt_regs regs = { 0 };
+	unsigned int before;
+
+	memset(phases, 0, sizeof(phases));
+	memset(syscall_present, 0, sizeof(syscall_present));
+	phases[10] = 2;
+	current_task = ((__u64)10 << 32) | 10;
+	trace_sched_process_fork(&fork_event);
+	check(phases[11] == 2, "New thread did not inherit tracing");
+
+	/* A leader can exit through pthread_exit while its worker runs on. */
+	trace_sys_enter(&syscall);
+	trace_sched_process_exit(&exit_event);
+	current_task = ((__u64)10 << 32) | 11;
+	before = submitted;
+	trace_sys_enter(&syscall);
+	trace_cap_capable(&regs, NULL, NULL, 21, 0);
+	trace_cap_capable_ret(&regs, 0);
+	check(submitted == before + 1 && output.tid == 11,
+	      "Leader exit stopped capability tracing for a live worker");
+	check(!syscall_present[10], "Exiting task leaked syscall state");
+	check(output.syscall_nr == 123, "Worker lost syscall attribution");
+
+	/* Forks from the surviving worker must remain in the target tree. */
+	fork_event.parent_pid = 11;
+	fork_event.child_pid = 12;
+	trace_sched_process_fork(&fork_event);
+	check(phases[12] == 2, "Worker's child lost tracing");
+
+	/* Non-leader exec adopts the leader's TID before sched_process_exec. */
+	current_task = ((__u64)10 << 32) | 10;
+	trace_sched_process_exec(&exec_event);
+	check(phases[10] == 2 && phases[11] == 0,
+	      "Non-leader exec lost tracing or retained its old TID");
+	check(syscall_present[10] && !syscall_present[11] &&
+	      syscalls[10].nr == 123, "Exec did not move syscall attribution");
+	check(output.event_type == CAP_EVENT_TASK_END && output.tid == 11,
+	      "Exec did not close the old thread's keepcaps window");
+	before = submitted;
+	trace_cap_capable(&regs, NULL, NULL, 21, 0);
+	trace_cap_capable_ret(&regs, 0);
+	check(submitted == before + 1 && output.tid == 10,
+	      "Non-leader exec stopped capability tracing");
+	trace_sched_process_exit(&exit_event);
+	check(!phases[10] && !syscall_present[10] && !inflight_present[10],
+	      "Exited thread retained BPF state");
+	check(phases[12] == 2, "Exiting parent stopped its child's tracing");
+}
+
+static void test_exec_gate(void)
+{
+	struct trace_event_raw_sched_process_fork fork_event = {
+		.parent_pid = 20, .child_pid = 21,
+	};
+	struct trace_event_raw_sched_process_exec exec_event = {
+		.pid = 21, .old_pid = 21,
+	};
+	struct trace_event_raw_sched_process_template exit_event = { .pid = 22 };
+	struct pt_regs regs = { 0 };
+	unsigned int before = submitted;
+
+	phases[20] = 1;
+	current_task = ((__u64)20 << 32) | 20;
+	trace_sched_process_fork(&fork_event);
+	check(phases[21] == 1, "Pre-exec child lost its phase");
+	current_task = ((__u64)21 << 32) | 21;
+	trace_cap_capable(&regs, NULL, NULL, 21, 0);
+	trace_cap_capable_ret(&regs, 0);
+	check(submitted == before, "Pre-exec capability noise was recorded");
+	trace_sched_process_exec(&exec_event);
+	trace_cap_capable(&regs, NULL, NULL, 21, 0);
+	trace_cap_capable_ret(&regs, 0);
+	check(submitted == before + 1, "Initial exec did not open the phase gate");
+
+	fork_event.parent_pid = 21;
+	fork_event.child_pid = 22;
+	trace_sched_process_fork(&fork_event);
+	current_task = ((__u64)21 << 32) | 22;
+	trace_sched_process_exit(&exit_event);
+	check(!phases[22] && phases[21] == 2,
+	      "Worker exit removed its live leader from tracing");
+}
+
 int main(void)
 {
 	test_namespace(100);
 	test_namespace(200);
+	test_thread_lifecycle();
+	test_exec_gate();
 	puts("cap-audit BPF event tests passed");
 	return 0;
 }

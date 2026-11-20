@@ -68,7 +68,9 @@ const volatile int prctl_syscall_nr = -1;
  * The design challenge is noise filtering: distinguish capability checks
  * caused by the target application from kernel-internal checks running under
  * the same PID. The first filtering layer lives entirely in this BPF program
- * and is encoded in target_pids map values.
+ * and is encoded in target_pids map values, keyed by thread ID (TID).
+ * Using TIDs throughout lets surviving threads keep tracing after their
+ * group leader exits, and matches the IDs supplied by sched_process_fork.
  *
  * target_pids values are phases, not just booleans:
  *   0 = not traced
@@ -88,10 +90,10 @@ const volatile int prctl_syscall_nr = -1;
  * target (phase 2) begin recording immediately, while children spawned before
  * the initial exec remain in phase 1 until their own exec transition.
  *
- * raw_syscalls/sys_enter and sys_exit use should_trace_pid() (phase > 0)
+ * raw_syscalls/sys_enter and sys_exit use should_trace_tid() (phase > 0)
  * so syscall context and completion results are available the instant the
  * exec gate opens.
- * Capability hooks use should_record_pid() (phase >= 2), so only post-exec
+ * Capability hooks use should_record_tid() (phase >= 2), so only post-exec
  * capability checks are emitted.
  *
  * For traced tasks, the program builds cap_event records with task identity,
@@ -163,7 +165,7 @@ struct cap_event {
 	__u32 keepcaps;
 };
 
-// This sets the limit for how many child processes can be traced.
+// This sets the limit for how many tasks (including threads) can be traced.
 // Because of this limit, the tracer may not be suitable for shell
 // scripts or long running process that fork child handlers that
 // terminate soon after launching. When this fills up, no more
@@ -192,16 +194,9 @@ struct {
 	__uint(max_entries, 1024);
 } cap_events_inflight SEC(".maps");
 
-// In theory, if sys_exit is not called, a syscall can leak. This can
-// happen due to SIGKILL or a core dump. This might matter if this is
-// tracing a long running with many threads some of which get SIGKILL.
-// Might be more likely if its a child process rather than a thread.
-// Because each run of the tracer is a new instance, the only concern
-// is long tracing sessions. If this really was a concern, we could
-// change to BPF_MAP_TYPE_PERCPU_HASH so that a leak on CPU0 doesn't
-// affect tracing on CPU1. This is just mentioned here because it is
-// an esoteric problem and not likely to show up. But this documents
-// it and a possible solution. The drawback is that it uses more memory.
+/* Syscall state is removed on syscall completion or task exit. Non-leader
+ * exec moves it to the new TID so post-exec checks keep their attribution.
+ */
 struct syscall_state {
 	__u64 denied_caps;
 	__u64 capset_effective;
@@ -221,34 +216,34 @@ struct {
 	__uint(max_entries, 4096);
 } current_syscalls SEC(".maps");
 
-static __always_inline int get_pid_phase(__u32 pid)
+static __always_inline int get_tid_phase(__u32 tid)
 {
-	__u8 *val = bpf_map_lookup_elem(&target_pids, &pid);
+	__u8 *val = bpf_map_lookup_elem(&target_pids, &tid);
 
 	return val ? *val : 0;
 }
 
 /*
- * should_trace_pid - check if the current PID is in the target set.
- * @pid: process ID of the current task.
+ * should_trace_tid - check if the current thread is in the target set.
+ * @tid: thread ID of the current task.
  *
- * Looks up the PID in target_pids and returns 1 when tracing is enabled for
+ * Looks up the TID in target_pids and returns 1 when tracing is enabled for
  * it, otherwise 0.
  */
-static __always_inline int should_trace_pid(__u32 pid)
+static __always_inline int should_trace_tid(__u32 tid)
 {
-	return get_pid_phase(pid) > 0;
+	return get_tid_phase(tid) > 0;
 }
 
 /*
- * should_record_pid - check if the current PID is post-exec.
- * @pid: process ID of the current task.
+ * should_record_tid - check if the current thread is post-exec.
+ * @tid: thread ID of the current task.
  *
- * Returns 1 for traced PIDs that have completed exec.
+ * Returns 1 for threads whose process has completed exec.
  */
-static __always_inline int should_record_pid(__u32 pid)
+static __always_inline int should_record_tid(__u32 tid)
 {
-	return get_pid_phase(pid) >= 2;
+	return get_tid_phase(tid) >= 2;
 }
 
 /*
@@ -359,7 +354,7 @@ int BPF_KPROBE(trace_cap_capable, const struct cred *cred,
 
 	ev.pid = pid_tgid >> 32;
 	ev.tid = (__u32)pid_tgid;
-	if (!should_record_pid(ev.pid))
+	if (!should_record_tid(ev.tid))
 		return 0;
 
 	ev.capability = cap;
@@ -459,17 +454,17 @@ int trace_sys_enter(struct trace_event_raw_sys_enter *ctx)
 {
 	struct syscall_state syscall = { 0 };
 	__u64 pid_tgid;
-	__u32 pid;
+	__u32 tid;
 
 	pid_tgid = bpf_get_current_pid_tgid();
-	pid = pid_tgid >> 32;
-	if (!should_trace_pid(pid))
+	tid = (__u32)pid_tgid;
+	if (!should_trace_tid(tid))
 		return 0;
 
 	syscall.nr = ctx->id;
-	if (should_record_pid(pid) && ctx->id == capset_syscall_nr)
+	if (should_record_tid(tid) && ctx->id == capset_syscall_nr)
 		read_capset_payload(ctx, &syscall);
-	if (should_record_pid(pid) && ctx->id == prctl_syscall_nr &&
+	if (should_record_tid(tid) && ctx->id == prctl_syscall_nr &&
 	    (int)ctx->args[0] == PR_SET_KEEPCAPS && ctx->args[1] <= 1) {
 		syscall.keepcaps_valid = 1;
 		syscall.keepcaps = ctx->args[1];
@@ -564,11 +559,11 @@ int trace_sys_exit(struct trace_event_raw_sys_exit *ctx)
 {
 	struct syscall_state *syscall;
 	__u64 pid_tgid;
-	__u32 pid;
+	__u32 tid;
 
 	pid_tgid = bpf_get_current_pid_tgid();
-	pid = pid_tgid >> 32;
-	if (!should_trace_pid(pid))
+	tid = (__u32)pid_tgid;
+	if (!should_trace_tid(tid))
 		return 0;
 
 	syscall = bpf_map_lookup_elem(&current_syscalls, &pid_tgid);
@@ -615,7 +610,7 @@ static __always_inline void emit_task_end(__u32 tid)
 	struct cap_event *out;
 	__u32 pid = bpf_get_current_pid_tgid() >> 32;
 
-	if (!should_record_pid(pid))
+	if (!should_record_tid(tid))
 		return;
 	out = bpf_ringbuf_reserve(&cap_events, sizeof(*out), 0);
 	if (!out)
@@ -637,16 +632,33 @@ static __always_inline void emit_task_end(__u32 tid)
 SEC("tracepoint/sched/sched_process_exec")
 int trace_sched_process_exec(struct trace_event_raw_sched_process_exec *ctx)
 {
-	__u32 pid;
+	__u64 pid_tgid = bpf_get_current_pid_tgid();
+	__u32 tid = (__u32)pid_tgid;
+	__u32 old_tid = ctx->old_pid;
 	__u8 *val;
 	__u8 new_val = 2;
 
 	/* A non-leader exec changes TID; close the old thread's window. */
-	emit_task_end(ctx->old_pid);
-	pid = bpf_get_current_pid_tgid() >> 32;
-	val = bpf_map_lookup_elem(&target_pids, &pid);
-	if (val)
-		bpf_map_update_elem(&target_pids, &pid, &new_val, BPF_ANY);
+	emit_task_end(old_tid);
+	val = bpf_map_lookup_elem(&target_pids, &old_tid);
+	if (!val)
+		return 0;
+	bpf_map_update_elem(&target_pids, &tid, &new_val, BPF_ANY);
+	if (old_tid != tid) {
+		__u64 old_key = (pid_tgid & 0xffffffff00000000ULL) | old_tid;
+		struct syscall_state *syscall;
+
+		/* Exec keeps the TGID but adopts the leader's TID. Preserve its
+		 * syscall context for capability checks after this tracepoint.
+		 */
+		syscall = bpf_map_lookup_elem(&current_syscalls, &old_key);
+		if (syscall)
+			bpf_map_update_elem(&current_syscalls, &pid_tgid,
+					    syscall, BPF_ANY);
+		bpf_map_delete_elem(&current_syscalls, &old_key);
+		bpf_map_delete_elem(&cap_events_inflight, &old_key);
+		bpf_map_delete_elem(&target_pids, &old_tid);
+	}
 
 	return 0;
 }
@@ -661,11 +673,14 @@ int trace_sched_process_exec(struct trace_event_raw_sched_process_exec *ctx)
 SEC("tracepoint/sched/sched_process_exit")
 int trace_sched_process_exit(struct trace_event_raw_sched_process_template *ctx)
 {
-	__u32 pid;
+	__u64 pid_tgid = bpf_get_current_pid_tgid();
+	__u32 tid = ctx->pid;
 
-	emit_task_end((__u32)bpf_get_current_pid_tgid());
-	pid = ctx->pid;
-	bpf_map_delete_elem(&target_pids, &pid);
+	emit_task_end(tid);
+	/* exit and fatal signals need not reach the syscall-exit tracepoint. */
+	bpf_map_delete_elem(&current_syscalls, &pid_tgid);
+	bpf_map_delete_elem(&cap_events_inflight, &pid_tgid);
+	bpf_map_delete_elem(&target_pids, &tid);
 
 	return 0;
 }
