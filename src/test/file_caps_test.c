@@ -18,7 +18,8 @@
  */
 
 #include "config.h"
-#include "../cap-ng.h"
+/* Include the implementation to select the private legacy write state. */
+#include "../cap-ng.c"
 #include <byteswap.h>
 #include <endian.h>
 #include <errno.h>
@@ -255,6 +256,40 @@ static void test_revision_1_writes(int fd)
 	check_single_v2_cap(fd, CAPNG_INHERITABLE, 32);
 }
 
+static void test_revision_1_effective_flag(int fd)
+{
+	const unsigned char effective_data[12] = {
+		0x01, 0x00, 0x00, 0x01,
+		0x01, 0x00, 0x00, 0x00,
+		0x20, 0x00, 0x00, 0x00,
+	};
+	const unsigned char permitted_data[12] = {
+		0x00, 0x00, 0x00, 0x01,
+		0x01, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00,
+	};
+
+	capng_clear(CAPNG_SELECT_CAPS);
+	/* V1 reads select V2 writes on modern builds, so force this branch. */
+	m.vfs_cap_ver = 1;
+	if (capng_update(CAPNG_ADD, CAPNG_EFFECTIVE | CAPNG_PERMITTED,
+			 CAP_CHOWN) != 0 ||
+	    capng_update(CAPNG_ADD, CAPNG_EFFECTIVE | CAPNG_INHERITABLE,
+			 CAP_KILL) != 0)
+		abort();
+	check_write(fd, VFS_CAP_REVISION_1 | VFS_CAP_FLAGS_EFFECTIVE,
+		    sizeof(effective_data));
+	if (memcmp(&written_data, effective_data, sizeof(effective_data)))
+		abort();
+
+	capng_clear(CAPNG_SELECT_CAPS);
+	if (capng_update(CAPNG_ADD, CAPNG_PERMITTED, CAP_CHOWN) != 0)
+		abort();
+	check_write(fd, VFS_CAP_REVISION_1, sizeof(permitted_data));
+	if (memcmp(&written_data, permitted_data, sizeof(permitted_data)))
+		abort();
+}
+
 int main(void)
 {
 	FILE *file;
@@ -325,6 +360,7 @@ int main(void)
 	check_written_caps(fd, CAPNG_UNSET_ROOTID, VFS_CAP_REVISION_2,
 			 XATTR_CAPS_SZ_2);
 #endif
+	test_revision_1_effective_flag(fd);
 	fclose(file);
 
 	return EXIT_SUCCESS;

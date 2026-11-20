@@ -30,7 +30,8 @@ lib_test_LDADD = ${top_builddir}/src/libcap-ng.la
 thread_test_LDADD = ${top_builddir}/src/libcap-ng.la -lpthread
 change_id_test_LDADD = ${top_builddir}/src/libcap-ng.la
 change_id_transition_test_LDADD = ${top_builddir}/src/libcap-ng.la
-file_caps_test_LDADD = ${top_builddir}/src/libcap-ng.la
+file_caps_test_SOURCES = file_caps_test.c ${top_srcdir}/src/lookup_table.c
+file_caps_test_CPPFLAGS = $(AM_CPPFLAGS) -D_GNU_SOURCE
 securebits_test_LDADD = ${top_builddir}/src/libcap-ng.la
 
 clean-local:
