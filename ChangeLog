@@ -2,6 +2,14 @@
 - fix IPv6 procfs address decoding in netcap
 - fix UTF8 text wrapping
 - Correct capng_apply_caps_fd behavior
+- Fix cap-audit command lookup when PATH is empty or unset
+- Preserve the effective flag when writing V1 file capabilities
+- Fix capng_get_caps_process reporting success after a bounding-set read failure
+- Report retained permitted capabilities consistently in pscap and netcap
+- Fix netcap skipping processes with short names
+- Fix user namespace detection in cap-audit capability checks
+- Preserve cap-audit tracing when the main thread exits or a worker calls exec
+- Fix cap-audit task cleanup on newer kernels
 
 0.9.6
 - Fix supplementary group changes in capng_change_id
