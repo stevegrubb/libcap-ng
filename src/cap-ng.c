@@ -1093,7 +1093,8 @@ static int save_data(struct vfs_cap_data *filedata, int *size)
 	if (m.vfs_cap_ver == 1) {
 		filedata->data[0].permitted = FIXUP(m.data.v1.permitted);
 		filedata->data[0].inheritable = FIXUP(m.data.v1.inheritable);
-		filedata->magic_etc = FIXUP(VFS_CAP_REVISION_1);
+		filedata->magic_etc = FIXUP(VFS_CAP_REVISION_1 |
+			(m.data.v1.effective ? VFS_CAP_FLAGS_EFFECTIVE : 0));
 		*size = XATTR_CAPS_SZ_1;
 	} else if (m.vfs_cap_ver == 2 || m.vfs_cap_ver == 3) {
 		int eff;
