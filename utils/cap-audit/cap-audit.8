@@ -26,6 +26,22 @@ before exec, and automatically tracks child PIDs. At the end of execution it
 reports which capability checks returned granted or not granted and presents
 deployment snippets showing how to grant the minimal set.
 .PP
+A command containing a slash is used as a pathname, including relative
+paths such as
+.BR ./program .
+Other commands are searched for in the caller's
+.BR PATH .
+An empty PATH, or an empty component within PATH, searches the current
+working directory. When PATH is unset, the early executable check searches
+the system utility path returned by
+.BR confstr (_CS_PATH).
+The child executes the original command through
+.BR execvp (3),
+whose default search path may include additional directories. Supply an
+explicit pathname for executables outside the system utility path when PATH
+is unset. The early check is advisory. execvp makes the final execution
+decision.
+.PP
 For syscall-associated checks returning not granted, cap-audit correlates the
 check with the raw kernel syscall return value when available. A syscall
 invocation may contain more than one such check, so capability-check and

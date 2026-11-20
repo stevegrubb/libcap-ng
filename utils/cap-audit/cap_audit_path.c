@@ -62,6 +62,7 @@ char *resolve_target_command(const char *target)
 
 	target_len = strlen(target);
 	path = getenv("PATH");
+	/* An empty PATH searches cwd. Only an unset PATH needs a default. */
 	if (!path) {
 		size_t len = confstr(_CS_PATH, default_path, sizeof(default_path));
 

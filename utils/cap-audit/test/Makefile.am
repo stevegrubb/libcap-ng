@@ -17,6 +17,7 @@ cap_audit_util_test_SOURCES = cap_audit_util_test.c \
 
 cap_audit_path_test_SOURCES = cap_audit_path_test.c \
 	${top_srcdir}/utils/cap-audit/cap_audit_path.c
+cap_audit_path_test_LDFLAGS = -Wl,--wrap=confstr
 
 if BUILD_CAP_AUDIT
 check_PROGRAMS += cap_audit_namespace_test cap_audit_outcome_test \
