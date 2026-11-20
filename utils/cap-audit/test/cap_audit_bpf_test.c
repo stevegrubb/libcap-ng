@@ -258,12 +258,31 @@ static void test_exec_gate(void)
 	      "Worker exit removed its live leader from tracing");
 }
 
+static void test_exit_identity(void)
+{
+	struct trace_event_raw_sched_process_template unrelated = { .pid = 23 };
+	struct trace_event_raw_sys_enter syscall = { .id = 123 };
+
+	/* Exit's layout can differ from sched_process_template. Bytes at the
+	 * template's pid offset must not select an unrelated task for removal.
+	 */
+	phases[23] = phases[24] = 2;
+	current_task = ((__u64)24 << 32) | 24;
+	trace_sys_enter(&syscall);
+	trace_sched_process_exit(&unrelated);
+	check(phases[23] == 2 && !phases[24] && !syscall_present[24],
+	      "Exit cleanup used a mismatched tracepoint layout");
+	check(output.event_type == CAP_EVENT_TASK_END && output.tid == 24,
+	      "Exit event identified the wrong thread");
+}
+
 int main(void)
 {
 	test_namespace(100);
 	test_namespace(200);
 	test_thread_lifecycle();
 	test_exec_gate();
+	test_exit_identity();
 	puts("cap-audit BPF event tests passed");
 	return 0;
 }

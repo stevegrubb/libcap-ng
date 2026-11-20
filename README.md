@@ -318,7 +318,7 @@ quick check for the tracepoint structs used by cap-audit is:
 
 ```
 bpftool btf dump file /sys/kernel/btf/vmlinux format c |
-grep -E 'struct trace_event_raw_(sys_enter|sys_exit|sched_process_(fork|exec|template))'
+grep -E 'struct trace_event_raw_(sys_enter|sys_exit|sched_process_(fork|exec))'
 ```
 
 `CONFIG_BPF_JIT` is recommended for performance, but it is not required just to

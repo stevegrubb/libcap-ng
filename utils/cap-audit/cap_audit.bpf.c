@@ -665,17 +665,21 @@ int trace_sched_process_exec(struct trace_event_raw_sched_process_exec *ctx)
 
 /*
  * trace_sched_process_exit - prune exited processes from the target set.
- * @ctx: sched_process_exit tracepoint data.
+ * @ctx: unused sched_process_exit tracepoint data.
  *
  * Removes the exiting PID from the target_pids map to prevent stale entries.
  * Returns 0.
  */
 SEC("tracepoint/sched/sched_process_exit")
-int trace_sched_process_exit(struct trace_event_raw_sched_process_template *ctx)
+int trace_sched_process_exit(void *ctx)
 {
 	__u64 pid_tgid = bpf_get_current_pid_tgid();
-	__u32 tid = ctx->pid;
+	__u32 tid = (__u32)pid_tgid;
 
+	/* This tracepoint runs in the exiting task. Its payload is not always
+	 * layout-compatible with sched_process_template, so use the helper.
+	 */
+	(void)ctx;
 	emit_task_end(tid);
 	/* exit and fatal signals need not reach the syscall-exit tracepoint. */
 	bpf_map_delete_elem(&current_syscalls, &pid_tgid);
