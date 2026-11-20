@@ -79,9 +79,37 @@ NETCAP_TESTABLE int parse_u32_hex_or_dec(const char *s, unsigned int *out)
 	__wur;
 #endif
 
+NETCAP_TESTABLE int parse_process_stat(const char *buf, char *cmd,
+				     size_t size, int *ppid)
+	__attr_access ((__read_only__, 1))
+	__attr_access ((__write_only__, 2, 3))
+	__attr_access ((__write_only__, 4));
+
+NETCAP_TESTABLE int parse_process_stat(const char *buf, char *cmd,
+				     size_t size, int *ppid)
+{
+	const char *start = strchr(buf, '(');
+	const char *end = strrchr(buf, ')');
+	size_t len;
+
+	if (!start || !end || start >= end || !size ||
+	    sscanf(end + 1, " %*c %d", ppid) != 1)
+		return -1;
+	/* comm can contain spaces, newlines, and parentheses. Its length is
+	 * variable: %15c requires 15 bytes rather than accepting up to 15.
+	 */
+	start++;
+	len = (size_t)(end - start);
+	if (len >= size)
+		len = size - 1;
+	memcpy(cmd, start, len);
+	cmd[len] = '\0';
+	return 0;
+}
+
 #ifndef NETCAP_NO_MAIN
 /*
- * utility_logic_test only exercises parse_u32_hex_or_dec(). Keep the rest
+ * utility_logic_test only exercises the parsers. Keep the rest
  * of netcap out of NETCAP_NO_MAIN builds so the test object does not carry
  * main-program helpers that trigger unused-function warnings.
  */
@@ -109,7 +137,7 @@ static int collect_process_info(void)
 		capng_results_t caps;
 		char buf[100];
 		char *safe_cmd;
-		char *tmp, cmd[16], state;
+		char cmd[16];
 		char *text = NULL, *bounds = NULL, *ambient = NULL;
 		int fd, len;
 		uid_t euid = (uid_t)-1;
@@ -132,15 +160,7 @@ static int collect_process_info(void)
 		if (len < 40)
 			continue;
 		buf[len] = 0;
-		tmp = strrchr(buf, ')');
-		if (tmp)
-			*tmp = 0;
-		else
-			continue;
-		memset(cmd, 0, sizeof(cmd));
-		if (sscanf(buf, "%d (%15c", &ppid, cmd) != 2)
-			continue;
-		if (sscanf(tmp+2, "%c %d", &state, &ppid) != 2)
+		if (parse_process_stat(buf, cmd, sizeof(cmd), &ppid))
 			continue;
 
 		// Skip kthreads

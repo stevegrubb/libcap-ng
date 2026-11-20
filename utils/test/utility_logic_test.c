@@ -20,6 +20,7 @@
 #include "proc-output.h"
 
 int parse_u32_hex_or_dec(const char *s, unsigned int *out);
+int parse_process_stat(const char *buf, char *cmd, size_t size, int *ppid);
 
 static int force_c_locale;
 
@@ -43,6 +44,26 @@ static void fail(const char *msg)
 {
 	fprintf(stderr, "%s\n", msg);
 	exit(EXIT_FAILURE);
+}
+
+static void test_process_stat(void)
+{
+	static const char *const names[] = {
+		"sh", "retained-caps", "123456789012345", "a b) c\nd",
+	};
+	char buf[128], cmd[16];
+	int ppid;
+	size_t i;
+
+	for (i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+		snprintf(buf, sizeof(buf), "123 (%s) S 42 0 0 0", names[i]);
+		if (parse_process_stat(buf, cmd, sizeof(cmd), &ppid) ||
+		    strcmp(cmd, names[i]) || ppid != 42)
+			fail("Process stat parser lost a name or parent PID");
+	}
+	if (parse_process_stat("123 (name S 42", cmd, sizeof(cmd), &ppid) == 0 ||
+	    parse_process_stat("123 (name) S", cmd, sizeof(cmd), &ppid) == 0)
+		fail("Process stat parser accepted an incomplete record");
 }
 
 static FILE *capture_stdout(int *saved)
@@ -219,6 +240,7 @@ static void test_list_inode_iteration(void)
 
 int main(void)
 {
+	test_process_stat();
 	test_tree_output();
 	test_utf8_tree_output();
 	test_parse_u32_hex_or_dec();
