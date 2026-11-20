@@ -49,6 +49,7 @@ static int is_executable_file(const char *path)
 
 char *resolve_target_command(const char *target)
 {
+	char default_path[PATH_MAX];
 	const char *path;
 	const char *dir;
 	size_t target_len;
@@ -61,8 +62,13 @@ char *resolve_target_command(const char *target)
 
 	target_len = strlen(target);
 	path = getenv("PATH");
-	if (!path || !path[0])
-		return NULL;
+	if (!path) {
+		size_t len = confstr(_CS_PATH, default_path, sizeof(default_path));
+
+		if (!len || len > sizeof(default_path))
+			return NULL;
+		path = default_path;
+	}
 
 	for (dir = path; dir;) {
 		char *candidate;
