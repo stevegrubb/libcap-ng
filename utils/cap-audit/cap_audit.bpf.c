@@ -371,11 +371,9 @@ int BPF_KPROBE(trace_cap_capable, const struct cred *cred,
 	    targ_ns == BPF_CORE_READ(cred, user_ns))
 		ev.capset_inh_optional = 1;
 	bpf_get_current_comm(&ev.comm, sizeof(ev.comm));
-	if (targ_ns) {
-		struct ns_common *ns = (struct ns_common *)targ_ns;
-
-		ev.targ_ns_inum = BPF_CORE_READ(ns, inum);
-	}
+	/* ns is embedded within user_namespace, not its first member. */
+	if (targ_ns)
+		ev.targ_ns_inum = BPF_CORE_READ(targ_ns, ns.inum);
 	bpf_map_update_elem(&cap_events_inflight, &pid_tgid, &ev, BPF_ANY);
 	return 0;
 }

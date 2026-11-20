@@ -21,7 +21,7 @@ cap_audit_path_test_LDFLAGS = -Wl,--wrap=confstr
 
 if BUILD_CAP_AUDIT
 check_PROGRAMS += cap_audit_namespace_test cap_audit_outcome_test \
-	cap_audit_recommendation_test cap_audit_service_test
+	cap_audit_recommendation_test cap_audit_service_test cap_audit_bpf_test
 cap_audit_namespace_test_SOURCES = cap_audit_namespace_test.c \
 	${top_srcdir}/utils/cap-audit/cap_audit_event.c \
 	${top_srcdir}/utils/cap-audit/cap_audit_analyze.c \
