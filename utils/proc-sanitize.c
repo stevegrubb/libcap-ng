@@ -28,10 +28,21 @@
 #include <string.h>
 #include "proc-sanitize.h"
 
-/* Return the length of one well-formed UTF-8 sequence, or zero if invalid. */
-static size_t valid_utf8_sequence(const unsigned char *s, size_t remaining)
+/*
+ * proc_utf8_sequence_length - validate one UTF-8 character.
+ * @s: first byte of the candidate sequence.
+ * @remaining: readable bytes starting at @s.
+ *
+ * Returns the sequence length, or zero for a truncated, overlong, surrogate,
+ * out-of-range, or otherwise malformed encoding.
+ */
+size_t proc_utf8_sequence_length(const unsigned char *s, size_t remaining)
 {
-	unsigned char c = s[0];
+	unsigned char c;
+
+	if (remaining == 0)
+		return 0;
+	c = s[0];
 
 	if (c < 0x80)
 		return 1;
@@ -84,7 +95,7 @@ char *sanitize_untrusted_field(const char *src)
 	out = dst;
 	for (i = 0; i < in_len; ) {
 		unsigned char c = (unsigned char)src[i];
-		size_t seq_len = valid_utf8_sequence(
+		size_t seq_len = proc_utf8_sequence_length(
 			(const unsigned char *)&src[i], in_len - i);
 		size_t j;
 

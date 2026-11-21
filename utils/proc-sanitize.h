@@ -25,8 +25,12 @@
 #ifndef PROC_SANITIZE_H
 #define PROC_SANITIZE_H
 
+#include <stddef.h>
 #include "gcc-attributes.h"
 
+size_t proc_utf8_sequence_length(const unsigned char *s, size_t remaining)
+	__attr_access ((__read_only__, 1, 2))
+	__attribute_pure__;
 char *sanitize_untrusted_field(const char *src)
 	__attribute_malloc__
 	__attr_dealloc_free

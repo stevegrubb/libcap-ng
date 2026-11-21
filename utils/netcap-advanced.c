@@ -3091,7 +3091,9 @@ static void render_interfaces_text(struct model *m)
  * json_escape - write @s as a quoted JSON string to stdout.
  * @s: UTF-8/text string to emit as one JSON string literal.
  *
- * Control characters and quotes are escaped; caller handles separators.
+ * Control characters, quotes, and malformed UTF-8 bytes are escaped; caller
+ * handles separators. Each malformed byte maps to the corresponding U+00XX
+ * escape, retaining its value while keeping the complete report valid UTF-8.
  * Returns no value.
  * Side effects/assumptions: Writes to stdout and may read procfs/netns
  * state indirectly via caller-supplied model-derived strings.
@@ -3099,16 +3101,32 @@ static void render_interfaces_text(struct model *m)
 static void json_escape(const char *s)
 {
 	const unsigned char *p = (const unsigned char *)s;
+	size_t remaining = strlen(s);
+
 	putchar('"');
-	for (; *p; p++) {
+	while (remaining) {
+		size_t seq_len;
+
 		if (*p == '"')
 			fputs("\\\"", stdout);
 		else if (*p == '\\')
 			fputs("\\\\", stdout);
 		else if (*p < 0x20)
 			printf("\\u%04x", *p);
-		else
+		else if (*p < 0x80)
 			putchar(*p);
+		else {
+			seq_len = proc_utf8_sequence_length(p, remaining);
+			if (seq_len > 1) {
+				fwrite(p, 1, seq_len, stdout);
+				p += seq_len;
+				remaining -= seq_len;
+				continue;
+			}
+			printf("\\u%04x", *p);
+		}
+		p++;
+		remaining--;
 	}
 	putchar('"');
 }

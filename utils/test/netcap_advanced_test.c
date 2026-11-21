@@ -83,6 +83,30 @@ static char *finish_output(FILE *file, int saved)
 	return text;
 }
 
+static void expect_json_string(const char *input, const char *expected)
+{
+	FILE *file;
+	char *text;
+	int saved;
+
+	file = capture_output(&saved);
+	json_escape(input);
+	text = finish_output(file, saved);
+	if (strcmp(text, expected))
+		fail("JSON string encoding changed unexpectedly");
+	free(text);
+}
+
+static void test_json_string_encoding(void)
+{
+	expect_json_string("valid-\303\233", "\"valid-\303\233\"");
+	expect_json_string("invalid-\377", "\"invalid-\\u00ff\"");
+	expect_json_string("overlong-\300\257",
+			   "\"overlong-\\u00c0\\u00af\"");
+	expect_json_string("truncated-\342\202",
+			   "\"truncated-\\u00e2\\u0082\"");
+}
+
 static void test_process_rendering(void)
 {
 	struct process_info p = {
@@ -331,9 +355,37 @@ static void test_bluetooth_tables(void)
 }
 #endif
 
-int main(void)
+static void render_invalid_utf8_report(void)
 {
+	struct model m = { 0 };
+	struct process_info p = {
+		.pid = 1234, .uid = 1000, .comm = "invalid-\377",
+		.caps = "(none)",
+		.defenses = { "yes", "no", "disabled", NULL },
+	};
+	struct process_info *owners[] = { &p };
+	struct inode_proc ip = { .procs = owners, .n = 1 };
+	struct endpoint_attrs attrs = { 1, 0 };
+
+	if (add_endpoint(&m, "tcp", "0.0.0.0", 80,
+			 PLANE_INET_EXTERNAL, "eth0", "192.0.2.1",
+			 &attrs, &ip))
+		fail("Cannot build invalid UTF-8 JSON fixture");
+	render_json(&m);
+	free_model(&m);
+}
+
+int main(int argc, char **argv)
+{
+	if (argc == 2 && !strcmp(argv[1], "--invalid-utf8-json")) {
+		render_invalid_utf8_report();
+		return EXIT_SUCCESS;
+	}
+	if (argc != 1)
+		fail("Unexpected netcap test argument");
+
 	test_permitted_summary();
+	test_json_string_encoding();
 	test_process_rendering();
 	test_tree_groups();
 	test_inet6_proc_reports();

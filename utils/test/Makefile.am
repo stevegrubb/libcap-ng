@@ -7,6 +7,8 @@
 AM_CPPFLAGS = -I${top_srcdir} -I${top_srcdir}/src -I${top_srcdir}/utils \
 	-I${top_srcdir}/utils/cap-audit
 
+EXTRA_DIST = netcap_json_test.py
+
 check_PROGRAMS = utils_test utility_logic_test pscap_test filecap_test
 TESTS = $(check_PROGRAMS)
 
@@ -48,4 +50,7 @@ netcap_advanced_test_SOURCES = netcap_advanced_test.c \
 netcap_advanced_test_CPPFLAGS = $(AM_CPPFLAGS) -D_GNU_SOURCE
 netcap_advanced_test_LDFLAGS = -Wl,--wrap=capng_get_caps_process
 netcap_advanced_test_LDADD = ${top_builddir}/src/libcap-ng.la
+if USE_PYTHON3
+TESTS += netcap_json_test.py
+endif
 endif
