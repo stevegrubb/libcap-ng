@@ -2735,10 +2735,9 @@ static void render_tree_process_details(const char *prefix,
 	 * these display copies local so rendering never alters the model.
 	 */
 	char *comm = sanitize_untrusted_field(p->comm);
-	char *exe = p->exe ? sanitize_untrusted_field(p->exe) : NULL;
-	char *unit = p->unit ? sanitize_untrusted_field(p->unit) : NULL;
-	char *lsm = d->lsm_label ?
-		sanitize_untrusted_field(d->lsm_label) : NULL;
+	char *exe = sanitize_untrusted_field(p->exe);
+	char *unit = sanitize_untrusted_field(p->unit);
+	char *lsm = sanitize_untrusted_field(d->lsm_label);
 	const struct {
 		const char *name, *value, *color;
 	} defenses[] = {
@@ -3098,12 +3097,9 @@ static void render_interfaces_text(struct model *m)
 static void json_escape(const char *s)
 {
 	const unsigned char *p = (const unsigned char *)s;
-	size_t remaining = strlen(s);
 
 	putchar('"');
-	while (remaining) {
-		size_t seq_len;
-
+	while (*p) {
 		if (*p == '"')
 			fputs("\\\"", stdout);
 		else if (*p == '\\')
@@ -3113,7 +3109,8 @@ static void json_escape(const char *s)
 		else if (*p < 0x80)
 			putchar(*p);
 		else {
-			seq_len = proc_utf8_sequence_length(p, remaining);
+			size_t seq_len = proc_utf8_char_len(p);
+
 			if (seq_len > 1) {
 				unsigned int cp = *p & (0x7f >> seq_len);
 				size_t i;
@@ -3132,13 +3129,11 @@ static void json_escape(const char *s)
 					       0xdc00 + (cp & 0x3ff));
 				}
 				p += seq_len;
-				remaining -= seq_len;
 				continue;
 			}
 			printf("\\u%04x", *p);
 		}
 		p++;
-		remaining--;
 	}
 	putchar('"');
 }

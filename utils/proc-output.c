@@ -26,6 +26,7 @@
 #include <unistd.h>
 #include <wchar.h>
 #include "proc-output.h"
+#include "proc-sanitize.h"
 
 #define PROC_COLOR_RESET	"\033[0m"
 
@@ -137,27 +138,6 @@ static void scan_color_state(const char *text, int from, int to,
 	}
 }
 
-/* Return the length of one UTF-8 character, or one byte for malformed input. */
-static size_t utf8_char_len(const char *text)
-{
-	const unsigned char *s = (const unsigned char *)text;
-	size_t len, i;
-
-	if (s[0] < 0xc2 || s[0] > 0xf4 || s[1] < 0x80 || s[1] > 0xbf)
-		return 1;
-	if (s[0] <= 0xdf)
-		return 2;
-	/* Reject overlong encodings, surrogates, and values above U+10FFFF. */
-	if ((s[0] == 0xe0 && s[1] < 0xa0) || (s[0] == 0xed && s[1] >= 0xa0) ||
-	    (s[0] == 0xf0 && s[1] < 0x90) || (s[0] == 0xf4 && s[1] >= 0x90))
-		return 1;
-	len = s[0] <= 0xef ? 3 : 4;
-	for (i = 2; i < len; i++)
-		if (s[i] < 0x80 || s[i] > 0xbf)
-			return 1;
-	return len;
-}
-
 /*
  * wrap_ansi - choose a wrap index for text containing ANSI SGR escapes.
  * @text: source string starting at this line.
@@ -184,7 +164,7 @@ static int wrap_ansi(const char *text, int limit, int utf8, int *columns)
 		}
 		if (!utf8) {
 			/* Count bytes without wrapping inside a UTF-8 character. */
-			len = utf8_char_len(text + i);
+			len = proc_utf8_char_len((const unsigned char *)text + i);
 			width = len;
 		} else {
 			mbstate_t state = { 0 };

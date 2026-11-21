@@ -29,135 +29,67 @@
 #include "proc-sanitize.h"
 
 /*
- * proc_utf8_sequence_length - validate one UTF-8 character.
- * @s: first byte of the candidate sequence.
- * @remaining: readable bytes starting at @s.
- *
- * Returns the sequence length, or zero for a truncated, overlong, surrogate,
- * out-of-range, or otherwise malformed encoding.
+ * Read one character from a NUL-terminated string. A malformed or truncated
+ * sequence consumes one byte so each caller can apply its own output policy.
  */
-size_t proc_utf8_sequence_length(const unsigned char *s, size_t remaining)
+size_t proc_utf8_char_len(const unsigned char *s)
 {
-	unsigned char c;
+	size_t len, i;
 
-	if (remaining == 0)
-		return 0;
-	c = s[0];
-
-	if (c < 0x80)
+	if (s[0] < 0xc2 || s[0] > 0xf4 || s[1] < 0x80 || s[1] > 0xbf)
 		return 1;
-	if (c >= 0xc2 && c <= 0xdf)
-		return remaining >= 2 && s[1] >= 0x80 && s[1] <= 0xbf ?
-			2 : 0;
-	if (c >= 0xe0 && c <= 0xef) {
-		if (remaining < 3 || s[2] < 0x80 || s[2] > 0xbf)
-			return 0;
-		if (c == 0xe0)
-			return s[1] >= 0xa0 && s[1] <= 0xbf ? 3 : 0;
-		if (c == 0xed)
-			return s[1] >= 0x80 && s[1] <= 0x9f ? 3 : 0;
-		return s[1] >= 0x80 && s[1] <= 0xbf ? 3 : 0;
-	}
-	if (c >= 0xf0 && c <= 0xf4) {
-		if (remaining < 4 || s[2] < 0x80 || s[2] > 0xbf ||
-		    s[3] < 0x80 || s[3] > 0xbf)
-			return 0;
-		if (c == 0xf0)
-			return s[1] >= 0x90 && s[1] <= 0xbf ? 4 : 0;
-		if (c == 0xf4)
-			return s[1] >= 0x80 && s[1] <= 0x8f ? 4 : 0;
-		return s[1] >= 0x80 && s[1] <= 0xbf ? 4 : 0;
-	}
-	return 0;
+	if (s[0] <= 0xdf)
+		return 2;
+	/* Reject overlong encodings, surrogates, and values above U+10FFFF. */
+	if ((s[0] == 0xe0 && s[1] < 0xa0) || (s[0] == 0xed && s[1] >= 0xa0) ||
+	    (s[0] == 0xf0 && s[1] < 0x90) || (s[0] == 0xf4 && s[1] >= 0x90))
+		return 1;
+	len = s[0] <= 0xef ? 3 : 4;
+	for (i = 2; i < len; i++)
+		if (s[i] < 0x80 || s[i] > 0xbf)
+			return 1;
+	return len;
 }
 
 /*
  * sanitize_untrusted_field - escape terminal control bytes in untrusted text.
- * @src: source text gathered from procfs/cgroup metadata.
+ * @src: NUL-terminated metadata or pathname, or NULL.
  *
- * Returns caller-owned sanitized text, or NULL on allocation failure.
- * Side effects/assumptions: Operates on in-memory data and may read
- * procfs/netns state; it does not change kernel configuration.
+ * Returns caller-owned sanitized text, or NULL for NULL input or allocation
+ * failure.
  */
 char *sanitize_untrusted_field(const char *src)
 {
-	size_t in_len;
-	char *dst;
-	char *out;
-	size_t i;
+	const unsigned char *p = (const unsigned char *)src;
+	char *dst, *out;
 
 	if (!src)
 		return NULL;
-	in_len = strlen(src);
-	dst = malloc(in_len * 4 + 1);
+	dst = malloc(strlen(src) * 4 + 1);
 	if (!dst)
 		return NULL;
 	out = dst;
-	for (i = 0; i < in_len; ) {
-		unsigned char c = (unsigned char)src[i];
-		size_t seq_len = proc_utf8_sequence_length(
-			(const unsigned char *)&src[i], in_len - i);
-		size_t j;
+	while (*p) {
+		size_t len = proc_utf8_char_len(p);
+		size_t i;
 
-		/* Do not leave a C1 byte inside an otherwise valid UTF-8 sequence:
-		 * an 8-bit terminal could still interpret that byte as a control.
-		 * Escape the whole sequence so the display is not left with a
-		 * partial, invalid character. Other UTF-8 remains unchanged.
+		/* An 8-bit terminal may interpret a C1 byte even inside valid
+		 * UTF-8. Escape the whole character to avoid a partial glyph.
 		 */
-		if (seq_len > 1) {
-			int escape_sequence = 0;
-
-			for (j = 0; j < seq_len; j++) {
-				unsigned char byte = (unsigned char)src[i + j];
-
-				if (byte >= 0x80 && byte <= 0x9f) {
-					escape_sequence = 1;
-					break;
-				}
-			}
-			if (escape_sequence) {
-				for (j = 0; j < seq_len; j++) {
-					snprintf(out, 5, "\\x%02X",
-						 (unsigned char)src[i + j]);
-					out += 4;
-				}
-			} else {
-				memcpy(out, &src[i], seq_len);
-				out += seq_len;
-			}
-			i += seq_len;
-			continue;
-		}
-		if (c < 0x20 || c == 0x7f || (c >= 0x80 && c <= 0x9f)) {
-			snprintf(out, 5, "\\x%02X", c);
-			out += 4;
+		for (i = 0; i < len; i++)
+			if (p[i] < 0x20 || (p[i] >= 0x7f && p[i] <= 0x9f))
+				break;
+		if (i == len) {
+			memcpy(out, p, len);
+			out += len;
 		} else {
-			*out++ = (char)c;
+			for (i = 0; i < len; i++) {
+				snprintf(out, 5, "\\x%02X", p[i]);
+				out += 4;
+			}
 		}
-		i++;
+		p += len;
 	}
 	*out = '\0';
 	return dst;
-}
-
-/*
- * sanitize_untrusted_owned - replace owned string with sanitized version.
- * @s: pointer to owned string pointer that will be replaced in place.
- *
- * Returns 0 on success, -1 on allocation failure.
- * Side effects/assumptions: Operates on in-memory data and may read
- * procfs/netns state; it does not change kernel configuration.
- */
-int sanitize_untrusted_owned(char **s)
-{
-	char *safe;
-
-	if (!s || !*s)
-		return 0;
-	safe = sanitize_untrusted_field(*s);
-	if (!safe)
-		return -1;
-	free(*s);
-	*s = safe;
-	return 0;
 }
