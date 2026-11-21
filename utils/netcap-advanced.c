@@ -154,6 +154,7 @@ struct defense_info {
 	char *lsm_label;
 };
 
+/* Keep collected text unchanged; escaping belongs to each output format. */
 struct process_info {
 	int pid;
 	uid_t uid;
@@ -1340,11 +1341,6 @@ static void parse_status_defenses(int pid, uid_t uid, struct defense_info *d,
 
 	snprintf(path, sizeof(path), "/proc/%d/attr/current", pid);
 	d->lsm_label = read_first_line(path);
-	if (sanitize_untrusted_owned(&d->lsm_label) < 0) {
-		free(d->lsm_label);
-		d->lsm_label = NULL;
-	}
-
 }
 
 /*
@@ -1377,8 +1373,6 @@ static struct process_info *add_process(struct model *m, int pid)
 	p->pid = pid;
 	p->uid = status.uid;
 	p->comm = xstrdup(status.seen_name ? status.name : "?");
-	if (sanitize_untrusted_owned(&p->comm) < 0)
-		goto fail;
 	snprintf(path, sizeof(path), "/proc/%d/exe", pid);
 	exelen = readlink(path, exepath, sizeof(exepath) - 1);
 	if (exelen >= 0) {
@@ -1390,12 +1384,8 @@ static struct process_info *add_process(struct model *m, int pid)
 			" (deleted)") == 0)
 			exepath[exelen - deleted_len] = '\0';
 		p->exe = xstrdup(exepath);
-		if (sanitize_untrusted_owned(&p->exe) < 0)
-			goto fail;
 	}
 	p->unit = extract_unit_from_cgroup(pid);
-	if (sanitize_untrusted_owned(&p->unit) < 0)
-		goto fail;
 	p->caps = caps_summary_for_pid(pid, &p->has_privileged_caps,
 		&has_amb, &has_bnd, &amb_list);
 	p->ambient_caps = amb_list;
@@ -2754,6 +2744,15 @@ static void render_tree_process_details(const char *prefix,
 	char pfx_child[256], pfx_def[256], pfx_flags[256];
 	char line[4096];
 	const struct defense_info *d = &p->defenses;
+	/* Terminal escapes are lossy: applying them during collection would
+	 * turn valid Unicode into literal \xNN text in decoded JSON. Keep
+	 * these display copies local so rendering never alters the model.
+	 */
+	char *comm = sanitize_untrusted_field(p->comm);
+	char *exe = p->exe ? sanitize_untrusted_field(p->exe) : NULL;
+	char *unit = p->unit ? sanitize_untrusted_field(p->unit) : NULL;
+	char *lsm = d->lsm_label ?
+		sanitize_untrusted_field(d->lsm_label) : NULL;
 	const struct {
 		const char *name, *value, *color;
 	} defenses[] = {
@@ -2761,7 +2760,7 @@ static void render_tree_process_details(const char *prefix,
 		  defense_color(d->runs_as_nonroot) },
 		{ "no_new_privs", d->no_new_privs, defense_color(d->no_new_privs) },
 		{ "seccomp", d->seccomp, defense_color(d->seccomp) },
-		{ "lsm", d->lsm_label, !d->lsm_label || !d->lsm_label[0] ? "" :
+		{ "lsm", lsm, !d->lsm_label || !d->lsm_label[0] ? "" :
 		  strstr(d->lsm_label, "unconfined_t") ? COLOR_ORANGE : COLOR_GREEN },
 	};
 	size_t def_n = d->lsm_label ? 4 : 3;
@@ -2769,12 +2768,16 @@ static void render_tree_process_details(const char *prefix,
 	unsigned int flags = process_flags(p, e);
 	enum cap_severity priv_sev = caps_worst_severity(p->caps);
 
+	if (!comm || (p->exe && !exe) || (p->unit && !unit) ||
+	    (d->lsm_label && !lsm)) {
+		/* Never fall back to unescaped process text on allocation failure. */
+		fprintf(stderr, "Out of memory\n");
+		goto out;
+	}
 	snprintf(line, sizeof(line), "%s (pid=%d uid=%u%s%s%s%s)",
-		p->comm, p->pid, (unsigned int)p->uid,
-		p->exe ? " exe=" : "",
-		p->exe ? p->exe : "",
-		p->unit ? " unit=" : "",
-		p->unit ? p->unit : "");
+		comm, p->pid, (unsigned int)p->uid,
+		exe ? " exe=" : "", exe ? exe : "",
+		unit ? " unit=" : "", unit ? unit : "");
 	proc_tree_print_node(prefix, is_last, line, width);
 	proc_tree_build_child_prefix(pfx_child, sizeof(pfx_child), prefix, is_last);
 
@@ -2862,6 +2865,11 @@ static void render_tree_process_details(const char *prefix,
 	proc_tree_print_node(pfx_child, 1, "flags", width);
 	proc_tree_build_child_prefix(pfx_flags, sizeof(pfx_flags), pfx_child, 1);
 	print_flag_nodes(pfx_flags, width, flags, priv_sev);
+out:
+	free(comm);
+	free(exe);
+	free(unit);
+	free(lsm);
 }
 
 
@@ -3091,8 +3099,11 @@ static void render_interfaces_text(struct model *m)
  * json_escape - write @s as a quoted JSON string to stdout.
  * @s: UTF-8/text string to emit as one JSON string literal.
  *
- * Control characters, quotes, and malformed UTF-8 bytes are escaped; caller
- * handles separators. Each malformed byte maps to the corresponding U+00XX
+ * Control characters, quotes, and non-ASCII text are escaped; caller handles
+ * separators. Unicode escapes preserve decoded text without emitting C1 bytes
+ * that an 8-bit terminal could interpret as controls. Escaping the original
+ * code point, rather than individual UTF-8 bytes, preserves JSON fidelity.
+ * Each malformed byte maps to the corresponding U+00XX
  * escape, retaining its value while keeping the complete report valid UTF-8.
  * Returns no value.
  * Side effects/assumptions: Writes to stdout and may read procfs/netns
@@ -3111,14 +3122,29 @@ static void json_escape(const char *s)
 			fputs("\\\"", stdout);
 		else if (*p == '\\')
 			fputs("\\\\", stdout);
-		else if (*p < 0x20)
+		else if (*p < 0x20 || *p == 0x7f)
 			printf("\\u%04x", *p);
 		else if (*p < 0x80)
 			putchar(*p);
 		else {
 			seq_len = proc_utf8_sequence_length(p, remaining);
 			if (seq_len > 1) {
-				fwrite(p, 1, seq_len, stdout);
+				unsigned int cp = *p & (0x7f >> seq_len);
+				size_t i;
+
+				for (i = 1; i < seq_len; i++)
+					cp = (cp << 6) | (p[i] & 0x3f);
+				if (cp <= 0xffff)
+					printf("\\u%04x", cp);
+				else {
+					/* JSON represents supplementary code points
+					 * as a UTF-16 surrogate pair.
+					 */
+					cp -= 0x10000;
+					printf("\\u%04x\\u%04x",
+					       0xd800 + (cp >> 10),
+					       0xdc00 + (cp & 0x3ff));
+				}
 				p += seq_len;
 				remaining -= seq_len;
 				continue;

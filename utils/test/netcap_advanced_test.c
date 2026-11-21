@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 /* Test the real collector and renderer without depending on host sockets. */
 #include "../netcap-advanced.c"
+#include <sys/prctl.h>
 
 static void fail(const char *message)
 {
@@ -99,7 +100,11 @@ static void expect_json_string(const char *input, const char *expected)
 
 static void test_json_string_encoding(void)
 {
-	expect_json_string("valid-\303\233", "\"valid-\303\233\"");
+	expect_json_string("valid-\303\233", "\"valid-\\u00db\"");
+	expect_json_string("\303\251", "\"\\u00e9\"");
+	expect_json_string("\342\202\254", "\"\\u20ac\"");
+	expect_json_string("\360\237\230\200", "\"\\ud83d\\ude00\"");
+	expect_json_string("\302\233", "\"\\u009b\"");
 	expect_json_string("invalid-\377", "\"invalid-\\u00ff\"");
 	expect_json_string("overlong-\300\257",
 			   "\"overlong-\\u00c0\\u00af\"");
@@ -355,11 +360,11 @@ static void test_bluetooth_tables(void)
 }
 #endif
 
-static void render_invalid_utf8_report(void)
+static void render_text_report(char *name)
 {
 	struct model m = { 0 };
 	struct process_info p = {
-		.pid = 1234, .uid = 1000, .comm = "invalid-\377",
+		.pid = 1234, .uid = 1000, .comm = name,
 		.caps = "(none)",
 		.defenses = { "yes", "no", "disabled", NULL },
 	};
@@ -370,15 +375,74 @@ static void render_invalid_utf8_report(void)
 	if (add_endpoint(&m, "tcp", "0.0.0.0", 80,
 			 PLANE_INET_EXTERNAL, "eth0", "192.0.2.1",
 			 &attrs, &ip))
-		fail("Cannot build invalid UTF-8 JSON fixture");
+		fail("Cannot build process text JSON fixture");
 	render_json(&m);
+	free_model(&m);
+}
+
+/* Exercise collection as well as encoding: an encoder-only test cannot catch
+ * terminal sanitization destroying Unicode before JSON serialization.
+ */
+static void render_collected_report(const char *name)
+{
+	struct model m = { 0 };
+	struct process_info *p;
+	struct endpoint e = { 0 };
+	FILE *file;
+	char *text, *safe;
+	const char *cursor;
+	int saved, i;
+
+	if (prctl(PR_SET_NAME, name, 0, 0, 0))
+		fail("Cannot set process-name fixture");
+	p = add_process(&m, getpid());
+	if (!p || strcmp(p->comm, name))
+		fail("Collection changed the process name");
+
+	/* Supply deterministic values for host-dependent metadata, exercising
+	 * the same terminal/JSON separation for every untrusted process field.
+	 */
+	free(p->exe);
+	free(p->unit);
+	free(p->defenses.lsm_label);
+	p->exe = xstrdup(name);
+	p->unit = xstrdup(name);
+	p->defenses.lsm_label = xstrdup(name);
+	safe = sanitize_untrusted_field(name);
+	if (!p->exe || !p->unit || !p->defenses.lsm_label || !safe)
+		fail("Cannot allocate process text fixture");
+	use_color = 0;
+	file = capture_output(&saved);
+	render_tree_process_details("", 1, p, &e, 4096);
+	text = finish_output(file, saved);
+	cursor = text;
+	for (i = 0; i < 4; i++) {
+		cursor = strstr(cursor, safe);
+		if (!cursor)
+			fail("Terminal process field was not sanitized");
+		cursor += strlen(safe);
+	}
+	if (strchr(text, '\033') || strchr(text, '\233'))
+		fail("Terminal output contains a process control byte");
+	free(text);
+	free(safe);
+	/* Rendering the tree first must not alter subsequent JSON output. */
+	render_json_process(p, &e, "");
 	free_model(&m);
 }
 
 int main(int argc, char **argv)
 {
 	if (argc == 2 && !strcmp(argv[1], "--invalid-utf8-json")) {
-		render_invalid_utf8_report();
+		render_text_report("invalid-\377");
+		return EXIT_SUCCESS;
+	}
+	if (argc == 3 && !strcmp(argv[1], "--process-json")) {
+		render_collected_report(argv[2]);
+		return EXIT_SUCCESS;
+	}
+	if (argc == 3 && !strcmp(argv[1], "--text-json")) {
+		render_text_report(argv[2]);
 		return EXIT_SUCCESS;
 	}
 	if (argc != 1)
