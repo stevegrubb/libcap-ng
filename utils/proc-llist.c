@@ -77,8 +77,6 @@ void list_clear(llist* l)
 		nextnode=cur->next;
 		free(cur->cmd);
 		free(cur->capabilities);
-		free(cur->bounds);
-		free(cur->ambient);
 		free(cur);
 		cur=nextnode;
 	}

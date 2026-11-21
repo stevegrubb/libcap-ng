@@ -26,6 +26,7 @@
 #define PROC_HEADER
 
 #include "config.h"
+#include <stdbool.h>
 #include <sys/types.h>	/* Ensure types in _lnode are defined on all systems */
 #include "gcc-attributes.h"
 
@@ -39,8 +40,8 @@ typedef struct _lnode{
   char *cmd;		// command run by user
   unsigned long inode;	// inode of socket
   char *capabilities;	// Text of partial capabilities
-  char *bounds;		// Text for bounding set
-  char *ambient;	// Text for ambient set
+  bool bounds;		// Show the bounding set marker
+  bool ambient;		// Show the ambient set marker
   struct _lnode* next;	// Next node pointer
 } lnode;
 

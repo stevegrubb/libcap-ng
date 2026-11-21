@@ -138,7 +138,8 @@ static int collect_process_info(void)
 		char buf[100];
 		char *safe_cmd;
 		char cmd[16];
-		char *text = NULL, *bounds = NULL, *ambient = NULL;
+		char *text;
+		bool ambient, bounds;
 		int fd, len;
 		uid_t euid = (uid_t)-1;
 
@@ -213,29 +214,10 @@ static int collect_process_info(void)
 			fclose(sf);
 		}
 
-		caps = capng_have_capabilities(CAPNG_SELECT_AMBIENT);
-		if (caps > CAPNG_NONE)
-			ambient = strdup("@");
-		else
-			ambient = strdup("");
-		if (!ambient) {
-			fprintf(stderr, "Out of memory\n");
-			free(text);
-			continue;
-		}
-
-		// Now record the bounding set information
-		caps = capng_have_capabilities(CAPNG_SELECT_BOUNDS);
-		if (caps > CAPNG_NONE)
-			bounds = strdup("+");
-		else
-			bounds = strdup("");
-		if (!bounds) {
-			fprintf(stderr, "Out of memory\n");
-			free(text);
-			free(ambient);
-			continue;
-		}
+		ambient = capng_have_capabilities(CAPNG_SELECT_AMBIENT) >
+			  CAPNG_NONE;
+		bounds = capng_have_capabilities(CAPNG_SELECT_BOUNDS) >
+			 CAPNG_NONE;
 
 		// Now lets get the inodes each process has open
 		snprintf(buf, sizeof(buf), "/proc/%d/fd", pid);
@@ -252,8 +234,6 @@ static int collect_process_info(void)
 				fprintf(stderr, "Can't open %s: %s\n", buf,
 					strerror(errno));
 			free(text);
-			free(bounds);
-			free(ambient);
 			continue;
 		}
 		// For each file in the fd dir...
@@ -300,23 +280,16 @@ static int collect_process_info(void)
 			node.cmd = safe_cmd;
 			node.inode = inode;
 			node.capabilities = strdup(text);
-			node.bounds = strdup(bounds);
-			node.ambient = strdup(ambient);
-			if (node.cmd && node.capabilities && node.bounds &&
-			    node.ambient)
+			node.bounds = bounds;
+			node.ambient = ambient;
+			if (node.capabilities)
 				// We make one entry for each socket inode
 				list_append(&l, &node);
-			else {
+			else
 				free(node.cmd);
-				free(node.capabilities);
-				free(node.bounds);
-				free(node.ambient);
-			}
 		}
 		closedir(f);
 		free(text);
-		free(bounds);
-		free(ambient);
 	}
 	closedir(d);
 	return 0;
@@ -343,7 +316,8 @@ static void report_finding(const lnode *n, unsigned int port, const char *type,
 		printf(" %-15s", ifc);
 	else
 		printf(" %-15u", port);
-	printf(" %s %s%s\n", n->capabilities, n->ambient, n->bounds);
+	printf(" %s %s%s\n", n->capabilities, n->ambient ? "@" : "",
+	       n->bounds ? "+" : "");
 }
 
 /*

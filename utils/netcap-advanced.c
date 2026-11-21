@@ -148,9 +148,9 @@ struct iface_info {
 };
 
 struct defense_info {
-	char *runs_as_nonroot;
-	char *no_new_privs;
-	char *seccomp;
+	const char *runs_as_nonroot;
+	const char *no_new_privs;
+	const char *seccomp;
 	char *lsm_label;
 };
 
@@ -1306,38 +1306,26 @@ static char *caps_summary_for_pid(int pid, int *privileged, int *has_amb,
 /*
  * parse_status_defenses - read process hardening metadata into @d.
  * @pid: process ID whose procfs status/attr files are parsed.
- * @uid: process real UID, used for root/non-root interpretation.
- * @d: destination struct receiving caller-freed string fields.
- * @status: parsed /proc/<pid>/status fields consumed for hardening decode.
+ * @d: destination for static labels and the caller-owned LSM label.
+ * @status: parsed /proc/<pid>/status, including the real UID.
  *
  * Missing fields are tolerated; function leaves best-effort defaults.
  * Returns no value.
  * Side effects/assumptions: Operates on in-memory data and may read
  * procfs/netns state; it does not change kernel configuration.
  */
-static void parse_status_defenses(int pid, uid_t uid, struct defense_info *d,
-	const struct proc_status *status)
+static void parse_status_defenses(int pid, struct defense_info *d,
+				  const struct proc_status *status)
 {
 	char path[64];
 
-	d->runs_as_nonroot = xstrdup(uid != 0 ? "yes" : "no");
-	d->no_new_privs = xstrdup("unknown");
-	d->seccomp = xstrdup("disabled");
-	d->lsm_label = NULL;
-
-	if (status->seen_no_new_privs) {
-		free(d->no_new_privs);
-		d->no_new_privs = xstrdup(status->no_new_privs ? "yes" : "no");
-	}
-	if (status->seen_seccomp) {
-		free(d->seccomp);
-		if (status->seccomp == 0)
-			d->seccomp = xstrdup("disabled");
-		else if (status->seccomp == 1)
-			d->seccomp = xstrdup("strict");
-		else
-			d->seccomp = xstrdup("filter");
-	}
+	d->runs_as_nonroot = status->uid != 0 ? "yes" : "no";
+	d->no_new_privs = "unknown";
+	if (status->seen_no_new_privs)
+		d->no_new_privs = status->no_new_privs ? "yes" : "no";
+	d->seccomp = "disabled";
+	if (status->seen_seccomp && status->seccomp)
+		d->seccomp = status->seccomp == 1 ? "strict" : "filter";
 
 	snprintf(path, sizeof(path), "/proc/%d/attr/current", pid);
 	d->lsm_label = read_first_line(path);
@@ -1391,11 +1379,9 @@ static struct process_info *add_process(struct model *m, int pid)
 	p->ambient_caps = amb_list;
 	p->ambient_present = has_amb;
 	p->open_ended_bounding = has_bnd;
-	parse_status_defenses(pid, status.uid, &p->defenses, &status);
+	parse_status_defenses(pid, &p->defenses, &status);
 	if (!p->comm || (exelen >= 0 && !p->exe) || !p->caps ||
-	    (has_amb && !p->ambient_caps) ||
-	    !p->defenses.runs_as_nonroot ||
-	    !p->defenses.no_new_privs || !p->defenses.seccomp)
+	    (has_amb && !p->ambient_caps))
 		goto fail;
 
 	if (m->procs_n == m->procs_cap && vec_grow((void **)&m->procs,
@@ -3424,9 +3410,6 @@ static void free_process(struct process_info *p)
 	free(p->unit);
 	free(p->caps);
 	free(p->ambient_caps);
-	free(p->defenses.runs_as_nonroot);
-	free(p->defenses.no_new_privs);
-	free(p->defenses.seccomp);
 	free(p->defenses.lsm_label);
 	free(p);
 }

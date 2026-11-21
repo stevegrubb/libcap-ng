@@ -203,23 +203,15 @@ static void test_list_inode_iteration(void)
 	first.inode = 99;
 	first.cmd = strdup("first");
 	first.capabilities = strdup("cap_net_bind_service");
-	first.bounds = strdup("");
-	first.ambient = strdup("");
 	second.inode = 99;
 	second.cmd = strdup("second");
 	second.capabilities = strdup("cap_net_admin");
-	second.bounds = strdup("");
-	second.ambient = strdup("");
 	third.inode = 100;
 	third.cmd = strdup("third");
 	third.capabilities = strdup("cap_sys_admin");
-	third.bounds = strdup("");
-	third.ambient = strdup("");
 
-	if (!first.cmd || !first.capabilities || !first.bounds ||
-	    !first.ambient || !second.cmd || !second.capabilities ||
-	    !second.bounds || !second.ambient || !third.cmd ||
-	    !third.capabilities || !third.bounds || !third.ambient)
+	if (!first.cmd || !first.capabilities || !second.cmd ||
+	    !second.capabilities || !third.cmd || !third.capabilities)
 		fail("allocation failed in inode iteration test");
 
 	list_append(&list, &first);
