@@ -25,8 +25,12 @@ int __wrap_capng_get_caps_process(void)
 	} else if (capability_case) {
 		capng_type_t type = CAPNG_PERMITTED;
 
-		if (capability_case == 2)
+		if (capability_case == 2) {
 			type |= CAPNG_EFFECTIVE;
+			if (capng_update(CAPNG_ADD, CAPNG_PERMITTED |
+					 CAPNG_AMBIENT, CAP_CHOWN))
+				fail("Cannot stage second capability");
+		}
 		if (capng_update(CAPNG_ADD, type, CAP_NET_RAW))
 			fail("Cannot stage permitted capability fixture");
 	}
@@ -36,22 +40,28 @@ int __wrap_capng_get_caps_process(void)
 static void test_permitted_summary(void)
 {
 	static const char *const expected[] = {
-		"(none)", "net_raw", "net_raw", "(full)",
+		"(none)", "net_raw", "chown, net_raw", "(full)",
 	};
-	char *summary, *ambient;
-	int privileged, has_ambient, has_bounds;
 
 	for (capability_case = 0; capability_case < 4; capability_case++) {
-		summary = caps_summary_for_pid(getpid(), &privileged,
-				&has_ambient, &has_bounds, &ambient);
-		if (!summary || strcmp(summary, expected[capability_case]))
+		struct process_info p = { .pid = getpid() };
+
+		collect_process_caps(&p);
+		if (!p.caps || strcmp(p.caps, expected[capability_case]))
 			fail("Capability summary did not report the permitted set");
-		if (privileged != (capability_case != 0))
+		if (p.has_privileged_caps != (capability_case != 0))
 			fail("Retained permitted capabilities lost their risk flag");
-		if (has_ambient || has_bounds || ambient)
-			fail("Capability summary invented ambient or bounding bits");
-		free(summary);
-		free(ambient);
+		if (capability_case == 2 &&
+		    capng_have_capability(CAPNG_AMBIENT, CAP_CHOWN)) {
+			if (!p.ambient_present || !p.ambient_caps ||
+			    strcmp(p.ambient_caps, "chown"))
+				fail("Incorrect ambient capability list");
+		} else if (p.ambient_present || p.ambient_caps)
+			fail("Capability summary invented ambient bits");
+		if (p.open_ended_bounding)
+			fail("Capability summary invented bounding bits");
+		free(p.ambient_caps);
+		free(p.caps);
 	}
 }
 

@@ -262,15 +262,6 @@ static char *extract_unit_from_cgroup(int pid)
 	__attribute_malloc__
 	__attr_dealloc_free
 	__wur;
-static char *caps_summary_for_pid(int pid, int *privileged, int *has_amb,
-				  int *has_bnd, char **amb_list)
-	__attribute_malloc__
-	__attr_dealloc_free
-	__attr_access ((__write_only__, 2))
-	__attr_access ((__write_only__, 3))
-	__attr_access ((__write_only__, 4))
-	__attr_access ((__write_only__, 5))
-	__wur;
 
 static int use_color;
 
@@ -366,7 +357,7 @@ static const char *sev_color(enum cap_severity sev)
 
 /*
  * caps_worst_severity - find highest severity capability in @caps text.
- * @caps: capability list text from caps_summary_for_pid().
+ * @caps: capability list text from collect_process_caps().
  *
  * Returns highest matched severity, or CAP_SEV_NEUTRAL.
  * Side effects/assumptions: Operates on in-memory data and may read
@@ -1183,124 +1174,79 @@ static char *extract_unit_from_cgroup(int pid)
 	return NULL;
 }
 
-/*
- * caps_summary_for_pid - format capability summary for one process.
- * @pid: process ID inspected through libcap-ng APIs.
- * @privileged: out flag set when notable privileged permitted caps exist.
- * @has_amb: out flag set when ambient capabilities are present.
- * @has_bnd: out flag set when bounding set entries are present.
- *
- * Returns caller-owned summary text; errors degrade to "(none)" style text.
- * Side effects/assumptions: Operates on in-memory data and may read
- * procfs/netns state; it does not change kernel configuration.
- */
-static char *caps_summary_for_pid(int pid, int *privileged, int *has_amb,
-	int *has_bnd, char **amb_list)
+/* Append whole capability names in numeric order, dropping the cap_ prefix. */
+static void format_cap_list(capng_type_t type, char *buf, size_t size)
 {
-	char out[4096];
-	char amb_out[1024];
-	char *amb_dst = amb_out;
-	char *dst = out;
-	size_t amb_left = sizeof(amb_out);
-	size_t left = sizeof(out);
-	int i, first = 1, amb_first = 1;
-	capng_results_t c;
+	size_t used = 0;
+	int i;
 
-	*privileged = 0;
-	*has_amb = 0;
-	*has_bnd = 0;
-	*amb_list = NULL;
+	buf[0] = '\0';
+	for (i = 0; i <= CAP_LAST_CAP; i++) {
+		const char *name;
+		size_t len, sep = used ? 2 : 0;
+
+		if (!capng_have_capability(type, i))
+			continue;
+		name = capng_capability_to_name(i);
+		if (!name)
+			continue;
+		if (strncmp(name, "cap_", 4) == 0)
+			name += 4;
+		len = strlen(name);
+		if (sep + len >= size - used)
+			break;
+		if (used) {
+			memcpy(buf + used, ", ", 2);
+			used += 2;
+		}
+		memcpy(buf + used, name, len + 1);
+		used += len;
+	}
+}
+
+/* Fill the capability fields of a new, zero-initialized process record.
+ * A process that cannot be queried retains the "(none)" summary.
+ */
+static void collect_process_caps(struct process_info *p)
+{
+	char permitted[4096], ambient[1024];
+	const char *summary = "(none)";
+	capng_results_t caps;
 
 	capng_clear(CAPNG_SELECT_ALL);
-	capng_setpid(pid);
-	if (capng_get_caps_process())
-		return xstrdup("(none)");
+	capng_setpid(p->pid);
+	if (capng_get_caps_process()) {
+		p->caps = xstrdup(summary);
+		return;
+	}
 
 	/* Permitted bits remain available even if temporarily not effective. */
-	if (capng_have_capability(CAPNG_PERMITTED, CAP_SYS_ADMIN) ||
-	    capng_have_capability(CAPNG_PERMITTED, CAP_SYS_PTRACE) ||
-	    capng_have_capability(CAPNG_PERMITTED, CAP_DAC_READ_SEARCH) ||
-	    capng_have_capability(CAPNG_PERMITTED, CAP_NET_ADMIN) ||
-	    capng_have_capability(CAPNG_PERMITTED, CAP_NET_RAW))
-		*privileged = 1;
+	p->has_privileged_caps =
+		capng_have_capability(CAPNG_PERMITTED, CAP_SYS_ADMIN) ||
+		capng_have_capability(CAPNG_PERMITTED, CAP_SYS_PTRACE) ||
+		capng_have_capability(CAPNG_PERMITTED, CAP_DAC_READ_SEARCH) ||
+		capng_have_capability(CAPNG_PERMITTED, CAP_NET_ADMIN) ||
+		capng_have_capability(CAPNG_PERMITTED, CAP_NET_RAW);
 
-	c = capng_have_permitted_capabilities();
-	if (c == CAPNG_FULL) {
-		strncpy(out, "(full)", sizeof(out));
-		out[sizeof(out) - 1] = 0;
-	} else if (c <= CAPNG_NONE) {
-		strncpy(out, "(none)", sizeof(out));
-		out[sizeof(out) - 1] = 0;
-	} else {
-		*dst = 0;
-		for (i = 0; i <= CAP_LAST_CAP; i++) {
-			size_t n;
-			size_t sep = first ? 0 : 2;
-
-			if (!capng_have_capability(CAPNG_PERMITTED, i))
-				continue;
-			const char *name = capng_capability_to_name(i);
-			if (!name)
-				continue;
-			if (strncmp(name, "cap_", 4) == 0)
-				name += 4;
-
-			n = strlen(name);
-			if (left <= sep + n)
-				break;
-			if (!first) {
-				*dst++ = ',';
-				*dst++ = ' ';
-				left -= 2;
-			}
-			memcpy(dst, name, n);
-			dst += n;
-			left -= n;
-			*dst = 0;
-			first = 0;
-		}
-		if (out[0] == 0) {
-			strncpy(out, "(none)", sizeof(out));
-			out[sizeof(out) - 1] = 0;
-		}
+	caps = capng_have_permitted_capabilities();
+	if (caps == CAPNG_FULL)
+		summary = "(full)";
+	else if (caps == CAPNG_PARTIAL) {
+		format_cap_list(CAPNG_PERMITTED, permitted, sizeof(permitted));
+		if (permitted[0])
+			summary = permitted;
 	}
-	if (capng_have_capabilities(CAPNG_SELECT_AMBIENT) > CAPNG_NONE)
-		*has_amb = 1;
-	if (*has_amb) {
-		*amb_dst = 0;
-		for (i = 0; i <= CAP_LAST_CAP; i++) {
-			size_t n;
-			size_t sep = amb_first ? 0 : 2;
-			const char *name;
+	p->caps = xstrdup(summary);
 
-			if (!capng_have_capability(CAPNG_AMBIENT, i))
-				continue;
-			name = capng_capability_to_name(i);
-			if (!name)
-				continue;
-			if (strncmp(name, "cap_", 4) == 0)
-				name += 4;
-
-			n = strlen(name);
-			if (amb_left <= sep + n)
-				break;
-			if (!amb_first) {
-				*amb_dst++ = ',';
-				*amb_dst++ = ' ';
-				amb_left -= 2;
-			}
-			memcpy(amb_dst, name, n);
-			amb_dst += n;
-			amb_left -= n;
-			*amb_dst = 0;
-			amb_first = 0;
-		}
-		if (amb_out[0])
-			*amb_list = xstrdup(amb_out);
+	p->ambient_present = capng_have_capabilities(CAPNG_SELECT_AMBIENT) >
+			     CAPNG_NONE;
+	if (p->ambient_present) {
+		format_cap_list(CAPNG_AMBIENT, ambient, sizeof(ambient));
+		if (ambient[0])
+			p->ambient_caps = xstrdup(ambient);
 	}
-	if (capng_have_capabilities(CAPNG_SELECT_BOUNDS) > CAPNG_NONE)
-		*has_bnd = 1;
-	return xstrdup(out);
+	p->open_ended_bounding = capng_have_capabilities(CAPNG_SELECT_BOUNDS) >
+				 CAPNG_NONE;
 }
 
 /*
@@ -1345,8 +1291,6 @@ static struct process_info *add_process(struct model *m, int pid)
 	char path[64];
 	char exepath[PATH_MAX];
 	ssize_t exelen;
-	int has_amb = 0, has_bnd = 0;
-	char *amb_list = NULL;
 	struct proc_status status;
 	struct process_info *p;
 
@@ -1374,14 +1318,10 @@ static struct process_info *add_process(struct model *m, int pid)
 		p->exe = xstrdup(exepath);
 	}
 	p->unit = extract_unit_from_cgroup(pid);
-	p->caps = caps_summary_for_pid(pid, &p->has_privileged_caps,
-		&has_amb, &has_bnd, &amb_list);
-	p->ambient_caps = amb_list;
-	p->ambient_present = has_amb;
-	p->open_ended_bounding = has_bnd;
+	collect_process_caps(p);
 	parse_status_defenses(pid, &p->defenses, &status);
 	if (!p->comm || (exelen >= 0 && !p->exe) || !p->caps ||
-	    (has_amb && !p->ambient_caps))
+	    (p->ambient_present && !p->ambient_caps))
 		goto fail;
 
 	if (m->procs_n == m->procs_cap && vec_grow((void **)&m->procs,
