@@ -264,9 +264,11 @@ static void handle_syscall_result(const struct cap_event *e)
 /* Mark the first authenticated successful capset as the phase boundary. */
 static void observe_initial_capset(const struct cap_event *e)
 {
-	if (state.capset_observed ||
-	    e->syscall_nr != state.app.capset_nr ||
-	    e->pid != (__u32)state.app.pid)
+	/* CAP_EVENT_CAPSET is emitted only after cap_capset authenticated the
+	 * call and the syscall returned success. Its raw number is ABI-relative,
+	 * so userspace must not reclassify the event using the native ABI table.
+	 */
+	if (state.capset_observed || e->pid != (__u32)state.app.pid)
 		return;
 
 	state.capset_observed = 1;

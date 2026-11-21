@@ -26,6 +26,7 @@
 #define TEST_ACCESS_NR		1008
 #define TEST_CAPSET_NR		1009
 #define TEST_ID_NR		1010
+#define TEST_COMPAT_CAPSET_NR	185
 #define TEST_ERESTARTSYS	512
 
 static const char *const id_calls[] = {
@@ -200,11 +201,11 @@ static void emit_capset(__s64 result, __u64 effective, __u64 permitted,
 }
 
 /* Emit an authenticated successful capset from the initial process. */
-static void emit_initial_capset(void)
+static void emit_initial_capset(int syscall_nr)
 {
 	struct cap_event event = {
 		.pid = 1234,
-		.syscall_nr = TEST_CAPSET_NR,
+		.syscall_nr = syscall_nr,
 		.event_type = CAP_EVENT_CAPSET,
 	};
 
@@ -526,16 +527,15 @@ static void test_optional_setpcap(void)
 	memset(&state, 0, sizeof(state));
 	state.app.exe = "/usr/bin/capset-target";
 	state.app.pid = event.pid;
-	state.app.capset_nr = TEST_CAPSET_NR;
 	state.baseline_user_ns_inum = 100;
 	check = &state.app.checks[CAP_SETPCAP];
 
 	handle_cap_event(NULL, &event, sizeof(event));
 	if (state.capset_observed || cap_total_checks(check) != 0)
 		fail("Unproven capset check polluted accounting or changed phase");
-	emit_initial_capset();
+	emit_initial_capset(TEST_COMPAT_CAPSET_NR);
 	if (!state.capset_observed)
-		fail("Authenticated capset result did not change phase");
+		fail("Authenticated compat capset did not change phase");
 
 	/* The same optional probe from a child is harmless, even if denied. */
 	event.pid++;
@@ -620,7 +620,6 @@ static void reset_keepcaps_test(void)
 	state.app.pid = 1234;
 	state.app.exe = "/usr/bin/keepcaps-target";
 	state.app.prog_type = ELF;
-	state.app.capset_nr = TEST_CAPSET_NR;
 }
 
 /* Model capng_change_id's temporary set, ID changes, then final capset. */
@@ -737,7 +736,7 @@ static void test_keepcaps_scope(void)
 	reset_keepcaps_test();
 	/* The ordinary capset-only case must keep genuine operational use. */
 	emit_check(CAP_SETUID, TEST_ID_NR, 1);
-	emit_initial_capset();
+	emit_initial_capset(TEST_CAPSET_NR);
 	emit_check(CAP_SETUID, TEST_ID_NR, 1);
 	if (state.app.checks[CAP_SETUID].granted != 1 ||
 	    state.app.checks[CAP_SETUID].op_granted != 1)

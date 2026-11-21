@@ -59,7 +59,6 @@ struct kernel_cap_struct___old {
 } CAP_AUDIT_PRESERVE_ACCESS_INDEX;
 #undef CAP_AUDIT_PRESERVE_ACCESS_INDEX
 
-const volatile int capset_syscall_nr = -1;
 const volatile int prctl_syscall_nr = -1;
 
 /*
@@ -314,12 +313,12 @@ int BPF_KPROBE(trace_cap_capset, struct cred *new,
 	syscall = bpf_map_lookup_elem(&current_syscalls, &pid_tgid);
 	if (!syscall)
 		return 0;
-	/* Raw syscall numbers are ABI-relative. Require both the configured
-	 * native number and this kernel hook before treating the invocation as
-	 * capset; a compat syscall can otherwise share the same number.
+	/* cap_capset is the ABI-independent identity check. Raw syscall numbers
+	 * differ between native and compat ABIs, while an unrelated compat call
+	 * can share the native number. Only this hook can set the marker; syscall
+	 * exit still proves that the authenticated capset completed successfully.
 	 */
-	if (should_record_tid((__u32)pid_tgid) &&
-	    syscall->nr == capset_syscall_nr)
+	if (should_record_tid((__u32)pid_tgid))
 		syscall->record_capset = 1;
 	syscall->capset_optional_cred = 0;
 	if (bpf_core_type_size(kernel_cap_t) != sizeof(new_i) ||

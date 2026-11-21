@@ -407,8 +407,6 @@ int main(int argc, char **argv)
 	state.app.mprotect_nr = audit_name_to_syscall("mprotect",
 						      audit_machine);
 	state.app.mremap_nr = audit_name_to_syscall("mremap", audit_machine);
-	state.app.capset_nr = audit_name_to_syscall("capset", audit_machine);
-
 	state.skel = cap_audit_bpf__open();
 	if (!state.skel) {
 		fprintf(stderr, "Error: Failed to open BPF program: %s\n",
@@ -416,7 +414,6 @@ int main(int argc, char **argv)
 		free(state.app.exe);
 		goto err_target_path;
 	}
-	state.skel->rodata->capset_syscall_nr = state.app.capset_nr;
 	state.skel->rodata->prctl_syscall_nr =
 		audit_name_to_syscall("prctl", audit_machine);
 	err = cap_audit_bpf__load(state.skel);

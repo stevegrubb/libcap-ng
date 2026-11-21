@@ -134,7 +134,6 @@ struct app_caps {
 	int brk_nr;
 	int mprotect_nr;
 	int mremap_nr;
-	int capset_nr;
 	type_t prog_type;
 	struct cap_check checks[CAP_LAST_CAP + 1];
 	int yama_ptrace_scope;

@@ -70,6 +70,8 @@ static bool fail_kernel_read;
 #include "../cap_audit.bpf.c"
 
 #define TASKS 32
+#define X86_64_CAPSET_NR 126
+#define I386_CAPSET_NR 185
 static __u8 phases[TASKS];
 static struct syscall_state syscalls[TASKS];
 static struct cap_event inflight[TASKS];
@@ -181,8 +183,8 @@ static void test_cap_mask_layouts(void)
 	      "Big-endian u64 capability layout was decoded incorrectly");
 }
 
-/* Model the kernel hook reached only by a real native capset invocation. */
-static void mark_native_capset(struct cred *cred)
+/* Model the kernel hook reached only by a real capset invocation. */
+static void mark_capset(struct cred *cred)
 {
 	struct pt_regs regs = { 0 };
 
@@ -201,7 +203,7 @@ static void test_capset_evidence(void)
 	/* The permitted word advertises CAP_SYS_ADMIN to the entry probe. */
 	__u32 user_data[6] = { 0, 1U << 21, 0, 0, 0, 0 };
 	struct trace_event_raw_sys_enter enter = {
-		.id = capset_syscall_nr,
+		.id = X86_64_CAPSET_NR,
 		.args = {
 			(unsigned long)&user_header,
 			(unsigned long)user_data,
@@ -215,9 +217,9 @@ static void test_capset_evidence(void)
 	phases[25] = 2;
 	mock_task.cred = &installed;
 
-	/* A compat-ABI syscall can have the same raw number as native capset.
-	 * Without the cap_capset kernel hook it must establish no evidence,
-	 * even when the thread already holds capabilities.
+	/* i386 sigprocmask shares x86_64 capset's raw number. Without the
+	 * cap_capset kernel hook it must establish no evidence, even when the
+	 * thread already holds capabilities.
 	 */
 	installed.cap_effective.val = (1ULL << 41) - 1;
 	installed.cap_permitted.val = (1ULL << 41) - 1;
@@ -234,7 +236,7 @@ static void test_capset_evidence(void)
 	installed.cap_permitted.val = 0;
 	trace_sys_enter(&enter);
 	user_data[1] = 0;
-	mark_native_capset(&installed);
+	mark_capset(&installed);
 	trace_sys_exit(&exit);
 	check(submitted == before + 1 &&
 	      output.event_type == CAP_EVENT_CAPSET,
@@ -243,11 +245,25 @@ static void test_capset_evidence(void)
 	      output.capset_inheritable == 0,
 	      "Capset event used the mutable userspace snapshot");
 
+	/* A genuine i386-ABI capset uses a different raw syscall number, but
+	 * reaches the same kernel hook and must retain its raw attribution.
+	 */
+	enter.id = I386_CAPSET_NR;
+	before = submitted;
+	trace_sys_enter(&enter);
+	mark_capset(&installed);
+	trace_sys_exit(&exit);
+	check(submitted == before + 1 &&
+	      output.event_type == CAP_EVENT_CAPSET &&
+	      output.syscall_nr == I386_CAPSET_NR,
+	      "Compat capset event was not emitted");
+	enter.id = X86_64_CAPSET_NR;
+
 	/* Optional SETPCAP analysis may fail without hiding a real capset. */
 	before = submitted;
 	trace_sys_enter(&enter);
 	fail_kernel_read = true;
-	mark_native_capset(&installed);
+	mark_capset(&installed);
 	fail_kernel_read = false;
 	trace_sys_exit(&exit);
 	check(submitted == before + 1 &&
@@ -260,7 +276,7 @@ static void test_capset_evidence(void)
 	installed.cap_inheritable.val = 1ULL << 40;
 	before = submitted;
 	trace_sys_enter(&enter);
-	mark_native_capset(&installed);
+	mark_capset(&installed);
 	trace_sys_exit(&exit);
 	check(submitted == before + 1 &&
 	      output.capset_effective == installed.cap_effective.val &&
@@ -272,12 +288,12 @@ static void test_capset_evidence(void)
 	before = submitted;
 	exit.ret = -1;
 	trace_sys_enter(&enter);
-	mark_native_capset(&installed);
+	mark_capset(&installed);
 	trace_sys_exit(&exit);
 	check(submitted == before, "Failed capset emitted installed masks");
 	exit.ret = 0;
 	trace_sys_enter(&enter);
-	mark_native_capset(&installed);
+	mark_capset(&installed);
 	fail_kernel_read = true;
 	trace_sys_exit(&exit);
 	fail_kernel_read = false;
@@ -286,7 +302,7 @@ static void test_capset_evidence(void)
 	/* Service setup before the exec phase remains outside target evidence. */
 	phases[25] = 1;
 	trace_sys_enter(&enter);
-	mark_native_capset(&installed);
+	mark_capset(&installed);
 	trace_sys_exit(&exit);
 	check(submitted == before, "Pre-exec capset was recorded");
 }
