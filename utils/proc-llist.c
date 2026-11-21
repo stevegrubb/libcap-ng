@@ -24,100 +24,34 @@
 
 #include "config.h"
 #include <stdlib.h>
-#include <string.h>
 #include "proc-llist.h"
-
-void list_create(llist *l)
-{
-	l->head = NULL;
-	l->cur = NULL;
-	l->cnt = 0;
-}
 
 void list_append(llist *l, lnode *node)
 {
-	lnode* newnode;
-
-	if (node == NULL || l == NULL)
-		return;
-
-	newnode = malloc(sizeof(lnode));
-	if (newnode == NULL)
-		return;
-
-	newnode->ppid = node->ppid;
-	newnode->pid = node->pid;
-	newnode->uid = node->uid;
-	newnode->inode = node->inode;
-	// Take custody of the memory
-	newnode->cmd = node->cmd;
-	newnode->capabilities = node->capabilities;
-	newnode->bounds = node->bounds;
-	newnode->ambient = node->ambient;
-	newnode->next = NULL;
-
-	// if we are at top, fix this up
-	if (l->head == NULL)
-		l->head = newnode;
-	else	// Otherwise add pointer to newnode
-		l->cur->next = newnode;
-
-	// make newnode current
-	l->cur = newnode;
-	l->cnt++;
+	node->next = NULL;
+	if (l->tail)
+		l->tail->next = node;
+	else
+		l->head = node;
+	l->tail = node;
 }
 
-void list_clear(llist* l)
+void list_clear(llist *l)
 {
-	lnode* nextnode;
-	register lnode* cur;
+	while (l->head) {
+		lnode *node = l->head;
 
-	cur = l->head;
-	while (cur) {
-		nextnode=cur->next;
-		free(cur->cmd);
-		free(cur->capabilities);
-		free(cur);
-		cur=nextnode;
+		l->head = node->next;
+		free(node->cmd);
+		free(node->capabilities);
+		free(node);
 	}
-	l->head = NULL;
-	l->cur = NULL;
-	l->cnt = 0;
+	l->tail = NULL;
 }
 
-lnode *list_find_inode(llist *l, unsigned long i)
+const lnode *list_find_inode(const lnode *node, unsigned long inode)
 {
-        register lnode* cur;
-
-	cur = l->head;	/* start at the beginning */
-	while (cur) {
-		if (cur->inode == i) {
-			l->cur = cur;
-			return cur;
-		} else
-			cur = cur->next;
-	}
-	return NULL;
-}
-
-/*
- * Continue iterating over entries that share the same inode. netcap records
- * one node per process/socket pair, so callers need to walk every match.
- */
-lnode *list_next_inode(llist *l, unsigned long i)
-{
-	register lnode *cur;
-
-	if (l == NULL || l->cur == NULL)
-		return NULL;
-
-	cur = l->cur->next;
-	while (cur) {
-		if (cur->inode == i) {
-			l->cur = cur;
-			return cur;
-		}
-		cur = cur->next;
-	}
-	return NULL;
+	while (node && node->inode != inode)
+		node = node->next;
+	return node;
 }

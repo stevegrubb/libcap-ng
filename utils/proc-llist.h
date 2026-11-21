@@ -45,29 +45,21 @@ typedef struct _lnode{
   struct _lnode* next;	// Next node pointer
 } lnode;
 
-/* This is the linked list head. Only data elements that are 1 per
- * event goes here. */
 typedef struct {
-  lnode *head;		// List head
-  lnode *cur;		// Pointer to current node
-  unsigned int cnt;	// How many items in this list
+	lnode *head;
+	lnode *tail;
 } llist;
 
-void list_create(llist *l)
-	__attr_access ((__write_only__, 1));
-static inline lnode *list_get_cur(llist *l)
-	__attr_access ((__read_only__, 1));
-static inline lnode *list_get_cur(llist *l) { return l->cur; }
+/* Append takes ownership of the node and its strings. */
 void list_append(llist *l, lnode *node)
 	__attr_access ((__read_write__, 1))
-	__attr_access ((__read_only__, 2));
-void list_clear(llist* l)
+	__attr_access ((__read_write__, 2));
+void list_clear(llist *l)
 	__attr_access ((__read_write__, 1));
 
-/* Given a message type, find the matching node */
-lnode *list_find_inode(llist *l, unsigned long i)
-	__attr_access ((__read_write__, 1));
-lnode *list_next_inode(llist *l, unsigned long i)
-	__attr_access ((__read_write__, 1));
+/* Find the first matching socket owner at or after the given node. */
+const lnode *list_find_inode(const lnode *node, unsigned long inode)
+	__attr_access ((__read_only__, 1))
+	__attribute_pure__;
 
 #endif

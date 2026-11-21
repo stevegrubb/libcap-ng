@@ -136,7 +136,6 @@ static int collect_process_info(void)
 		int pid, ppid;
 		capng_results_t caps;
 		char buf[100];
-		char *safe_cmd;
 		char cmd[16];
 		char *text;
 		bool ambient, bounds;
@@ -241,7 +240,7 @@ static int collect_process_info(void)
 		while (( fd_ent = readdir(f) )) {
 			char line[256], ln[256], *s, *e;
 			unsigned long inode;
-			lnode node;
+			lnode *node;
 			int llen;
 
 			if (fd_ent->d_name[0] == '.')
@@ -271,22 +270,24 @@ static int collect_process_info(void)
 			inode = strtoul(s, NULL, 10);
 			if (errno)
 				continue;
-			safe_cmd = sanitize_untrusted_field(cmd);
-			if (!safe_cmd)
+			node = malloc(sizeof(*node));
+			if (!node)
 				continue;
-			node.ppid = ppid;
-			node.pid = pid;
-			node.uid = euid;
-			node.cmd = safe_cmd;
-			node.inode = inode;
-			node.capabilities = strdup(text);
-			node.bounds = bounds;
-			node.ambient = ambient;
-			if (node.capabilities)
-				// We make one entry for each socket inode
-				list_append(&l, &node);
-			else
-				free(node.cmd);
+			node->cmd = sanitize_untrusted_field(cmd);
+			node->capabilities = strdup(text);
+			if (!node->cmd || !node->capabilities) {
+				free(node->cmd);
+				free(node->capabilities);
+				free(node);
+				continue;
+			}
+			node->ppid = ppid;
+			node->pid = pid;
+			node->uid = euid;
+			node->inode = inode;
+			node->bounds = bounds;
+			node->ambient = ambient;
+			list_append(&l, node);
 		}
 		closedir(f);
 		free(text);
@@ -328,9 +329,10 @@ static void report_finding(const lnode *n, unsigned int port, const char *type,
 static void report_inode_findings(unsigned long inode, unsigned int port,
 				  const char *type, const char *ifc)
 {
-	lnode *n;
+	const lnode *n;
 
-	for (n = list_find_inode(&l, inode); n; n = list_next_inode(&l, inode))
+	for (n = list_find_inode(l.head, inode); n;
+	     n = list_find_inode(n->next, inode))
 		report_finding(n, port, type, ifc);
 }
 
@@ -539,8 +541,6 @@ static int read_diag_messages(int fd, int proto, const char *type)
 				continue;
 
 			r = NLMSG_DATA(nlh);
-			if (!list_find_inode(&l, r->idiag_inode))
-				continue;
 			port = ntohs(r->id.idiag_sport);
 			if (!port)
 				continue;
@@ -668,8 +668,6 @@ static int read_vsock_diag_messages(int fd)
 			if (r->vdiag_type != SOCK_STREAM ||
 			    r->vdiag_state != TCP_LISTEN)
 				continue;
-			if (!list_find_inode(&l, r->vdiag_ino))
-				continue;
 			if (r->vdiag_src_port == 0)
 				continue;
 
@@ -786,8 +784,6 @@ static void read_vsock_proc(void)
 
 		if (type != SOCK_STREAM || st != 0x0A || port == 0)
 			continue;
-		if (!list_find_inode(&l, inode))
-			continue;
 
 		(void)cid;
 		report_inode_findings(inode, port, "vsock", NULL);
@@ -871,7 +867,6 @@ int main(int argc, char **argv)
 		usage();
 	}
 
-	list_create(&l);
 	collect_process_info();
 
 	// Now we check the tcp socket list...

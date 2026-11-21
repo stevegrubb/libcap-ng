@@ -192,40 +192,29 @@ static void test_parse_u32_hex_or_dec(void)
 
 static void test_list_inode_iteration(void)
 {
-	llist list;
-	lnode first = { 0 };
-	lnode second = { 0 };
-	lnode third = { 0 };
-	lnode *cur;
+	llist list = { 0 };
+	lnode *first = calloc(1, sizeof(*first));
+	lnode *other = calloc(1, sizeof(*other));
+	lnode *last = calloc(1, sizeof(*last));
+	const lnode *cur;
 
-	list_create(&list);
-
-	first.inode = 99;
-	first.cmd = strdup("first");
-	first.capabilities = strdup("cap_net_bind_service");
-	second.inode = 99;
-	second.cmd = strdup("second");
-	second.capabilities = strdup("cap_net_admin");
-	third.inode = 100;
-	third.cmd = strdup("third");
-	third.capabilities = strdup("cap_sys_admin");
-
-	if (!first.cmd || !first.capabilities || !second.cmd ||
-	    !second.capabilities || !third.cmd || !third.capabilities)
+	if (!first || !other || !last)
 		fail("allocation failed in inode iteration test");
+	first->inode = last->inode = 99;
+	other->inode = 100;
+	list_append(&list, first);
+	list_append(&list, other);
 
-	list_append(&list, &first);
-	list_append(&list, &second);
-	list_append(&list, &third);
-
-	cur = list_find_inode(&list, 99);
-	if (!cur || strcmp(cur->cmd, "first") != 0)
-		fail("list_find_inode should return first matching inode");
-	cur = list_next_inode(&list, 99);
-	if (!cur || strcmp(cur->cmd, "second") != 0)
-		fail("list_next_inode should return later matching inode");
-	if (list_next_inode(&list, 99) != NULL)
-		fail("list_next_inode should stop at the last match");
+	cur = list_find_inode(list.head, 99);
+	if (cur != first)
+		fail("missing first socket owner");
+	/* Looking up an owner must not change where the next node is added. */
+	list_append(&list, last);
+	if (list_find_inode(cur->next, 100) != other)
+		fail("appending after lookup lost an existing owner");
+	cur = list_find_inode(cur->next, 99);
+	if (cur != last || list_find_inode(cur->next, 99))
+		fail("unexpected later owners for shared inode");
 
 	list_clear(&list);
 }
