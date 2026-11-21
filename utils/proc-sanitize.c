@@ -28,6 +28,38 @@
 #include <string.h>
 #include "proc-sanitize.h"
 
+/* Return the length of one well-formed UTF-8 sequence, or zero if invalid. */
+static size_t valid_utf8_sequence(const unsigned char *s, size_t remaining)
+{
+	unsigned char c = s[0];
+
+	if (c < 0x80)
+		return 1;
+	if (c >= 0xc2 && c <= 0xdf)
+		return remaining >= 2 && s[1] >= 0x80 && s[1] <= 0xbf ?
+			2 : 0;
+	if (c >= 0xe0 && c <= 0xef) {
+		if (remaining < 3 || s[2] < 0x80 || s[2] > 0xbf)
+			return 0;
+		if (c == 0xe0)
+			return s[1] >= 0xa0 && s[1] <= 0xbf ? 3 : 0;
+		if (c == 0xed)
+			return s[1] >= 0x80 && s[1] <= 0x9f ? 3 : 0;
+		return s[1] >= 0x80 && s[1] <= 0xbf ? 3 : 0;
+	}
+	if (c >= 0xf0 && c <= 0xf4) {
+		if (remaining < 4 || s[2] < 0x80 || s[2] > 0xbf ||
+		    s[3] < 0x80 || s[3] > 0xbf)
+			return 0;
+		if (c == 0xf0)
+			return s[1] >= 0x90 && s[1] <= 0xbf ? 4 : 0;
+		if (c == 0xf4)
+			return s[1] >= 0x80 && s[1] <= 0x8f ? 4 : 0;
+		return s[1] >= 0x80 && s[1] <= 0xbf ? 4 : 0;
+	}
+	return 0;
+}
+
 /*
  * sanitize_untrusted_field - escape terminal control bytes in untrusted text.
  * @src: source text gathered from procfs/cgroup metadata.
@@ -50,15 +82,48 @@ char *sanitize_untrusted_field(const char *src)
 	if (!dst)
 		return NULL;
 	out = dst;
-	for (i = 0; i < in_len; i++) {
+	for (i = 0; i < in_len; ) {
 		unsigned char c = (unsigned char)src[i];
+		size_t seq_len = valid_utf8_sequence(
+			(const unsigned char *)&src[i], in_len - i);
+		size_t j;
 
-		if (c < 0x20 || c == 0x7f) {
+		/* Do not leave a C1 byte inside an otherwise valid UTF-8 sequence:
+		 * an 8-bit terminal could still interpret that byte as a control.
+		 * Escape the whole sequence so the display is not left with a
+		 * partial, invalid character. Other UTF-8 remains unchanged.
+		 */
+		if (seq_len > 1) {
+			int escape_sequence = 0;
+
+			for (j = 0; j < seq_len; j++) {
+				unsigned char byte = (unsigned char)src[i + j];
+
+				if (byte >= 0x80 && byte <= 0x9f) {
+					escape_sequence = 1;
+					break;
+				}
+			}
+			if (escape_sequence) {
+				for (j = 0; j < seq_len; j++) {
+					snprintf(out, 5, "\\x%02X",
+						 (unsigned char)src[i + j]);
+					out += 4;
+				}
+			} else {
+				memcpy(out, &src[i], seq_len);
+				out += seq_len;
+			}
+			i += seq_len;
+			continue;
+		}
+		if (c < 0x20 || c == 0x7f || (c >= 0x80 && c <= 0x9f)) {
 			snprintf(out, 5, "\\x%02X", c);
 			out += 4;
 		} else {
 			*out++ = (char)c;
 		}
+		i++;
 	}
 	*out = '\0';
 	return dst;

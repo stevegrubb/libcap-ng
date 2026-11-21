@@ -184,6 +184,11 @@ int main(void)
 		const char *name, *safe;
 	} names[] = {
 		{ "crafted\n\r\t\033[2J\177", "crafted\\x0A\\x0D\\x09\\x1B[2J\\x7F" },
+		{ "c1-\2332J", "c1-\\x9B2J" },
+		{ "unicode-c1-\302\2332J", "unicode-c1-\\xC2\\x9B2J" },
+		/* Escape the whole character rather than split it at byte 0x9B. */
+		{ "utf8-continuation-\303\233",
+		  "utf8-continuation-\\xC3\\x9B" },
 		{ "ordinary", "ordinary" },
 		{ "literal\\x1B-é", "literal\\x1B-é" },
 	};
