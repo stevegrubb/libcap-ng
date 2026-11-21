@@ -3,10 +3,27 @@
  * Copyright 2026 Red Hat Inc.
  * All Rights Reserved.
  */
-#define main filecap_main
-#include "../filecap.c"
-#undef main
+#include "config.h"
+#include "cap-ng.h"
 #include "proc-sanitize.h"
+
+static int fixture_get_caps_fd(int fd);
+static int fixture_apply_caps_fd(int fd);
+static char *fixture_sanitize(const char *path);
+
+/*
+ * Redirect calls in filecap.c explicitly: LTO can bind or inline the real
+ * sanitizer before the linker has a chance to apply --wrap replacements.
+ */
+#define main filecap_main
+#define capng_get_caps_fd fixture_get_caps_fd
+#define capng_apply_caps_fd fixture_apply_caps_fd
+#define sanitize_untrusted_field fixture_sanitize
+#include "../filecap.c"
+#undef sanitize_untrusted_field
+#undef capng_apply_caps_fd
+#undef capng_get_caps_fd
+#undef main
 #include <limits.h>
 #include <sys/wait.h>
 
@@ -15,6 +32,9 @@ enum {
 };
 static int fixture;
 static int allocation_failure;
+static const char *const fixture_names[] = {
+	"effective", "permitted", "full", "no capabilities", "read error",
+};
 
 static void fail(const char *message)
 {
@@ -23,7 +43,7 @@ static void fail(const char *message)
 }
 
 /* Keep the library's real capability queries and formatting deterministic. */
-int __wrap_capng_get_caps_fd(int fd)
+static int fixture_get_caps_fd(int fd)
 {
 	capng_type_t type = CAPNG_PERMITTED;
 
@@ -43,36 +63,72 @@ int __wrap_capng_get_caps_fd(int fd)
 	return 0;
 }
 
-int __wrap_capng_apply_caps_fd(int fd)
+static int fixture_apply_caps_fd(int fd)
 {
 	(void)fd;
 	errno = EPERM;
 	return -1;
 }
 
-char *__real_sanitize_untrusted_field(const char *path);
-
 /* Allocation can change errno; path diagnostics must retain the real error. */
-char *__wrap_sanitize_untrusted_field(const char *path)
+static char *fixture_sanitize(const char *path)
 {
 	char *safe = allocation_failure ? NULL :
-		__real_sanitize_untrusted_field(path);
+		sanitize_untrusted_field(path);
 
 	errno = allocation_failure ? ENOMEM : EDOM;
 	return safe;
 }
 
-static void check_output(FILE *file, const char *expected)
+static int check_output(FILE *file, const char *expected, const char *stream,
+			int show)
 {
 	char output[4096];
-	size_t len;
+	char *safe_expected, *safe_output;
+	size_t len, offset;
+	int failed;
 
 	rewind(file);
 	len = fread(output, 1, sizeof(output) - 1, file);
 	output[len] = '\0';
-	if (ferror(file) || fgetc(file) != EOF || strcmp(output, expected))
-		fail("Unexpected filecap output");
+	failed = ferror(file) || fgetc(file) != EOF || strcmp(output, expected);
+	if (failed || show) {
+		if (strcmp(output, expected)) {
+			for (offset = 0; output[offset] && expected[offset] &&
+			     output[offset] == expected[offset]; offset++)
+				;
+			fprintf(stderr, "%s first mismatch at byte %zu: "
+				"expected 0x%02X, actual 0x%02X\n", stream,
+				offset, (unsigned char)expected[offset],
+				(unsigned char)output[offset]);
+		}
+		safe_expected = sanitize_untrusted_field(expected);
+		safe_output = sanitize_untrusted_field(output);
+		fprintf(stderr, "%s expected (%zu bytes): %s\n", stream,
+			strlen(expected),
+			safe_expected ? safe_expected : "[unavailable]");
+		fprintf(stderr, "%s actual (%zu captured bytes): %s\n", stream,
+			len, safe_output ? safe_output : "[unavailable]");
+		free(safe_expected);
+		free(safe_output);
+	}
 	fclose(file);
+	return failed;
+}
+
+static void describe_case(char **args)
+{
+	int i;
+
+	fprintf(stderr, "filecap_test: fixture=%s allocation_failure=%d\n",
+		fixture_names[fixture], allocation_failure);
+	for (i = 0; args[i]; i++) {
+		char *safe = sanitize_untrusted_field(args[i]);
+
+		fprintf(stderr, "  argv[%d]: %s\n", i,
+			safe ? safe : "[unavailable]");
+		free(safe);
+	}
 }
 
 /* Isolate main's globals and exit paths, and capture both output streams. */
@@ -80,7 +136,7 @@ static void run_filecap(char **args, const char *output, const char *errors,
 			int expected_status)
 {
 	FILE *out = tmpfile(), *err = tmpfile();
-	int argc = 0, status;
+	int argc = 0, status, failed, out_failed, err_failed;
 	pid_t child;
 
 	while (args[argc])
@@ -92,15 +148,34 @@ static void run_filecap(char **args, const char *output, const char *errors,
 		fail("Cannot fork filecap test");
 	if (child == 0) {
 		if (dup2(fileno(out), STDOUT_FILENO) < 0 ||
-		    dup2(fileno(err), STDERR_FILENO) < 0)
+		    dup2(fileno(err), STDERR_FILENO) < 0) {
+			perror("Cannot redirect filecap output");
 			_exit(EXIT_FAILURE);
+		}
 		exit(filecap_main(argc, args));
 	}
-	if (waitpid(child, &status, 0) != child || !WIFEXITED(status) ||
-	    WEXITSTATUS(status) != expected_status)
-		fail("Unexpected filecap exit status");
-	check_output(out, output);
-	check_output(err, errors);
+	if (waitpid(child, &status, 0) != child) {
+		perror("Cannot wait for filecap test");
+		fail("Cannot collect filecap exit status");
+	}
+	failed = !WIFEXITED(status) || WEXITSTATUS(status) != expected_status;
+	if (failed) {
+		describe_case(args);
+		if (WIFEXITED(status))
+			fprintf(stderr, "Exit status: expected %d, actual %d\n",
+				expected_status, WEXITSTATUS(status));
+		else if (WIFSIGNALED(status))
+			fprintf(stderr, "Expected exit %d, killed by signal %d\n",
+				expected_status, WTERMSIG(status));
+	}
+	/* Always inspect both streams, especially after a child failure. */
+	out_failed = check_output(out, output, "stdout", failed);
+	err_failed = check_output(err, errors, "stderr", failed);
+	if (failed || out_failed || err_failed) {
+		if (!failed)
+			describe_case(args);
+		fail("Filecap test case failed");
+	}
 }
 
 int main(void)

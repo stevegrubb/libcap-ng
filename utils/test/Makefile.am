@@ -37,8 +37,6 @@ filecap_test_SOURCES = filecap_test.c \
 	${top_srcdir}/utils/filecap-path.c \
 	${top_srcdir}/utils/proc-sanitize.c
 filecap_test_CPPFLAGS = $(AM_CPPFLAGS) -D_GNU_SOURCE
-filecap_test_LDFLAGS = -Wl,--wrap=capng_get_caps_fd \
-	-Wl,--wrap=capng_apply_caps_fd -Wl,--wrap=sanitize_untrusted_field
 filecap_test_LDADD = ${top_builddir}/src/libcap-ng.la
 
 if BUILD_NETCAP_ADVANCED

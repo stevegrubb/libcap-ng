@@ -9,9 +9,12 @@ permissions:
 
 jobs:
   fedora-rawhide:
-    name: Fedora Rawhide
+    name: Fedora Rawhide (${{ matrix.cflags }})
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    strategy:
+      matrix:
+        cflags: ["-O2 -g", "-O2 -g -flto"]
 
     steps:
       - name: Check out source
@@ -23,6 +26,7 @@ jobs:
         run: |
           docker run --rm --pull=always --platform linux/amd64 \
             --security-opt no-new-privileges=true \
+            --env CFLAGS="${{ matrix.cflags }}" \
             --volume "$GITHUB_WORKSPACE:/work" \
             --workdir /work \
             fedora:rawhide \
@@ -33,8 +37,8 @@ jobs:
 
               ./autogen.sh
               ./configure --without-python
-              make -j32
-              make -j32 check
+              make -j20
+              make -j20 check
             '
 
   alpine-musl:
