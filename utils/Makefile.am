@@ -47,7 +47,8 @@ if BUILD_NETCAP_ADVANCED
 netcap_SOURCES += netcap-advanced.c proc-output.c proc-output.h \
 	proc-status.c proc-status.h
 endif
-filecap_SOURCES = filecap.c filecap-path.c filecap-path.h
+filecap_SOURCES = filecap.c filecap-path.c filecap-path.h \
+	proc-sanitize.c proc-sanitize.h
 
 if BUILD_DEPRECATED
 bin_PROGRAMS += captest

@@ -30,6 +30,7 @@
 #include <errno.h>
 #include "cap-ng.h"
 #include "filecap-path.h"
+#include "proc-sanitize.h"
 #include <fcntl.h>
 #include <ftw.h>
 
@@ -59,6 +60,20 @@ static void usage(void)
 	exit(1);
 }
 
+/* Preserve the filesystem error across allocation and pathname escaping. */
+static void print_path_error(const char *message, const char *path)
+{
+	int error = errno;
+	char *safe_path = sanitize_untrusted_field(path);
+
+	if (safe_path == NULL) {
+		fprintf(stderr, "Out of memory\n");
+		exit(1);
+	}
+	fprintf(stderr, "%s %s: %s\n", message, safe_path, strerror(error));
+	free(safe_path);
+}
+
 // Returns 1 on error and 0 otherwise
 static int check_file(const char *fpath,
 		const struct stat *sb,
@@ -77,9 +92,7 @@ static int check_file(const char *fpath,
 
 		capng_clear(CAPNG_SELECT_BOTH);
 		if (capng_get_caps_fd(fd) < 0 && errno != ENODATA) {
-			fprintf(stderr,
-				"Unable to get capabilities of %s: %s\n",
-				fpath, strerror(errno));
+			print_path_error("Unable to get capabilities of", fpath);
 			if (single_file)
 				ret = 1;
 		}
@@ -89,6 +102,13 @@ static int check_file(const char *fpath,
 			rc = capng_have_permitted_capabilities();
 		}
 		if (rc > CAPNG_NONE) {
+			/* Escape display text only; open() needs the original bytes. */
+			char *safe_path = sanitize_untrusted_field(fpath);
+
+			if (safe_path == NULL) {
+				fprintf(stderr, "Out of memory\n");
+				exit(1);
+			}
 			if (header == 0) {
 				header = 1;
 				printf("%-9s %-22s capabilities  rootid\n",
@@ -97,7 +117,7 @@ static int check_file(const char *fpath,
 
 			uid_t rootid = capng_get_rootid();
 			printf("%s %-22s ",
-			       permitted ? "permitted" : "effective",  fpath);
+			       permitted ? "permitted" : "effective", safe_path);
 
 			if (rc == CAPNG_FULL)
 				printf("full");
@@ -108,6 +128,7 @@ static int check_file(const char *fpath,
 			if (rootid != CAPNG_UNSET_ROOTID)
 				printf(" %ju", (uintmax_t)rootid);
 			printf("\n");
+			free(safe_path);
 		}
 		close(fd);
 	} // Ignore open failure since printing a warning clutters output
@@ -181,9 +202,7 @@ int main(int argc, char *argv[])
 				return 0;
 			} else if (argv[i][0] == '/') {
 				if (lstat(argv[i], &sbuf) != 0) {
-					fprintf(stderr,
-						"Error checking path %s (%s)\n",
-						argv[i], strerror(errno));
+					print_path_error("Error checking path", argv[i]);
 					exit(1);
 				}
 				// Clear all capabilities in case cap strings
@@ -246,14 +265,11 @@ int main(int argc, char *argv[])
 		struct stat fbuf;
 		int fd = open(path, O_WRONLY|O_NOFOLLOW|O_CLOEXEC);
 		if (fd < 0) {
-			fprintf(stderr,
-				"Could not open %s for writing (%s)\n", path,
-				strerror(errno));
+			print_path_error("Could not open for writing", path);
 			return 1;
 		}
 		if ((fstat(fd, &fbuf))) {
-			fprintf(stderr, "Could not fstat %s (%s)\n",
-					path, strerror(errno));
+			print_path_error("Could not fstat", path);
 			close(fd);
 			return 1;
 		}
@@ -267,9 +283,7 @@ int main(int argc, char *argv[])
 			return 1;
 		}
 		if (capng_apply_caps_fd(fd) < 0) {
-			fprintf(stderr,
-				"Could not set capabilities on %s: %s\n",
-				path, strerror(errno));
+			print_path_error("Could not set capabilities on", path);
 			rc = 1;
 		}
 		close(fd);
