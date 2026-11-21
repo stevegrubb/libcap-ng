@@ -40,22 +40,24 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
 
-#define CAP_VERSION_1	0x19980330
-#define CAP_VERSION_2	0x20071026
-#define CAP_VERSION_3	0x20080522
 #define CAP_SETPCAP	8
 #define PR_SET_KEEPCAPS	8
 
-struct cap_user_header {
-	__u32 version;
-	int pid;
-};
-
-struct cap_user_data {
-	__u32 effective;
-	__u32 permitted;
-	__u32 inheritable;
-};
+/* Linux used this named u32[2] type for capabilities before 6.3. A concrete
+ * flavored type is required because CO-RE does not match a forward declaration
+ * to the target's struct. Its existence distinguishes the two big-endian
+ * representations without tying the build to either kernel layout.
+ */
+#ifdef __BPF__
+#define CAP_AUDIT_PRESERVE_ACCESS_INDEX \
+	__attribute__((preserve_access_index))
+#else
+#define CAP_AUDIT_PRESERVE_ACCESS_INDEX
+#endif
+struct kernel_cap_struct___old {
+	__u32 cap[2];
+} CAP_AUDIT_PRESERVE_ACCESS_INDEX;
+#undef CAP_AUDIT_PRESERVE_ACCESS_INDEX
 
 const volatile int capset_syscall_nr = -1;
 const volatile int prctl_syscall_nr = -1;
@@ -101,14 +103,13 @@ const volatile int prctl_syscall_nr = -1;
  * cap_capable(), and streams finalized events through a ring buffer. A syscall
  * completion event correlates denied checks from one invocation with its raw
  * kernel return value. Successful capset completion events also carry the
- * requested masks so userspace can distinguish a current-binary compatibility
- * constraint from confirmed capability use. The cap_opts field carries the
- * CAP_OPT_* flags so userspace can identify known advisory call sites without
- * treating
- * CAP_OPT_NOAUDIT as a standalone filter. CAP_OPT_NOAUDIT means "do not
- * audit" and is only a confirming signal alongside syscall and capability
- * matching. Fork/exit tracepoints keep the PID filter in sync so children
- * are traced and exits are pruned.
+ * kernel-installed masks so userspace can distinguish a current-binary
+ * compatibility constraint from confirmed capability use. The cap_opts field
+ * carries the CAP_OPT_* flags so userspace can identify known advisory call
+ * sites without treating CAP_OPT_NOAUDIT as a standalone filter.
+ * CAP_OPT_NOAUDIT means "do not audit" and is only a confirming signal
+ * alongside syscall and capability matching. Fork/exit tracepoints keep the
+ * PID filter in sync so children are traced and exits are pruned.
  */
 
 #if !defined(__TARGET_ARCH_x86) && !defined(__TARGET_ARCH_arm64) && \
@@ -199,12 +200,9 @@ struct {
  */
 struct syscall_state {
 	__u64 denied_caps;
-	__u64 capset_effective;
-	__u64 capset_permitted;
-	__u64 capset_inheritable;
 	__u64 capset_optional_cred;
 	int nr;
-	__u8 capset_valid;
+	__u8 record_capset;
 	__u8 keepcaps_valid;
 	__u8 keepcaps;
 };
@@ -316,6 +314,13 @@ int BPF_KPROBE(trace_cap_capset, struct cred *new,
 	syscall = bpf_map_lookup_elem(&current_syscalls, &pid_tgid);
 	if (!syscall)
 		return 0;
+	/* Raw syscall numbers are ABI-relative. Require both the configured
+	 * native number and this kernel hook before treating the invocation as
+	 * capset; a compat syscall can otherwise share the same number.
+	 */
+	if (should_record_tid((__u32)pid_tgid) &&
+	    syscall->nr == capset_syscall_nr)
+		syscall->record_capset = 1;
 	syscall->capset_optional_cred = 0;
 	if (bpf_core_type_size(kernel_cap_t) != sizeof(new_i) ||
 	    bpf_probe_read_kernel(&new_i, sizeof(new_i), inheritable) ||
@@ -401,48 +406,6 @@ cleanup:
 }
 
 /*
- * read_capset_payload - copy capability masks from capset user arguments.
- * @ctx: raw syscall entry context containing header and data pointers.
- * @syscall: per-thread syscall state to populate.
- *
- * Marks the payload valid only for a recognized ABI and complete user read.
- */
-static __always_inline void read_capset_payload(
-			struct trace_event_raw_sys_enter *ctx,
-			struct syscall_state *syscall)
-{
-	struct cap_user_header header;
-	struct cap_user_data data[2] = { 0 };
-	const void *header_ptr = (const void *)ctx->args[0];
-	const void *data_ptr = (const void *)ctx->args[1];
-
-	if (!header_ptr || !data_ptr)
-		return;
-	if (bpf_probe_read_user(&header, sizeof(header), header_ptr) != 0)
-		return;
-
-	if (header.version == CAP_VERSION_1) {
-		if (bpf_probe_read_user(&data[0], sizeof(data[0]),
-					data_ptr) != 0)
-			return;
-	} else if (header.version == CAP_VERSION_2 ||
-		   header.version == CAP_VERSION_3) {
-		if (bpf_probe_read_user(data, sizeof(data), data_ptr) != 0)
-			return;
-	} else {
-		return;
-	}
-
-	syscall->capset_effective = data[0].effective |
-				      ((__u64)data[1].effective << 32);
-	syscall->capset_permitted = data[0].permitted |
-				      ((__u64)data[1].permitted << 32);
-	syscall->capset_inheritable = data[0].inheritable |
-					((__u64)data[1].inheritable << 32);
-	syscall->capset_valid = 1;
-}
-
-/*
  * trace_sys_enter - remember syscall numbers on entry.
  * @ctx: raw_syscalls/sys_enter tracepoint context.
  *
@@ -462,14 +425,87 @@ int trace_sys_enter(struct trace_event_raw_sys_enter *ctx)
 		return 0;
 
 	syscall.nr = ctx->id;
-	if (should_record_tid(tid) && ctx->id == capset_syscall_nr)
-		read_capset_payload(ctx, &syscall);
 	if (should_record_tid(tid) && ctx->id == prctl_syscall_nr &&
 	    (int)ctx->args[0] == PR_SET_KEEPCAPS && ctx->args[1] <= 1) {
 		syscall.keepcaps_valid = 1;
 		syscall.keepcaps = ctx->args[1];
 	}
 	bpf_map_update_elem(&current_syscalls, &pid_tgid, &syscall, BPF_ANY);
+	return 0;
+}
+
+/* Convert two native-endian words into the userspace capability numbering.
+ * @words: words read from kernel_cap_t storage.
+ * @legacy_layout: nonzero for the pre-6.3 u32[2] kernel layout.
+ * @big_endian: nonzero when the BPF target is big endian.
+ *
+ * Returns a canonical 64-bit capability mask.
+ */
+static __always_inline __u64 cap_words_to_mask(const __u32 words[2],
+						int legacy_layout,
+						int big_endian)
+{
+	if (big_endian && !legacy_layout)
+		return ((__u64)words[0] << 32) | words[1];
+	return words[0] | ((__u64)words[1] << 32);
+}
+
+/* Convert a copied kernel capability set into userspace bit numbering.
+ * @cap: capability value already read with a CO-RE field relocation.
+ *
+ * Returns a canonical 64-bit capability mask.
+ */
+static __always_inline __u64 kernel_cap_to_mask(const kernel_cap_t *cap)
+{
+	__u32 words[2];
+
+	__builtin_memcpy(words, cap, sizeof(words));
+
+#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+	return cap_words_to_mask(words,
+		bpf_core_type_exists(struct kernel_cap_struct___old), 1);
+#else
+	return cap_words_to_mask(words, 0, 0);
+#endif
+}
+
+/* Read the capability sets committed to the current thread.
+ * @effective: destination for the installed effective set.
+ * @permitted: destination for the installed permitted set.
+ * @inheritable: destination for the installed inheritable set.
+ *
+ * Returns 0 only when all sets came from the current immutable credentials.
+ */
+static __always_inline int read_current_capsets(__u64 *effective,
+					 __u64 *permitted,
+					 __u64 *inheritable)
+{
+	struct task_struct *task;
+	const struct cred *cred;
+	kernel_cap_t installed_effective;
+	kernel_cap_t installed_permitted;
+	kernel_cap_t installed_inheritable;
+
+	task = (struct task_struct *)bpf_get_current_task();
+	if (!task)
+		return -1;
+	cred = BPF_CORE_READ(task, cred);
+	if (!cred)
+		return -1;
+
+	if (bpf_core_type_size(kernel_cap_t) != sizeof(installed_effective))
+		return -1;
+	if (bpf_core_read(&installed_effective, sizeof(installed_effective),
+			  &cred->cap_effective) ||
+	    bpf_core_read(&installed_permitted, sizeof(installed_permitted),
+			  &cred->cap_permitted) ||
+	    bpf_core_read(&installed_inheritable, sizeof(installed_inheritable),
+			  &cred->cap_inheritable))
+		return -1;
+
+	*effective = kernel_cap_to_mask(&installed_effective);
+	*permitted = kernel_cap_to_mask(&installed_permitted);
+	*inheritable = kernel_cap_to_mask(&installed_inheritable);
 	return 0;
 }
 
@@ -496,14 +532,22 @@ static __always_inline void emit_syscall_result(
 	bpf_ringbuf_submit(out, 0);
 }
 
-/* Emit masks installed by a successful capset call. */
+/* Emit kernel-owned masks installed by a successful capset call. */
 static __always_inline void emit_capset_result(
 				const struct syscall_state *syscall, __s64 ret)
 {
 	struct cap_event *out;
 	__u64 pid_tgid;
+	__u64 effective, permitted, inheritable;
 
-	if (!syscall->capset_valid || ret != 0)
+	if (!syscall->record_capset || ret != 0)
+		return;
+	/* No userspace runs between commit_creds() and this tracepoint. Reading
+	 * the current thread's immutable credentials binds the success result to
+	 * the exact masks the kernel installed, even if another thread races the
+	 * original userspace buffer.
+	 */
+	if (read_current_capsets(&effective, &permitted, &inheritable))
 		return;
 
 	out = bpf_ringbuf_reserve(&cap_events, sizeof(*out), 0);
@@ -515,9 +559,9 @@ static __always_inline void emit_capset_result(
 	out->pid = pid_tgid >> 32;
 	out->syscall_nr = syscall->nr;
 	out->syscall_ret = ret;
-	out->capset_effective = syscall->capset_effective;
-	out->capset_permitted = syscall->capset_permitted;
-	out->capset_inheritable = syscall->capset_inheritable;
+	out->capset_effective = effective;
+	out->capset_permitted = permitted;
+	out->capset_inheritable = inheritable;
 	out->event_type = CAP_EVENT_CAPSET;
 	bpf_ringbuf_submit(out, 0);
 }
@@ -550,8 +594,9 @@ static __always_inline void emit_keepcaps_result(
  * @ctx: raw_syscalls/sys_exit tracepoint context.
  *
  * Emits the raw return value when the invocation contained denied capability
- * checks. A successful capset also emits its requested masks, and keepcaps
- * prctls emit their result so userspace can pair credential transitions.
+ * checks. A successful capset also emits its kernel-installed masks.
+ * Keepcaps prctls emit their result so userspace can pair credential
+ * transitions.
  * Removes the per-thread state before returning 0.
  */
 SEC("tracepoint/raw_syscalls/sys_exit")

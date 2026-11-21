@@ -199,6 +199,19 @@ static void emit_capset(__s64 result, __u64 effective, __u64 permitted,
 		fail("capset event was rejected");
 }
 
+/* Emit an authenticated successful capset from the initial process. */
+static void emit_initial_capset(void)
+{
+	struct cap_event event = {
+		.pid = 1234,
+		.syscall_nr = TEST_CAPSET_NR,
+		.event_type = CAP_EVENT_CAPSET,
+	};
+
+	if (handle_cap_event(NULL, &event, sizeof(event)) != 0)
+		fail("initial capset event was rejected");
+}
+
 static void setup_events(void)
 {
 	int i;
@@ -518,8 +531,11 @@ static void test_optional_setpcap(void)
 	check = &state.app.checks[CAP_SETPCAP];
 
 	handle_cap_event(NULL, &event, sizeof(event));
-	if (!state.capset_observed || cap_total_checks(check) != 0)
-		fail("Optional SETPCAP check polluted accounting or lost phase");
+	if (state.capset_observed || cap_total_checks(check) != 0)
+		fail("Unproven capset check polluted accounting or changed phase");
+	emit_initial_capset();
+	if (!state.capset_observed)
+		fail("Authenticated capset result did not change phase");
 
 	/* The same optional probe from a child is harmless, even if denied. */
 	event.pid++;
@@ -721,7 +737,7 @@ static void test_keepcaps_scope(void)
 	reset_keepcaps_test();
 	/* The ordinary capset-only case must keep genuine operational use. */
 	emit_check(CAP_SETUID, TEST_ID_NR, 1);
-	emit_check(CAP_SETPCAP, TEST_CAPSET_NR, 1);
+	emit_initial_capset();
 	emit_check(CAP_SETUID, TEST_ID_NR, 1);
 	if (state.app.checks[CAP_SETUID].granted != 1 ||
 	    state.app.checks[CAP_SETUID].op_granted != 1)

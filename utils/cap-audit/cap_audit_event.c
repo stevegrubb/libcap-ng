@@ -261,7 +261,7 @@ static void handle_syscall_result(const struct cap_event *e)
 		       (unsigned long long)e->denied_caps);
 }
 
-/* Mark the first capset from the initial process as the phase boundary. */
+/* Mark the first authenticated successful capset as the phase boundary. */
 static void observe_initial_capset(const struct cap_event *e)
 {
 	if (state.capset_observed ||
@@ -358,8 +358,6 @@ int handle_cap_event(void *ctx __attribute__((unused)), void *data,
 		       syscall_name_from_nr(e->syscall_nr) ?: "unknown",
 		       e->comm);
 	}
-
-	observe_initial_capset(e);
 
 	/*
 	 * The BPF cap_capset probe proved that new I fits within old I | P,
