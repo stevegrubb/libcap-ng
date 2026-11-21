@@ -10,6 +10,11 @@
 - Fix user namespace detection in cap-audit capability checks
 - Preserve cap-audit tracing when the main thread exits or a worker calls exec
 - Fix cap-audit task cleanup on newer kernels
+- Honor supplementary group DROP precedence in capng_change_id
+- Escape terminal controls in filecap pathnames and utility output
+- Prevent false capset evidence from corrupting cap-audit recommendations
+- Detect compat-ABI capset calls and phase transitions in cap-audit
+- Fix malformed UTF-8 handling and preserve Unicode metadata in netcap JSON
 
 0.9.6
 - Fix supplementary group changes in capng_change_id
