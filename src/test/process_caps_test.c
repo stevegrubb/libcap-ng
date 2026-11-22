@@ -21,6 +21,7 @@
 #if defined(PR_CAPBSET_DROP) && defined(PR_CAP_AMBIENT)
 
 static const char *status_text;
+static int capget_error;
 static int bounds_error;
 static int ambient_error;
 static unsigned int bounds_calls;
@@ -45,6 +46,10 @@ int capget(cap_user_header_t header, const cap_user_data_t data)
 		return -1;
 	}
 	capget_calls++;
+	if (capget_error) {
+		errno = capget_error;
+		return -1;
+	}
 	caps[0].effective = 1U << CAP_CHOWN;
 	caps[0].permitted = 1U << CAP_CHOWN;
 	memcpy(data, caps, sizeof(caps));
@@ -130,6 +135,33 @@ static void test_read(int bounds_errno, int ambient_errno, int expected_errno)
 	capng_restore_state(&saved);
 }
 
+static void test_capget_failure(int error)
+{
+	void *saved;
+
+	bounds_error = ambient_error = 0;
+	capng_clear(CAPNG_SELECT_ALL);
+	check(capng_get_caps_process() == 0, "Initial snapshot read failed");
+	check(capng_have_capability(CAPNG_EFFECTIVE, CAP_CHOWN),
+	      "Initial snapshot lacks the test capability");
+	saved = capng_save_state();
+	check(saved != NULL, "Failed to save the initial snapshot");
+	bounds_calls = ambient_calls = capget_calls = 0;
+	capget_error = error;
+	check(capng_get_caps_process() == -1, "capget failure was ignored");
+	check(errno == error, "capget errno was lost");
+	check(capget_calls == 1 && !bounds_calls && !ambient_calls,
+	      "capget failure did not stop the snapshot read");
+	check(capng_have_capabilities(CAPNG_SELECT_ALL) == CAPNG_FAIL,
+	      "capget failure left a usable stale snapshot");
+	check(!capng_have_capability(CAPNG_EFFECTIVE, CAP_CHOWN),
+	      "capget failure exposed a stale capability");
+	capget_error = 0;
+	/* Restore a known-good state, as for bounding/ambient failures. */
+	capng_restore_state(&saved);
+	check(capng_get_caps_process() == 0, "Snapshot recovery failed");
+}
+
 static void test_target(pid_t pid, const char *status, int expected_errno)
 {
 	void *saved = capng_save_state();
@@ -180,6 +212,8 @@ int main(void)
 	test_read(EPERM, 0, EPERM);
 	test_read(0, EACCES, EACCES);
 	test_read(EPERM, EACCES, EPERM);
+	test_capget_failure(ESRCH);
+	test_capget_failure(EPERM);
 	test_target(0, NULL, 0);
 	/* A nonzero target distinct from the caller, with mocked capget. */
 	test_target(getpid() + 1, NULL, ENOENT);

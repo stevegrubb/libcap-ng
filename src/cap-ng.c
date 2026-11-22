@@ -756,6 +756,11 @@ int capng_get_caps_process(void)
 		return -1;
 
 	rc = capget((cap_user_header_t)&m.hdr, (cap_user_data_t)&m.data);
+	if (rc < 0) {
+		/* A failed refresh must not leave the previous snapshot usable. */
+		m.state = CAPNG_ERROR;
+		return rc;
+	}
 	if (rc == 0) {
 		m.state = CAPNG_INIT;
 #ifdef PR_CAPBSET_DROP

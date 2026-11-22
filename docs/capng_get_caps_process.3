@@ -12,7 +12,7 @@ capng_get_caps_process will get the capabilities and bounding set of the pid sto
 
 .SH "RETURN VALUE"
 
-This returns 0 on success and -1 on failure.
+This returns 0 on success and -1 on failure. A failed read invalidates the capability snapshot, so queries cannot return stale capabilities from an earlier successful read.
 
 .SH NOTES
 
