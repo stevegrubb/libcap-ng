@@ -21,7 +21,15 @@ cap_audit_path_test_LDFLAGS = -Wl,--wrap=confstr
 
 if BUILD_CAP_AUDIT
 check_PROGRAMS += cap_audit_namespace_test cap_audit_outcome_test \
-	cap_audit_recommendation_test cap_audit_service_test cap_audit_bpf_test
+	cap_audit_recommendation_test cap_audit_service_test cap_audit_bpf_test \
+	cap_audit_json_escape_test
+cap_audit_json_escape_test_SOURCES = cap_audit_json_escape_test.c \
+	${top_srcdir}/utils/cap-audit/cap_audit_util.c \
+	${top_srcdir}/utils/proc-sanitize.c
+cap_audit_json_escape_test_CPPFLAGS = $(AM_CPPFLAGS) ${LIBAUDIT_CFLAGS} \
+	-D_GNU_SOURCE
+cap_audit_json_escape_test_LDADD = ${top_builddir}/src/libcap-ng.la \
+	${LIBAUDIT_LIBS}
 cap_audit_namespace_test_SOURCES = cap_audit_namespace_test.c \
 	${top_srcdir}/utils/cap-audit/cap_audit_event.c \
 	${top_srcdir}/utils/cap-audit/cap_audit_analyze.c \

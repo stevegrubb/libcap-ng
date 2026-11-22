@@ -39,6 +39,7 @@ cap_audit_SOURCES = cap_audit.c \
 	classify_app.c \
 	classify_app.h \
 	cap_audit_util.c \
+	${top_srcdir}/utils/proc-sanitize.c \
 	cap_audit_yaml.c \
 	cap_audit.h
 nodist_cap_audit_SOURCES = cap_audit.skel.h

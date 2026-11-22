@@ -24,6 +24,7 @@
  */
 
 #include "cap_audit.h"
+#include "proc-sanitize.h"
 
 #include <errno.h>
 #include <libaudit.h>
@@ -133,6 +134,9 @@ const char *syscall_name_from_nr(int nr)
 	return audit_syscall_to_name(nr, audit_machine);
 }
 
+/* Preserve valid UTF-8; map each malformed pathname byte to U+00XX so
+ * arbitrary Linux executable names cannot make the JSON document invalid.
+ */
 char *json_escape(const char *input)
 {
 	size_t i;
@@ -145,6 +149,13 @@ char *json_escape(const char *input)
 
 	for (i = 0; input[i]; i++) {
 		unsigned char c = input[i];
+		size_t len = proc_utf8_char_len((const unsigned char *)input + i);
+
+		if (len > 1) {
+			needed += len;
+			i += len - 1;
+			continue;
+		}
 
 		switch (c) {
 		case '\"':
@@ -157,7 +168,7 @@ char *json_escape(const char *input)
 			needed += 2;
 			break;
 		default:
-			if (c < 0x20)
+			if (c < 0x20 || c >= 0x80)
 				needed += 6;
 			else
 				needed++;
@@ -172,6 +183,14 @@ char *json_escape(const char *input)
 	pos = out;
 	for (i = 0; input[i]; i++) {
 		unsigned char c = input[i];
+		size_t len = proc_utf8_char_len((const unsigned char *)input + i);
+
+		if (len > 1) {
+			memcpy(pos, input + i, len);
+			pos += len;
+			i += len - 1;
+			continue;
+		}
 
 		switch (c) {
 		case '\"':
@@ -203,7 +222,7 @@ char *json_escape(const char *input)
 			*pos++ = 't';
 			break;
 		default:
-			if (c < 0x20) {
+			if (c < 0x20 || c >= 0x80) {
 				snprintf(pos, 7, "\\u%04x", c);
 				pos += 6;
 			} else {
