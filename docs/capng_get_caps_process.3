@@ -18,7 +18,7 @@ This returns 0 on success and -1 on failure.
 
 If you are doing multi-threaded programming, calling this function will only get capabilities on the calling thread. If you want to get overall capabilities for a multi-threaded process, you can only do that before creating any threads. Afterwards, threads may be able to independently set capabilities.
 
-capng_get_caps_process needs a mounted /proc to read the current bounding set, otherwise it will fail.
+Reading another thread's bounding or ambient set requires its status file in /proc. If that metadata is unavailable, the call fails rather than substituting the calling thread's sets. For the calling thread, the library can query these sets without /proc.
 
 .SH "SEE ALSO"
 

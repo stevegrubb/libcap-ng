@@ -12,9 +12,15 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/prctl.h>
+#include <unistd.h>
+#ifdef HAVE_SYSCALL_H
+#include <sys/syscall.h>
+#include <pthread.h>
+#endif
 
 #if defined(PR_CAPBSET_DROP) && defined(PR_CAP_AMBIENT)
 
+static const char *status_text;
 static int bounds_error;
 static int ambient_error;
 static unsigned int bounds_calls;
@@ -49,7 +55,9 @@ FILE *fopen(const char *path, const char *mode)
 {
 	(void)path;
 	(void)mode;
-	/* Force prctl fallback so host procfs cannot hide an injected error. */
+	/* Supply only the metadata selected by the test, never host procfs. */
+	if (status_text)
+		return fmemopen((void *)status_text, strlen(status_text), "r");
 	errno = ENOENT;
 	return NULL;
 }
@@ -122,6 +130,48 @@ static void test_read(int bounds_errno, int ambient_errno, int expected_errno)
 	capng_restore_state(&saved);
 }
 
+static void test_target(pid_t pid, const char *status, int expected_errno)
+{
+	void *saved = capng_save_state();
+	int rc, read_errno;
+
+	check(saved != NULL, "Failed to save state for target test");
+	bounds_error = ambient_error = 0;
+	status_text = status;
+	capng_setpid(pid);
+	bounds_calls = ambient_calls = 0;
+	rc = capng_get_caps_process();
+	read_errno = errno;
+	if (expected_errno) {
+		check(rc == -1 && read_errno == expected_errno,
+		      "Remote metadata failure was not preserved");
+		check(capng_have_capabilities(CAPNG_SELECT_ALL) == CAPNG_FAIL,
+		      "Remote metadata failure left a usable snapshot");
+	} else
+		check(rc == 0, "Valid target snapshot was rejected");
+	if (expected_errno || status)
+		check(bounds_calls == 0 && ambient_calls == 0,
+		      "Remote snapshot queried the caller's capabilities");
+	else
+		check(bounds_calls && ambient_calls,
+		      "Self snapshot did not use prctl fallback");
+	status_text = NULL;
+	capng_restore_state(&saved);
+}
+
+#ifdef HAVE_SYSCALL_H
+static void *test_thread_target(void *unused)
+{
+	(void)unused;
+	capng_clear(CAPNG_SELECT_ALL);
+	/* In a worker, the process leader's PID is not our own TID. */
+	test_target(getpid(), NULL, ENOENT);
+	test_target((pid_t)syscall(__NR_gettid), NULL, 0);
+	test_target(0, NULL, 0);
+	return NULL;
+}
+#endif
+
 int main(void)
 {
 	/* Complete feature detection while every mocked query can succeed. */
@@ -130,6 +180,21 @@ int main(void)
 	test_read(EPERM, 0, EPERM);
 	test_read(0, EACCES, EACCES);
 	test_read(EPERM, EACCES, EPERM);
+	test_target(0, NULL, 0);
+	/* A nonzero target distinct from the caller, with mocked capget. */
+	test_target(getpid() + 1, NULL, ENOENT);
+	test_target(getpid() + 1, "Name:\ttarget\n", ENODATA);
+	test_target(getpid() + 1, "CapBnd:\t0000000000000001\n", ENODATA);
+	test_target(getpid() + 1, "CapBnd:\t0000000000000001\n"
+		    "CapAmb:\t0000000000000001\n", 0);
+#ifdef HAVE_SYSCALL_H
+	pthread_t thread;
+
+	test_target((pid_t)syscall(__NR_gettid), NULL, 0);
+	check(pthread_create(&thread, NULL, test_thread_target, NULL) == 0,
+	      "Failed to create target test thread");
+	check(pthread_join(thread, NULL) == 0, "Failed to join test thread");
+#endif
 	puts("Process capability read error tests passed");
 	return EXIT_SUCCESS;
 }

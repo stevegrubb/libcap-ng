@@ -33,7 +33,8 @@ change_id_transition_test_LDADD = ${top_builddir}/src/libcap-ng.la
 file_caps_test_SOURCES = file_caps_test.c ${top_srcdir}/src/lookup_table.c
 file_caps_test_CPPFLAGS = $(AM_CPPFLAGS) -D_GNU_SOURCE
 securebits_test_LDADD = ${top_builddir}/src/libcap-ng.la
-process_caps_test_LDADD = ${top_builddir}/src/libcap-ng.la
+process_caps_test_LDADD = ${top_builddir}/src/libcap-ng.la -lpthread
+process_caps_test_CPPFLAGS = $(AM_CPPFLAGS) -D_GNU_SOURCE
 
 clean-local:
 	rm -f utils_test$(EXEEXT) utils_test.log utils_test.trs \

@@ -620,6 +620,20 @@ int capng_stage_additional_groups(const gid_t *gids, size_t count)
 	return 0;
 }
 
+#if defined(PR_CAPBSET_DROP) || defined(PR_CAP_AMBIENT)
+static int target_is_current_thread(void)
+{
+	if (m.hdr.pid == 0)
+		return 1;
+#ifdef HAVE_SYSCALL_H
+	return m.hdr.pid == (int)syscall(__NR_gettid);
+#else
+	/* A process ID alone cannot identify the calling thread. */
+	return 0;
+#endif
+}
+#endif
+
 #ifdef PR_CAPBSET_DROP
 static int get_bounding_set(void)
 {
@@ -634,6 +648,7 @@ static int get_bounding_set(void)
 		(int)getpid());
 #endif
 	f = fopen(buf, "re");
+	rc = errno;
 	if (f) {
 		__fsetlocking(f, FSETLOCKING_BYCALLER);
 		while (fgets(buf, sizeof(buf), f)) {
@@ -647,8 +662,14 @@ static int get_bounding_set(void)
 			clear_bounding_set_changed(&m);
 			return 0;
 		}
-		// Didn't find bounding set, fall through and try prctl way
+		/* Missing metadata is not evidence about the calling thread. */
+		rc = ferror(f) ? EIO : ENODATA;
 		fclose(f);
+	}
+	/* prctl queries the caller, never the PID selected by capng_setpid. */
+	if (!target_is_current_thread()) {
+		errno = rc;
+		return -1;
 	}
 	// Might be in a container with no procfs - do it the hard way
 	memset(m.bounds, 0, sizeof(m.bounds));
@@ -683,6 +704,7 @@ static int get_ambient_set(void)
 		(int)getpid());
 #endif
 	f = fopen(buf, "re");
+	rc = errno;
 	if (f) {
 		__fsetlocking(f, FSETLOCKING_BYCALLER);
 		while (fgets(buf, sizeof(buf), f)) {
@@ -695,8 +717,13 @@ static int get_ambient_set(void)
 				return -1;
 			return 0;
 		}
+		rc = ferror(f) ? EIO : ENODATA;
 		fclose(f);
-		// Didn't find ambient set, fall through and try prctl way
+	}
+	/* prctl queries the caller, never the PID selected by capng_setpid. */
+	if (!target_is_current_thread()) {
+		errno = rc;
+		return -1;
 	}
 	// Might be in a container with no procfs - do it the hard way
 	memset(m.ambient, 0, sizeof(m.ambient));
