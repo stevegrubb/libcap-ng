@@ -28,7 +28,6 @@ static char *fixture_sanitize(const char *path);
 #undef capng_update
 #undef capng_get_caps_fd
 #undef main
-#include <limits.h>
 #include <sys/wait.h>
 
 enum {
@@ -101,13 +100,19 @@ static char *fixture_sanitize(const char *path)
 static int check_output(FILE *file, const char *expected, const char *stream,
 			int show)
 {
-	char output[4096];
-	char *safe_expected, *safe_output;
+	char *output, *safe_expected, *safe_output;
+	size_t capacity = strlen(expected) + 1;
 	size_t len, offset;
 	int failed;
 
+	/* Include one extra byte so unexpected output cannot match a prefix.
+	 * Expected text includes the full escaped pathname and diagnostics.
+	 */
+	output = malloc(capacity + 1);
+	if (!output)
+		fail("Cannot allocate filecap output capture");
 	rewind(file);
-	len = fread(output, 1, sizeof(output) - 1, file);
+	len = fread(output, 1, capacity, file);
 	output[len] = '\0';
 	failed = ferror(file) || fgetc(file) != EOF || strcmp(output, expected);
 	if (failed || show) {
@@ -130,6 +135,7 @@ static int check_output(FILE *file, const char *expected, const char *stream,
 		free(safe_expected);
 		free(safe_output);
 	}
+	free(output);
 	fclose(file);
 	return failed;
 }
@@ -214,47 +220,55 @@ int main(void)
 		"effective", "permitted", "effective",
 	};
 	char directory[] = "filecap-test.XXXXXX";
-	char path[PATH_MAX], safe[PATH_MAX], output[4096], errors[4096];
-	char *args[] = { "filecap", path, NULL, NULL };
-	char *absolute;
+	char *args[] = { "filecap", NULL, NULL, NULL };
+	char *absolute, *path, *safe, *output, *errors;
 	size_t i;
 	int fd;
 
 	if (!mkdtemp(directory) || !(absolute = realpath(directory, NULL)))
 		fail("Cannot create filecap fixture directory");
 	for (i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
-		snprintf(path, sizeof(path), "%s/%s", absolute, names[i].name);
-		snprintf(safe, sizeof(safe), "%s/%s", absolute, names[i].safe);
+		if (asprintf(&path, "%s/%s", absolute, names[i].name) < 0 ||
+		    asprintf(&safe, "%s/%s", absolute, names[i].safe) < 0)
+			fail("Cannot allocate filecap fixture paths");
+		args[1] = path;
 		fd = open(path, O_CREAT|O_EXCL|O_WRONLY|O_CLOEXEC, 0600);
 		if (fd < 0 || close(fd))
 			fail("Cannot create filecap fixture");
 		for (fixture = EFFECTIVE_CAPS; fixture <= FULL_CAPS; fixture++) {
-			snprintf(output, sizeof(output),
+			if (asprintf(&output,
 				 "%-9s %-22s capabilities  rootid\n%s %-22s %s\n",
 				 "set", "file", sets[fixture], safe,
-				 fixture == FULL_CAPS ? "full" : "chown");
+				 fixture == FULL_CAPS ? "full" : "chown") < 0)
+				fail("Cannot allocate expected filecap output");
 			run_filecap(args, output, "", 0);
+			free(output);
 		}
 		fixture = NO_CAPS;
 		run_filecap(args, "", "", 0);
 		fixture = READ_ERROR;
-		snprintf(errors, sizeof(errors),
+		if (asprintf(&errors,
 			 "Unable to get capabilities of %s: %s\n", safe,
-			 strerror(EIO));
+			 strerror(EIO)) < 0)
+			fail("Cannot allocate expected filecap diagnostic");
 		run_filecap(args, "", errors, 1);
+		free(errors);
 
 		fixture = EFFECTIVE_CAPS;
 		args[2] = "chown";
-		snprintf(errors, sizeof(errors),
+		if (asprintf(&errors,
 			 "Could not set capabilities on %s: %s\n", safe,
-			 strerror(EPERM));
+			 strerror(EPERM)) < 0)
+			fail("Cannot allocate expected filecap diagnostic");
 		run_filecap(args, "", errors, 1);
+		free(errors);
 		args[2] = NULL;
 
 		reject_update = 1;
-		snprintf(errors, sizeof(errors),
+		if (asprintf(&errors,
 			 "Could not stage capability for %s: %s\n", safe,
-			 strerror(EINVAL));
+			 strerror(EINVAL)) < 0)
+			fail("Cannot allocate expected filecap diagnostic");
 		/* Reject both an empty and a partially staged replacement.
 		 * In each case the writer must remain unreachable.
 		 */
@@ -264,14 +278,17 @@ int main(void)
 					"sys_admin", NULL }, "", errors, 1);
 		run_filecap((char *[]) { "filecap", path, "none",
 					"sys_admin", NULL }, "", errors, 1);
+		free(errors);
 		reject_update = 0;
 
 		/* Recursive scans use the same callback with single_file unset. */
 		args[1] = absolute;
-		snprintf(output, sizeof(output),
+		if (asprintf(&output,
 			 "%-9s %-22s capabilities  rootid\neffective %-22s chown\n",
-			 "set", "file", safe);
+			 "set", "file", safe) < 0)
+			fail("Cannot allocate expected filecap output");
 		run_filecap(args, output, "", 0);
+		free(output);
 		args[1] = path;
 
 		allocation_failure = 1;
@@ -279,9 +296,13 @@ int main(void)
 		allocation_failure = 0;
 		if (unlink(path))
 			fail("Cannot remove filecap fixture");
-		snprintf(errors, sizeof(errors), "Error checking path %s: %s\n",
-			 safe, strerror(ENOENT));
+		if (asprintf(&errors, "Error checking path %s: %s\n",
+			     safe, strerror(ENOENT)) < 0)
+			fail("Cannot allocate expected filecap diagnostic");
 		run_filecap(args, "", errors, 1);
+		free(errors);
+		free(path);
+		free(safe);
 	}
 	free(absolute);
 	if (rmdir(directory))
