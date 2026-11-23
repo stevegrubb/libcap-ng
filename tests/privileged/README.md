@@ -21,6 +21,9 @@ The initial suites are:
   and granted/denied capability checks in a new user namespace.
 
 The lifecycle fixtures synchronize with thread exit or exec rather than sleeps.
+After joining the leader, the survivor also waits for its zombie state: on older
+kernels the join wakeup precedes the exit tracepoint, whereas zombie publication
+follows it. This ensures the worker's operations exercise tracing after that hook.
 They compare a post-transition capset with `capget`, then verify the PID, TID,
 syscall, capability, result, and user-namespace inode of a deliberately denied
 bounding-set operation. The tracer also requires its task-state maps to be empty

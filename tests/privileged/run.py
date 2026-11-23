@@ -239,7 +239,11 @@ def check_fixture(text, case, live=True):
         markers = re.findall(r"^LIFE (\S+) (\d+) (\d+)$", text, re.MULTILINE)
         markers = [(tag, int(p), int(t)) for tag, p, t in markers]
         if case == "leader-exit":
-            if markers != [("survivor", pid, tid)] or tid == pid:
+            # A join can finish before the kernel's exit tracepoint. Require
+            # the fixture's later zombie-state observation before trusting
+            # its claim that these operations follow the leader's exit hook.
+            if (markers != [("leader-zombie", pid, pid),
+                            ("survivor", pid, tid)] or tid == pid):
                 raise AssertionError("No surviving non-leader operation was demonstrated")
         elif case == "worker-exec":
             if (len(markers) != 2 or markers[0][0] != "before-exec" or

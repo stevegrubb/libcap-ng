@@ -304,17 +304,52 @@ static void denied_bounding_check(void)
 	expected_check(SYS_prctl, CAP_SETPCAP, 0);
 }
 
+static void wait_for_leader_exit(void)
+{
+	/* On kernels such as 5.14, exit_mm() wakes pthread_join() before
+	 * sched_process_exit runs. Joining alone can let the worker's checks
+	 * pass before the BPF exit hook has removed the leader's state.
+	 * EXIT_ZOMBIE is published later by exit_notify(), after that hook.
+	 * /proc/self/status describes the leader, not this surviving worker;
+	 * the live worker keeps the leader from being reaped or its PID reused.
+	 * The workload alarm bounds this wait without a scheduling-time guess.
+	 */
+	for (;;) {
+		FILE *status = fopen("/proc/self/status", "r");
+		char line[256], state = 0;
+
+		if (!status)
+			die("open leader status");
+		while (fgets(line, sizeof(line), status))
+			if (sscanf(line, "State: %c", &state) == 1)
+				break;
+		if (ferror(status))
+			die("read leader status");
+		fclose(status);
+		if (!state) {
+			fprintf(stderr, "Leader status has no task state\n");
+			exit(1);
+		}
+		if (state == 'Z')
+			break;
+		sched_yield();
+	}
+	printf("LIFE leader-zombie %u %u\n", (unsigned)getpid(),
+	       (unsigned)getpid());
+	fflush(stdout);
+}
+
 static void *survive_leader(void *unused)
 {
 	int rc;
 	(void)unused;
 
-	/* Join proves the leader exited before the observed operations. */
 	rc = pthread_join(leader, NULL);
 	if (rc) {
 		errno = rc;
 		die("join exited leader");
 	}
+	wait_for_leader_exit();
 	printf("LIFE survivor %u %u\n", (unsigned)getpid(),
 	       (unsigned)syscall(SYS_gettid));
 	fflush(stdout);

@@ -99,7 +99,8 @@ class EventCheckerTest(unittest.TestCase):
 
     def test_lifecycle(self):
         for case, tid, marker in (
-                ("leader-exit", 11, "LIFE survivor 10 11\n"),
+                ("leader-exit", 11,
+                 "LIFE leader-zombie 10 10\nLIFE survivor 10 11\n"),
                 ("worker-exec", 10,
                  "LIFE before-exec 10 11\nLIFE after-exec 10 10\n")):
             expected = "ECHK 10 {} 157 8 0 4026531837\n".format(tid)
@@ -120,6 +121,12 @@ class EventCheckerTest(unittest.TestCase):
                 damaged.append(text.replace(observed, " ".join(corrupt) + "\n"))
             if case == "worker-exec":
                 damaged.append(text.replace("before-exec 10 11", "before-exec 10 10"))
+            else:
+                damaged.extend((
+                    text.replace("LIFE leader-zombie 10 10\n", ""),
+                    text.replace("leader-zombie 10 10", "leader-zombie 10 11"),
+                    text.replace(marker,
+                                 "LIFE survivor 10 11\nLIFE leader-zombie 10 10\n")))
             for n, bad in enumerate(damaged):
                 with self.subTest(case=case, corruption=n):
                     with self.assertRaises(AssertionError):
