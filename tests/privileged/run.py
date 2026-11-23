@@ -3,6 +3,7 @@
 """Opt-in kernel integration tests; make check remains the prerequisite."""
 import argparse
 import collections
+import contextlib
 import hashlib
 import json
 import os
@@ -145,7 +146,7 @@ def host_context():
             "btf_readable": os.access("/sys/kernel/btf/vmlinux", os.R_OK)}
 
 
-def execute(command, log, library_path=None):
+def execute(command, log, library_path=None, report=None):
     # A new process group lets timeout/interrupt cleanup include fixture threads
     # and children. Closing the helpers' BPF fds detaches their probes.
     env = os.environ.copy()
@@ -153,8 +154,9 @@ def execute(command, log, library_path=None):
         env.pop(name, None)
     if library_path is not None:
         env["LD_LIBRARY_PATH"] = str(library_path)
-    with log.open("w") as stream:
-        process = subprocess.Popen(command, stdout=stream, stderr=subprocess.STDOUT,
+    with log.open("w") as stream, (
+            report.open("w") if report else contextlib.nullcontext(stream)) as out:
+        process = subprocess.Popen(command, stdout=out, stderr=stream,
                                    start_new_session=True, env=env)
         try:
             status = process.wait(timeout=45)
@@ -318,7 +320,7 @@ def compare_events(text, case):
     return None
 
 
-def compare_cli(text, case):
+def compare_cli(text, case, report=None):
     if "Application exited with status 77" in text:
         return "Workload prerequisite unavailable; see log"
     if "Application exited with status 0" not in text:
@@ -336,7 +338,11 @@ def compare_cli(text, case):
             text)
         if observed_checks != expected_checks:
             raise AssertionError("CLI post-transition capability checks differ")
-    obj, _ = json.JSONDecoder().raw_decode(text[text.index("{\n"):])
+    # The live runner supplies the auditor's dedicated stdout document.
+    # Synthetic oracle tests may append that document to their fixture log.
+    obj = json.loads(report if report is not None else text[text.index("{\n"):])
+    if not obj.get("observation", {}).get("collection_complete"):
+        raise AssertionError("CLI collection did not complete")
     expected = [(pid, m) for (_, pid), v in records(text)["EXP"].items() for m in v]
     observed = [(int(pid), tuple(int(m, 16) for m in (e, p, i)))
                 for pid, e, p, i in re.findall(
@@ -386,9 +392,12 @@ class Run:
 
     def test(self, name, command, validator=None):
         try:
+            report = (self.directory / (name + ".report.json")
+                      if Path(command[0]).name == "cap-audit" and "-j" in command
+                      else None)
             status, text = execute([str(c) for c in command],
                                    self.directory / (name + ".log"),
-                                   self.fixtures)
+                                   self.fixtures, report)
         except PermissionError as error:
             return self.result(name, "SKIP", "Execution unavailable: " + str(error))
         if status == 77:
@@ -473,7 +482,9 @@ def run_suites(run):
                     command = [helpers / "cap-audit",
                                "-v", "-j", "--", helper, "--work", case]
                     run.test("cli-" + case, command,
-                             lambda text, case=case: compare_cli(text, case))
+                             lambda text, case=case: compare_cli(
+                                 text, case, (run.directory /
+                                 ("cli-" + case + ".report.json")).read_text()))
                 run.test("cli-userns", [helpers / "cap-audit", "-v", "--",
                                        helper, "--work", "userns"],
                          compare_namespace_cli)

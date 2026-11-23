@@ -48,12 +48,14 @@ cap_audit_json_escape_test_CPPFLAGS = $(AM_CPPFLAGS) ${LIBAUDIT_CFLAGS} \
 cap_audit_json_escape_test_LDADD = ${top_builddir}/src/libcap-ng.la \
 	${LIBAUDIT_LIBS}
 cap_audit_namespace_test_SOURCES = cap_audit_namespace_test.c \
+	${top_srcdir}/utils/proc-sanitize.c \
 	${top_srcdir}/utils/cap-audit/cap_audit_report.c \
 	${top_srcdir}/utils/cap-audit/cap_audit_event.c \
 	${top_srcdir}/utils/cap-audit/cap_audit_analyze.c \
 	${top_srcdir}/utils/cap-audit/cap_audit_capset.c \
 	${top_srcdir}/utils/cap-audit/cap_audit_outcome.c
 cap_audit_outcome_test_SOURCES = cap_audit_outcome_test.c \
+	${top_srcdir}/utils/proc-sanitize.c \
 	${top_srcdir}/utils/cap-audit/cap_audit_report.c \
 	${top_srcdir}/utils/cap-audit/cap_audit_event.c \
 	${top_srcdir}/utils/cap-audit/cap_audit_analyze.c \

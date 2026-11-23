@@ -5,10 +5,11 @@ import json
 import os
 from pathlib import Path
 import stat
+import sys
 import tempfile
 import unittest
 
-from run import compare_cli, compare_events, compare_namespace_cli, copy_program
+from run import compare_cli, compare_events, compare_namespace_cli, copy_program, execute
 
 
 def record(tag, masks, tid=10, pid=10):
@@ -16,6 +17,16 @@ def record(tag, masks, tid=10, pid=10):
 
 
 class StagingTest(unittest.TestCase):
+    def test_report_channel(self):
+        with tempfile.TemporaryDirectory() as path:
+            log, report = Path(path) / "run.log", Path(path) / "report.json"
+            status, text = execute(
+                [sys.executable, "-c",
+                 "import sys; print('{}'); print('workload', file=sys.stderr)"],
+                log, report=report)
+            self.assertEqual(status, 0)
+            self.assertEqual(text, "workload\n")
+            self.assertEqual(json.loads(report.read_text()), {})
     def test_private_binary(self):
         with tempfile.TemporaryDirectory() as path:
             root = Path(path)
@@ -137,6 +148,7 @@ class EventCheckerTest(unittest.TestCase):
                    cli_check +
                    "Application exited with status 0\n" +
                    json.dumps({"successful_capset_calls": 1,
+                               "observation": {"collection_complete": True},
                                "capability_drop_observed": True}, indent=2))
             self.assertIsNone(compare_cli(cli, case))
             # Keep the workload's ECHK and CAPSET evidence intact: neither
@@ -187,8 +199,17 @@ class EventCheckerTest(unittest.TestCase):
                 "[CAPSET] pid=10 effective=0x0 permitted=0x0 inheritable=0x0\n" +
                 "Application exited with status 0\n" +
                 json.dumps({"successful_capset_calls": 1,
+                            "observation": {"collection_complete": True},
                             "capability_drop_observed": True}, indent=2))
         self.assertIsNone(compare_cli(text, "zero"))
+        # An apparent document in a workload log cannot override the report.
+        report = text[text.index("{\n"):]
+        self.assertIsNone(compare_cli('{"forged": true}\n' + text, "zero", report))
+        with self.assertRaises(AssertionError):
+            compare_cli(text, "zero", report.replace('"collection_complete": true',
+                                                     '"collection_complete": false'))
+        with self.assertRaises(ValueError):
+            compare_cli(text, "zero", report + "\n{}")
         for old, new in (("pid=10", "pid=11"), ("effective=0x0", "effective=0x1"),
                          ('"successful_capset_calls": 1',
                           '"successful_capset_calls": 2'),

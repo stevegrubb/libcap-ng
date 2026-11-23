@@ -24,6 +24,7 @@
  */
 
 #include "cap_audit.h"
+#include "proc-sanitize.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -259,7 +260,7 @@ static void handle_syscall_result(const struct cap_event *e)
 	}
 
 	if (state.verbose)
-		printf("[SYSCALL] pid=%u syscall=%s return=%lld "
+		fprintf(stderr, "[SYSCALL] pid=%u syscall=%s return=%lld "
 		       "denied_caps=0x%llx\n", e->pid,
 		       syscall_name_from_nr(e->syscall_nr) ?: "unknown",
 		       (long long)e->syscall_ret,
@@ -278,7 +279,7 @@ static void observe_initial_capset(const struct cap_event *e)
 
 	state.capset_observed = 1;
 	if (state.verbose)
-		printf("[CAP] Capability drop detected (capset from "
+		fprintf(stderr, "[CAP] Capability drop detected (capset from "
 		       "initial PID); switching to operational phase\n");
 }
 
@@ -290,12 +291,19 @@ static void handle_capset_result(const struct cap_event *e)
 {
 	if (e->syscall_ret != 0)
 		return;
+	/* A child can install sets inside a different user namespace. Those
+	 * bits cannot justify grants in the auditor's namespace.
+	 */
+	if (!e->targ_ns_inum)
+		state.unknown_target_ns_observed = true;
+	else if (e->targ_ns_inum != state.baseline_user_ns_inum)
+		state.foreign_target_ns_observed = true;
 
 	record_successful_capset(e);
 	observe_initial_capset(e);
 
 	if (state.verbose)
-		printf("[CAPSET] pid=%u effective=0x%llx permitted=0x%llx "
+		fprintf(stderr, "[CAPSET] pid=%u effective=0x%llx permitted=0x%llx "
 		       "inheritable=0x%llx\n", e->pid,
 		       (unsigned long long)e->capset_effective,
 		       (unsigned long long)e->capset_permitted,
@@ -333,13 +341,13 @@ int handle_cap_event(void *ctx __attribute__((unused)), void *data,
 	if (is_always_noise(e)) {
 		if (state.verbose) {
 			if (e->syscall_nr == state.app.execve_nr)
-				printf("[CAP] Filtered exec noise: "
+				fprintf(stderr, "[CAP] Filtered exec noise: "
 				       "cap=%s syscall=%s\n",
 				       cap_name_safe(e->capability),
 				       syscall_name_from_nr(e->syscall_nr) ?:
 				       "unknown");
 			else
-				printf("[CAP] Filtered advisory check: "
+				fprintf(stderr, "[CAP] Filtered advisory check: "
 				       "cap=%s syscall=%s (CAP_OPT_NOAUDIT)\n",
 				       cap_name_safe(e->capability),
 				       syscall_name_from_nr(e->syscall_nr) ?:
@@ -356,14 +364,23 @@ int handle_cap_event(void *ctx __attribute__((unused)), void *data,
 	if (e->targ_ns_inum != 0 && state.baseline_user_ns_inum != 0 &&
 	    e->targ_ns_inum != state.baseline_user_ns_inum)
 		state.foreign_target_ns_observed = true;
+	if (!e->targ_ns_inum)
+		state.unknown_target_ns_observed = true;
 
 	if (state.verbose) {
-		printf("[CAP] pid=%d cap=%s result=%s syscall=%s "
+		char comm[sizeof(e->comm) + 1];
+		char *safe_comm;
+
+		memcpy(comm, e->comm, sizeof(e->comm));
+		comm[sizeof(e->comm)] = 0;
+		safe_comm = sanitize_untrusted_field(comm);
+		fprintf(stderr, "[CAP] pid=%d cap=%s result=%s syscall=%s "
 		       "comm=%s\n",
 		       e->pid, cap_name_safe(e->capability),
 		       e->result ? "GRANTED" : "DENIED",
 		       syscall_name_from_nr(e->syscall_nr) ?: "unknown",
-		       e->comm);
+		       safe_comm ? safe_comm : "[unavailable]");
+		free(safe_comm);
 	}
 
 	/*
@@ -375,7 +392,7 @@ int handle_cap_event(void *ctx __attribute__((unused)), void *data,
 	 */
 	if (e->capability == CAP_SETPCAP && e->capset_inh_optional) {
 		if (state.verbose)
-			printf("[CAP] Optional SETPCAP check in capset; "
+			fprintf(stderr, "[CAP] Optional SETPCAP check in capset; "
 			       "inheritable change does not require it\n");
 		return 0;
 	}

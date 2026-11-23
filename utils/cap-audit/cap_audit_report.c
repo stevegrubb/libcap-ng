@@ -43,6 +43,16 @@ void output_observation_json(void)
 	const struct observation_status *s = &state.observation;
 
 	printf("  \"schema_version\": 1,\n");
+	printf("  \"recommendations_eligible\": %s,\n",
+	       audit_recommendation_reason() ? "false" : "true");
+	printf("  \"recommendation_block_reason\": ");
+	if (audit_recommendation_reason())
+		printf("\"%s\"", audit_recommendation_reason());
+	else
+		printf("null");
+	printf(",\n  \"namespace_scope\": \"%s\",\n", audit_namespace_scope());
+	printf("  \"baseline_user_namespace\": %u,\n",
+	       state.baseline_user_ns_inum);
 	printf("  \"observation\": {\n");
 	printf("    \"collection_complete\": %s,\n",
 	       audit_collection_reason() ? "false" : "true");
@@ -77,6 +87,12 @@ void output_observation_yaml(void)
 	const struct observation_status *s = &state.observation;
 
 	printf("schema_version: 1\n");
+	printf("recommendations_eligible: %s\n",
+	       audit_recommendation_reason() ? "false" : "true");
+	printf("recommendation_block_reason: %s\n",
+	       audit_recommendation_reason() ?: "null");
+	printf("namespace_scope: %s\n", audit_namespace_scope());
+	printf("baseline_user_namespace: %u\n", state.baseline_user_ns_inum);
 	printf("observation:\n");
 	printf("  collection_complete: %s\n",
 	       audit_collection_reason() ? "false" : "true");
@@ -103,4 +119,27 @@ void output_observation_yaml(void)
 	printf("  capset_read_failures: %llu\n",
 	       (unsigned long long)s->capset_read_failures);
 	printf("  userspace_failures: %lu\n", s->userspace_failures);
+}
+
+const char *audit_namespace_scope(void)
+{
+	if (state.foreign_target_ns_observed)
+		return "foreign";
+	if (!state.baseline_user_ns_inum || state.unknown_target_ns_observed)
+		return "unknown";
+	return "baseline";
+}
+
+/* Renderers must apply the same decision before offering deployment advice. */
+const char *audit_recommendation_reason(void)
+{
+	const char *incomplete = audit_collection_reason();
+
+	if (incomplete)
+		return incomplete;
+	if (state.foreign_target_ns_observed)
+		return "foreign_user_namespace";
+	if (!state.baseline_user_ns_inum || state.unknown_target_ns_observed)
+		return "unknown_user_namespace";
+	return NULL;
 }

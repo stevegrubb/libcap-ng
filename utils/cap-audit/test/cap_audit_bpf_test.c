@@ -215,7 +215,8 @@ static void test_capset_evidence(void)
 		},
 	};
 	struct trace_event_raw_sys_exit exit = { .ret = 0 };
-	struct cred installed = { 0 };
+	struct user_namespace ns = { .ns.inum = 12345 };
+	struct cred installed = { .user_ns = &ns };
 	unsigned int before;
 
 	current_task = ((__u64)25 << 32) | 25;
@@ -286,7 +287,8 @@ static void test_capset_evidence(void)
 	check(submitted == before + 1 &&
 	      output.capset_effective == installed.cap_effective.val &&
 	      output.capset_permitted == installed.cap_permitted.val &&
-	      output.capset_inheritable == installed.cap_inheritable.val,
+	      output.capset_inheritable == installed.cap_inheritable.val &&
+	      output.targ_ns_inum == ns.ns.inum,
 	      "Capset event lost installed capability bits");
 
 	/* Failed calls and unsafe kernel reads establish no recommendation. */

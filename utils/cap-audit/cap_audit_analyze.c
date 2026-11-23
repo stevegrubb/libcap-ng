@@ -1424,14 +1424,20 @@ void analyze_capabilities(void)
 			"recommendations are suppressed. Collected events remain "
 			"available for diagnosis.", audit_collection_reason());
 		printf("\n");
-	} else if (state.foreign_target_ns_observed) {
+	} else if (audit_recommendation_reason()) {
 		printf("RECOMMENDATIONS:\n");
 		print_rule('-');
-		print_wrapped_text("  Warning: ",
+		if (state.foreign_target_ns_observed)
+			print_wrapped_text("  Warning: ",
 				   "Capability checks targeted a different user "
 				   "namespace. Automatic capability recommendations "
 				   "are suppressed because their safe scope cannot "
 				   "be determined.");
+		else
+			print_wrapped_text("  Warning: ",
+				"The user namespace of a capability observation "
+				"is unknown. Automatic capability recommendations "
+				"are suppressed until its safe scope is known.");
 		printf("\n");
 	} else if (state.service_cfg) {
 		print_service_recommendations();

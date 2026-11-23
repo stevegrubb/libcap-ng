@@ -238,7 +238,7 @@ static int set_target_pid(pid_t pid)
 	}
 
 	if (state.verbose)
-		printf("[*] Registered PID %d for tracing\n", pid);
+		fprintf(stderr, "[*] Registered PID %d for tracing\n", pid);
 
 	return 0;
 }
@@ -447,7 +447,7 @@ int main(int argc, char **argv)
 		goto err_target_path;
 	}
 
-	printf("[*] Capability auditor started\n");
+	fprintf(stderr, "[*] Capability auditor started\n");
 
 	if (pipe(state.sync_pipe) != 0) {
 		fprintf(stderr, "Error: pipe failed: %s\n", strerror(errno));
@@ -475,6 +475,12 @@ int main(int argc, char **argv)
 
 		close(exec_pipe[0]);
 		close(state.sync_pipe[1]);
+		/* Machine reports own stdout. The executed workload receives
+		 * stderr for its ordinary output and no copy of that report fd.
+		 */
+		if ((state.json_output || state.yaml_output) &&
+		    dup2(STDERR_FILENO, STDOUT_FILENO) < 0)
+			goto child_launch_failed;
 		bytes = read(state.sync_pipe[0], &sync_byte, 1);
 		if (bytes != 1) {
 			if (bytes < 0)
@@ -575,11 +581,11 @@ child_launch_failed:
 
 	read_system_state(&state.app);
 	if (state.app.prog_type == PYTHON && state.verbose)
-		printf("[*] Script interpreter: %s\n", state.app.exe);
+		fprintf(stderr, "[*] Script interpreter: %s\n", state.app.exe);
 	if (state.service_cfg && state.verbose)
 		print_service_config(state.service_cfg);
-	printf("[*] Tracing application: %s (PID %d)\n", state.app.exe, child);
-	printf("[*] Press Ctrl-C to stop\n\n");
+	fprintf(stderr, "[*] Tracing application: %s (PID %d)\n", state.app.exe, child);
+	fprintf(stderr, "[*] Press Ctrl-C to stop\n\n");
 
 	signal(SIGINT, sig_handler);
 	signal(SIGTERM, sig_handler);
@@ -599,11 +605,11 @@ child_launch_failed:
 			state.observation.wait_status = wstatus;
 			state.observation.stop_reason = TRACE_STOP_TARGET_EXIT;
 			if (WIFEXITED(wstatus))
-				printf(
+				fprintf(stderr,
 				   "\n[*] Application exited with status %d\n",
 				   WEXITSTATUS(wstatus));
 			else if (WIFSIGNALED(wstatus))
-				printf(
+				fprintf(stderr,
 				  "\n[*] Application terminated by signal %d\n",
 				  WTERMSIG(wstatus));
 			break;
@@ -616,7 +622,7 @@ child_launch_failed:
 	if (state.stop)
 		state.observation.stop_reason = TRACE_STOP_REQUESTED;
 
-	printf("[*] Analyzing results...\n");
+	fprintf(stderr, "[*] Analyzing results...\n");
 
 	/*
 	 * The normal exec/memory filters also cover interpreter teardown.

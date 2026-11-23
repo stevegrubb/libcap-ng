@@ -164,6 +164,7 @@ static void emit_check(int cap, int syscall_nr, int result)
 		.result = result,
 		.syscall_nr = syscall_nr,
 		.event_type = CAP_EVENT_CHECK,
+		.targ_ns_inum = 100,
 	};
 
 	if (handle_cap_event(NULL, &event, sizeof(event)) != 0)
@@ -194,6 +195,7 @@ static void emit_capset(__s64 result, __u64 effective, __u64 permitted,
 		.capset_permitted = permitted,
 		.capset_inheritable = inheritable,
 		.event_type = CAP_EVENT_CAPSET,
+		.targ_ns_inum = 100,
 	};
 
 	if (handle_cap_event(NULL, &event, sizeof(event)) != 0)
@@ -207,6 +209,7 @@ static void emit_initial_capset(int syscall_nr)
 		.pid = 1234,
 		.syscall_nr = syscall_nr,
 		.event_type = CAP_EVENT_CAPSET,
+		.targ_ns_inum = 100,
 	};
 
 	if (handle_cap_event(NULL, &event, sizeof(event)) != 0)
@@ -218,6 +221,7 @@ static void setup_events(void)
 	int i;
 
 	memset(&state, 0, sizeof(state));
+	state.baseline_user_ns_inum = 100;
 	state.observation.exec_confirmed = true;
 	state.observation.target_exited = true;
 	state.observation.stop_reason = TRACE_STOP_TARGET_EXIT;
@@ -522,12 +526,14 @@ static void test_optional_setpcap(void)
 		.result = 1,
 		.syscall_nr = TEST_CAPSET_NR,
 		.event_type = CAP_EVENT_CHECK,
+		.targ_ns_inum = 100,
 		.capset_inh_optional = 1,
 	};
 	struct cap_check *check;
 	char *output;
 
 	memset(&state, 0, sizeof(state));
+	state.baseline_user_ns_inum = 100;
 	state.app.exe = "/usr/bin/capset-target";
 	state.observation.exec_confirmed = true;
 	state.observation.target_exited = true;
@@ -584,6 +590,7 @@ static void test_event_reasons(void)
 	struct cap_check *check = &state.app.checks[CAP_CHOWN];
 
 	memset(&state, 0, sizeof(state));
+	state.baseline_user_ns_inum = 100;
 	state.app.pid = 1234;
 	emit_check(CAP_CHOWN, TEST_OPENAT_NR, 1);
 	state.capset_observed = true;
@@ -623,6 +630,7 @@ static void reset_keepcaps_test(void)
 		free(state.app.checks[cap].outcomes);
 	}
 	memset(&state, 0, sizeof(state));
+	state.baseline_user_ns_inum = 100;
 	state.app.pid = 1234;
 	state.app.exe = "/usr/bin/keepcaps-target";
 	state.observation.exec_confirmed = true;
@@ -638,6 +646,7 @@ static void test_keepcaps_transition(void)
 		.pid = 1234,
 		.syscall_nr = TEST_CAPSET_NR,
 		.event_type = CAP_EVENT_CAPSET,
+		.targ_ns_inum = 100,
 		.capset_permitted = (1ULL << CAP_SETGID) |
 			(1ULL << CAP_SETUID) | (1ULL << CAP_NET_BIND_SERVICE),
 	};
@@ -739,6 +748,7 @@ static void test_keepcaps_scope(void)
 		.syscall_nr = TEST_ID_NR,
 		.result = 1,
 		.event_type = CAP_EVENT_CHECK,
+		.targ_ns_inum = 100,
 	};
 	size_t i;
 
@@ -832,6 +842,60 @@ static void test_keepcaps_incomplete(void)
 	reset_keepcaps_test();
 }
 
+static struct cap_event display_event;
+
+static void emit_display_event(void)
+{
+	handle_cap_event(NULL, &display_event, sizeof(display_event));
+}
+
+static void test_report_scope(void)
+{
+	const char *scopes[] = { "baseline", "foreign", "unknown" };
+	int kind, scope;
+	char *output;
+
+	for (kind = 0; kind < 2; kind++) {
+		for (scope = 0; scope < 3; scope++) {
+			memset(&state, 0, sizeof(state));
+			state.app.exe = "/tmp/scope-target";
+			state.baseline_user_ns_inum = 100;
+			state.observation.exec_confirmed = true;
+			state.observation.target_exited = true;
+			state.observation.stop_reason = TRACE_STOP_TARGET_EXIT;
+			display_event = (struct cap_event) {
+				.event_type = kind ? CAP_EVENT_CAPSET : CAP_EVENT_CHECK,
+				.capability = CAP_NET_BIND_SERVICE,
+				.result = 1,
+				.capset_inheritable = 1ULL << CAP_NET_BIND_SERVICE,
+				.targ_ns_inum = scope == 0 ? 100 : scope == 1 ? 200 : 0,
+			};
+			emit_display_event();
+			if (strcmp(audit_namespace_scope(), scopes[scope]) ||
+			    !!audit_recommendation_reason() != (scope != 0))
+				fail("Report eligibility lost namespace scope");
+			output = capture_output(output_json, STDOUT_FILENO);
+			expect_text(output, scopes[scope]);
+			expect_text(output, scope ? "\"recommendations_eligible\": false" :
+				    "\"recommendations_eligible\": true");
+			free(output);
+			output = capture_output(output_yaml, STDOUT_FILENO);
+			expect_text(output, scopes[scope]);
+			expect_text(output, scope ? "recommendations_eligible: false" :
+				    "recommendations_eligible: true");
+			free(output);
+		}
+	}
+	state.verbose = 1;
+	display_event.event_type = CAP_EVENT_CHECK;
+	memcpy(display_event.comm, "x\n\033[2J", 7);
+	output = capture_output(emit_display_event, STDERR_FILENO);
+	expect_text(output, "comm=x\\x0A\\x1B[2J");
+	if (strstr(output, "comm=x\n"))
+		fail("Verbose task name injected a console line");
+	free(output);
+}
+
 int main(void)
 {
 	test_keepcaps_transition();
@@ -867,6 +931,7 @@ int main(void)
 		fail("capset payloads were not filtered or classified correctly");
 	test_human_output();
 	test_structured_output();
+	test_report_scope();
 
 	puts("cap-audit syscall outcome tests passed");
 	return 0;

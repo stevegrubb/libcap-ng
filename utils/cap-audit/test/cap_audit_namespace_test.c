@@ -170,6 +170,7 @@ int main(void)
 
 	expect_suppressed(analyze_event(200, 1));
 	expect_suppressed(analyze_event(200, 0));
+	expect_suppressed(analyze_event(0, 1));
 
 	puts("cap-audit namespace recommendation tests passed");
 	return 0;

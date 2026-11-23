@@ -222,6 +222,7 @@ struct audit_state {
 	bool keepcaps_incomplete;
 	__u32 baseline_user_ns_inum;
 	bool foreign_target_ns_observed;
+	bool unknown_target_ns_observed;
 	struct observation_status observation;
 	volatile sig_atomic_t stop;
 	char *service_file;
@@ -238,6 +239,8 @@ void analyze_capabilities(void);
 void output_json(void);
 void output_yaml(void);
 const char *audit_collection_reason(void);
+const char *audit_recommendation_reason(void);
+const char *audit_namespace_scope(void);
 const char *audit_stop_reason(void);
 void output_observation_json(void);
 void output_observation_yaml(void);

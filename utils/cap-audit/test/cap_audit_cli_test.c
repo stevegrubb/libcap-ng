@@ -160,6 +160,11 @@ static void run_case(char **args, int expected, const char *field)
 	rewind(capture);
 	size = fread(output, 1, sizeof(output) - 1, capture);
 	output[size] = 0;
+	if ((!strcmp(args[1], "-j") || !strcmp(args[1], "-y")) &&
+	    (strstr(output, "WORKLOAD-OUTPUT") ||
+	     (!strcmp(args[1], "-j") && output[0] != '{') ||
+	     (!strcmp(args[1], "-y") && strncmp(output, "schema_version:", 15))))
+		fail("Machine report stream contains workload or progress output");
 	if (ferror(capture) || fgetc(capture) != EOF || !strstr(output, field)) {
 		fprintf(stderr, "%s\n", output);
 		fail(field);
@@ -170,9 +175,9 @@ static void run_case(char **args, int expected, const char *field)
 int main(void)
 {
 	char *json[] = { "cap-audit", "-j", "--", "/bin/sh", "-c",
-			"exit 23", NULL };
+			"printf 'WORKLOAD-OUTPUT\\n'; exit 23", NULL };
 	char *yaml[] = { "cap-audit", "-y", "--", "/bin/sh", "-c",
-			"exit 0", NULL };
+			"printf 'WORKLOAD-OUTPUT\\n'; exit 0", NULL };
 	char *text[] = { "cap-audit", "--", "/bin/sh", "-c", "exit 0", NULL };
 	char invalid[] = "/tmp/cap-audit-invalid-XXXXXX";
 	char unit[] = "/tmp/cap-audit-unit-XXXXXX";

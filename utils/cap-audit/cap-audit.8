@@ -105,9 +105,12 @@ Print each capability check as it occurs.
 .TP
 .BR -j , " --json"
 Emit the analysis as JSON.
+Standard output contains one report document. Progress, verbose events and the
+executed workload's standard output are directed to standard error.
 .TP
 .BR -y , " --yaml"
 Emit the analysis as YAML.
+The output streams are separated as for JSON.
 .TP
 .BR -s , " --service " \fIFILE\fP
 Parse a systemd service unit file, simulate the service user, group,
@@ -214,6 +217,9 @@ Exhausting a map or the ring buffer can lose observations and produce an
 incomplete capability inventory. Loss counters are collected outside the ring
 and reported after detaching the probes. JSON and YAML include observation
 status, target execution and exit status, stop reason, and loss counters.
+Both structured formats include namespace scope and recommendation eligibility.
+Foreign or unknown user-namespace scope suppresses automatic advice in text
+and is explicitly ineligible in the structured report.
 
 3. When auditing a daemon, pass options to keep it in the foreground. If it forks and exits, that will end the session and you will only get the capabilities traced up to the exit. Here's an example keeping the daemon in the foreground:
 

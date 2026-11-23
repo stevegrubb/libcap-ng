@@ -498,10 +498,11 @@ static __always_inline __u64 kernel_cap_to_mask(const kernel_cap_t *cap)
  */
 static __always_inline int read_current_capsets(__u64 *effective,
 					 __u64 *permitted,
-					 __u64 *inheritable)
+					 __u64 *inheritable, __u32 *ns_inum)
 {
 	struct task_struct *task;
 	const struct cred *cred;
+	struct user_namespace *ns;
 	kernel_cap_t installed_effective;
 	kernel_cap_t installed_permitted;
 	kernel_cap_t installed_inheritable;
@@ -526,6 +527,8 @@ static __always_inline int read_current_capsets(__u64 *effective,
 	*effective = kernel_cap_to_mask(&installed_effective);
 	*permitted = kernel_cap_to_mask(&installed_permitted);
 	*inheritable = kernel_cap_to_mask(&installed_inheritable);
+	ns = BPF_CORE_READ(cred, user_ns);
+	*ns_inum = ns ? BPF_CORE_READ(ns, ns.inum) : 0;
 	return 0;
 }
 
@@ -559,6 +562,7 @@ static __always_inline void emit_capset_result(
 	struct cap_event *out;
 	__u64 pid_tgid;
 	__u64 effective, permitted, inheritable;
+	__u32 ns_inum;
 
 	if (!syscall->record_capset || ret != 0)
 		return;
@@ -567,7 +571,7 @@ static __always_inline void emit_capset_result(
 	 * the exact masks the kernel installed, even if another thread races the
 	 * original userspace buffer.
 	 */
-	if (read_current_capsets(&effective, &permitted, &inheritable)) {
+	if (read_current_capsets(&effective, &permitted, &inheritable, &ns_inum)) {
 		__sync_fetch_and_add(&lost_capset_reads, 1);
 		return;
 	}
@@ -584,6 +588,7 @@ static __always_inline void emit_capset_result(
 	out->capset_effective = effective;
 	out->capset_permitted = permitted;
 	out->capset_inheritable = inheritable;
+	out->targ_ns_inum = ns_inum;
 	out->event_type = CAP_EVENT_CAPSET;
 	bpf_ringbuf_submit(out, 0);
 }

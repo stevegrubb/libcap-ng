@@ -161,6 +161,7 @@ static void setup_analysis(service_config_t *service)
 	struct cap_check *check;
 
 	memset(&state, 0, sizeof(state));
+	state.baseline_user_ns_inum = 100;
 	state.observation.exec_confirmed = true;
 	state.observation.target_exited = true;
 	state.observation.stop_reason = TRACE_STOP_TARGET_EXIT;
@@ -216,6 +217,7 @@ static void setup_analysis(service_config_t *service)
 static void setup_empty_analysis(service_config_t *service)
 {
 	memset(&state, 0, sizeof(state));
+	state.baseline_user_ns_inum = 100;
 	state.observation.exec_confirmed = true;
 	state.observation.target_exited = true;
 	state.observation.stop_reason = TRACE_STOP_TARGET_EXIT;

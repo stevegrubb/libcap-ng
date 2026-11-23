@@ -859,9 +859,9 @@ static void print_cap_set_line(const char *label, const cap_set_t *set)
 	int cap;
 	int first = 1;
 
-	printf("    %s", label);
+	fprintf(stderr, "    %s", label);
 	if (!set->seen) {
-		printf("not configured\n");
+		fprintf(stderr, "not configured\n");
 		return;
 	}
 
@@ -869,13 +869,13 @@ static void print_cap_set_line(const char *label, const cap_set_t *set)
 		if (!set->caps[cap])
 			continue;
 		if (!first)
-			printf(" ");
-		printf("%s", cap_name_safe(cap));
+			fprintf(stderr, " ");
+		fprintf(stderr, "%s", cap_name_safe(cap));
 		first = 0;
 	}
 	if (first)
-		printf("(empty)");
-	printf("\n");
+		fprintf(stderr, "(empty)");
+	fprintf(stderr, "\n");
 }
 
 static const char *gid_name(gid_t gid)
@@ -908,23 +908,23 @@ void print_service_config(const service_config_t *cfg)
 		group_name = group_buf;
 	}
 
-	printf("[*] Parsed systemd service configuration\n");
+	fprintf(stderr, "[*] Parsed systemd service configuration\n");
 	if (state.service_file)
-		printf("    Unit file: %s\n", state.service_file);
-	printf("    Type: %s\n", cfg->service_type ?
+		fprintf(stderr, "    Unit file: %s\n", state.service_file);
+	fprintf(stderr, "    Type: %s\n", cfg->service_type ?
 	       cfg->service_type : "simple");
 	if (cfg->service_type && !strcmp(cfg->service_type, "forking"))
-		printf("[*] Warning: Type=forking detected. The traced "
+		fprintf(stderr, "[*] Warning: Type=forking detected. The traced "
 		       "process may daemonize; capability events after fork "
 		       "may be missed. Consider using a foreground flag if "
 		       "available.\n");
-	printf("    ExecStart: %s\n", cfg->exec_start ?
+	fprintf(stderr, "    ExecStart: %s\n", cfg->exec_start ?
 	       cfg->exec_start : "(not configured)");
-	printf("    User: %s (uid=%u)\n", cfg->user_is_set ?
+	fprintf(stderr, "    User: %s (uid=%u)\n", cfg->user_is_set ?
 	       cfg->user_raw : "root", cfg->user_is_set ?
 	       (unsigned int)cfg->user_uid : 0);
-	printf("    Group: %s (gid=%u)\n", group_name, (unsigned int)gid);
-	printf("    NoNewPrivileges: %s\n",
+	fprintf(stderr, "    Group: %s (gid=%u)\n", group_name, (unsigned int)gid);
+	fprintf(stderr, "    NoNewPrivileges: %s\n",
 	       cfg->no_new_privs ? "yes" : "no");
 	print_cap_set_line("AmbientCapabilities: ", &cfg->ambient);
 	print_cap_set_line("CapabilityBoundingSet: ", &cfg->bounding);
