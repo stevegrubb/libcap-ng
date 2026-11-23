@@ -15,6 +15,9 @@
 - Prevent false capset evidence from corrupting cap-audit recommendations
 - Detect compat-ABI capset calls and phase transitions in cap-audit
 - Fix malformed UTF-8 handling and preserve Unicode metadata in netcap JSON
+- Fail if another thread's bounding or ambient capabilities cannot be read
+- Invalidate the previous capability snapshot when capget fails
+- Fix cap-audit JSON output for executable names containing invalid UTF-8
 
 0.9.6
 - Fix supplementary group changes in capng_change_id
