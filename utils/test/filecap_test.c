@@ -9,6 +9,8 @@
 
 static int fixture_get_caps_fd(int fd);
 static int fixture_apply_caps_fd(int fd);
+static int fixture_update(capng_act_t action, capng_type_t type,
+			  unsigned int cap);
 static char *fixture_sanitize(const char *path);
 
 /*
@@ -18,10 +20,12 @@ static char *fixture_sanitize(const char *path);
 #define main filecap_main
 #define capng_get_caps_fd fixture_get_caps_fd
 #define capng_apply_caps_fd fixture_apply_caps_fd
+#define capng_update fixture_update
 #define sanitize_untrusted_field fixture_sanitize
 #include "../filecap.c"
 #undef sanitize_untrusted_field
 #undef capng_apply_caps_fd
+#undef capng_update
 #undef capng_get_caps_fd
 #undef main
 #include <limits.h>
@@ -32,6 +36,7 @@ enum {
 };
 static int fixture;
 static int allocation_failure;
+static int reject_update;
 static const char *const fixture_names[] = {
 	"effective", "permitted", "full", "no capabilities", "read error",
 };
@@ -66,8 +71,21 @@ static int fixture_get_caps_fd(int fd)
 static int fixture_apply_caps_fd(int fd)
 {
 	(void)fd;
+	if (reject_update)
+		fail("Filecap reached the xattr writer after staging failed");
 	errno = EPERM;
 	return -1;
+}
+
+/* Simulate newer build headers than the running kernel supports. */
+static int fixture_update(capng_act_t action, capng_type_t type,
+			  unsigned int cap)
+{
+	if (reject_update && cap == CAP_SYS_ADMIN) {
+		errno = EINVAL;
+		return -1;
+	}
+	return capng_update(action, type, cap);
 }
 
 /* Allocation can change errno; path diagnostics must retain the real error. */
@@ -232,6 +250,21 @@ int main(void)
 			 strerror(EPERM));
 		run_filecap(args, "", errors, 1);
 		args[2] = NULL;
+
+		reject_update = 1;
+		snprintf(errors, sizeof(errors),
+			 "Could not stage capability for %s: %s\n", safe,
+			 strerror(EINVAL));
+		/* Reject both an empty and a partially staged replacement.
+		 * In each case the writer must remain unreachable.
+		 */
+		run_filecap((char *[]) { "filecap", path, "sys_admin", NULL },
+			    "", errors, 1);
+		run_filecap((char *[]) { "filecap", path, "chown",
+					"sys_admin", NULL }, "", errors, 1);
+		run_filecap((char *[]) { "filecap", path, "none",
+					"sys_admin", NULL }, "", errors, 1);
+		reject_update = 0;
 
 		/* Recursive scans use the same callback with single_file unset. */
 		args[1] = absolute;

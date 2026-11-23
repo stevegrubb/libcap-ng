@@ -228,9 +228,18 @@ int main(int argc, char *argv[])
 				if (cap >= 0) {
 					if (path == NULL)
 						usage();
-					capng_update(CAPNG_ADD,
+					/* A compiled-in name may be unsupported by
+					 * this kernel. Never replace the file's
+					 * xattr with a partially staged request.
+					 */
+					if (capng_update(CAPNG_ADD,
 						CAPNG_PERMITTED|CAPNG_EFFECTIVE,
-						cap);
+						cap) != 0) {
+						print_path_error(
+							"Could not stage capability for",
+							path);
+						return 1;
+					}
 					capabilities = 1;
 				} else if (strcmp("none", argv[i]) == 0) {
 					capng_clear(CAPNG_SELECT_BOTH);
