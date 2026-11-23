@@ -1,68 +1,106 @@
 # Repository Guidelines
 
-This project contains a library aimed at manipulating posix capabilities
-on the Linux operating system. The repository uses autotools and has
-optional self-tests. Follow the instructions below when making changes.
+Libcap-ng provides a Linux capabilities library and utilities for inspecting
+and auditing capability use. The project uses autotools and optional Python 3
+bindings. See [README.md](README.md) for dependencies and feature details.
+
+## Repository Layout
+
+- `src/`: libcap-ng, its public header, and the ambient-dropping library.
+- `src/test/`: library tests.
+- `utils/`: pscap, netcap, filecap, and shared procfs and output helpers.
+- `utils/test/`: utility tests.
+- `utils/cap-audit/`: BPF tracing, event handling, capability analysis,
+  service handling, and output generation.
+- `utils/cap-audit/test/`: cap-audit unit tests, including simulated BPF tests.
+- `tests/privileged/`: optional kernel and live BPF integration tests.
+- `bindings/src/`: SWIG interface; `bindings/python3/` builds the bindings.
+  Tests live in `bindings/python3/test/` and `bindings/test/`.
+- `docs/`: library man pages and their checks. Utility man pages live in
+  `utils/` and `utils/cap-audit/` alongside their sources.
+- `m4/`: autotools macros; `.github/workflows/`: CI configuration.
 
 ## Building
 
-1. Bootstrap and configure the build. The README shows an example:
+Bootstrap Git checkouts with `./autogen.sh`. For a development build with
+cap-audit and Python bindings enabled:
 
-   ```
-   cd libcap-ng
-   ./autogen.sh
-   ./configure --with-python3
-   make
-   ```
-
-2. Tests can be run with `make check` as described in INSTALL:
-
-   ```
-   2. Type 'make' to compile the package.
-
-   3. Optionally, type 'make check' to run any self-tests that come with
-      the package, generally using the just-built uninstalled binaries.
-   ```
-
-3. Installation (`make install`) is typically performed only after
-successful tests.
-
-## Project Structure for Navigation
-
-- `/src`: This is where the code that makes up libcap-ng is located
-- `/utils`: This holds the code for pscap, netcap, and filecap
-- `/docs`: This holds all of the man pages
-- `/bindings`: This holds swig based python bindings for libcap-ng
-
-## Code Style
-
-Contributions should follow the Linux Kernel coding style:
-
-```
-So, if you would like to test it and report issues or even contribute code
-feel free to do so. But please discuss the contribution first to ensure
-that its acceptable. This project uses the Linux Kernel Style Guideline.
-Please follow it if you wish to contribute.
+```sh
+./autogen.sh
+./configure --enable-cap-audit --with-python3
+make
+make check
 ```
 
-In practice this means:
+For a minimal configuration, use `./configure --without-python`; cap-audit is
+disabled by default. A default build does not cover most cap-audit tests.
+Build and run ordinary tests unprivileged. Installation is not needed for tests.
 
-- Indent with tabs (8 spaces per tab).
-- Keep lines within ~80 columns.
-- Place braces and other formatting as in the kernel style.
+Cap-audit needs additional tools, development libraries, and kernel type
+information. See the README's cap-audit section for dependencies and the
+`--with-vmlinux-h=provided --with-vmlinux-h-path=/path/to/vmlinux.h` workflow.
+Use a supplied header when the build must not depend on the running kernel's
+BTF data. Netcap advanced mode and VSOCK support depend on available kernel
+headers; check the configure summary for enabled features.
 
-## Commit Messages
+Edit `configure.ac` and `Makefile.am`, not generated `configure` or `Makefile`
+files. Edit `bindings/src/capng_swig.i`, not generated SWIG wrappers.
+`vmlinux.h`, `cap_audit.bpf.o`, and `cap_audit.skel.h` in the cap-audit build
+directory are generated build products; do not hand-edit or commit them.
 
-- Use a concise one-line summary followed by a blank line and additional
-  details if needed (similar to existing commits).
+## Testing
 
-## Summary
+Run `make check` for the affected build configuration. Keep ordinary
+builds and `make check` unprivileged; do not add tests that require host-root
+access or live BPF attachment to that target.
 
-- Build with `autogen.sh`, `configure`, and `make`.
-- Run `make check` to execute the self-tests.
-- Follow Linux Kernel coding style (tabs, 80 columns).
-- Keep commit messages short and descriptive.
+Place regression tests alongside the affected component. Cover relevant
+failure and recovery paths, not just successful calls. Prefer independent
+observations over comparing two outputs derived from the same cached state.
+Synchronize lifecycle tests on observable events rather than fixed sleeps.
 
-These guidelines should help future contributors and automated tools
-work consistently within the libcap-ng repository.
+The BPF unit test executes production logic with simulated kernel helpers and
+types. It does not establish verifier acceptance, CO-RE relocation correctness,
+or live attachment. User-namespace workload checks likewise validate fixture
+behavior without proving that tracing works.
 
+Privileged integration tests are separate, opt-in, and never built or run by
+`make check`. Follow [the maintainer guide](tests/privileged/README.md) for
+unprivileged preparation, explicit privileged execution, and retained results.
+Rerun preparation after source or build changes. Report unavailable
+prerequisites as incomplete coverage, not a pass; a successful probe only
+checks prerequisites.
+
+## Portability and Compatibility
+
+Preserve glibc and musl support, optional kernel-header features, and builds
+without Python or cap-audit. Avoid assuming that build-host kernel headers
+guarantee runtime kernel support. Match validation to the configurations and
+architectures affected by a change.
+
+The current CI covers glibc, musl, and LTO builds, but does not enable Python
+bindings or cap-audit. A green CI run does not establish coverage of those
+optional components. Consult `.github/workflows/build.yml` for the actual jobs.
+
+Preserve public API and ABI compatibility. Update affected man pages when
+changing documented behavior, and keep text, JSON, and YAML output consistent
+where they describe the same information.
+
+## Code Style and Contributions
+
+Follow Linux Kernel C style: tabs with 8-column stops, lines around 80 columns,
+and kernel-style braces. Match the surrounding code and keep changes focused.
+Discuss substantial new features with the maintainers before implementing them.
+
+Explain non-obvious assumptions, ordering requirements, and failure handling
+in comments at the relevant code. Comments should explain why the behavior is
+needed; reviewers do not have the context of development conversations.
+
+Make one commit per bug or distinct issue. Use a concise summary followed by
+paragraphs explaining what was wrong, how it was fixed, and any added or updated
+tests. Describe user-visible behavior with familiar capability terminology.
+
+Leave `ChangeLog` updates to project maintainers. Contributor changes should
+describe their impact in commit messages and affected documentation instead;
+editing `ChangeLog` creates avoidable conflicts when cherry-picking fixes to
+older releases.
