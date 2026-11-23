@@ -19,6 +19,14 @@
 - Invalidate the previous capability snapshot when capget fails
 - Fix cap-audit JSON output for executable names containing invalid UTF-8
 - Add on-demand tests to verify kernel interaction. tests/privileged/README.md
+- Fix Python capng_updatev calls that fill every optional argument
+- Prevent filecap from writing partial capability sets after a staging error
+- Preserve configured ambient capabilities in cap-audit service recommendations
+- Report incomplete cap-audit traces, return status 2, and withhold advice
+- Separate cap-audit JSON/YAML output from workload and diagnostic messages
+- Add namespace scope and recommendation eligibility to cap-audit JSON/YAML
+- Report unknown privilege state and incomplete inspections in netcap advanced
+- Use effective UID for netcap's non-root status and report both UIDs
 
 0.9.6
 - Fix supplementary group changes in capng_change_id
