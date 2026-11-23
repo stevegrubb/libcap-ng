@@ -24,6 +24,7 @@
 
 #include <bpf/bpf.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <libaudit.h>
 #include <limits.h>
 #include <stdio.h>
@@ -135,7 +136,7 @@ static int read_user_ns_inum(__u32 *inum)
 
 static void sig_handler(int sig __attribute__((unused)))
 {
-	state.stop = 1;
+	state.stop = sig;
 }
 
 static int set_memlock_rlimit(void)
@@ -265,6 +266,8 @@ int main(int argc, char **argv)
 	char *target_path = NULL;
 	char **service_target_argv = NULL;
 	int separator_seen = 0;
+	int exec_pipe[2];
+	ssize_t exec_bytes;
 
 	if (argc < 2) {
 		usage(stderr, argv[0]);
@@ -453,12 +456,24 @@ int main(int argc, char **argv)
 		free(state.app.exe);
 		goto err_target_path;
 	}
+	/* EOF follows successful exec, while a child-side setup failure sends
+	 * errno. This distinguishes launch failure from the target's own exit.
+	 */
+	if (pipe2(exec_pipe, O_CLOEXEC) != 0) {
+		close(state.sync_pipe[0]);
+		close(state.sync_pipe[1]);
+		ring_buffer__free(state.rb);
+		cap_audit_bpf__destroy(state.skel);
+		free(state.app.exe);
+		goto err_target_path;
+	}
 
 	child = fork();
 	if (child == 0) {
 		char sync_byte;
 		ssize_t bytes;
 
+		close(exec_pipe[0]);
 		close(state.sync_pipe[1]);
 		bytes = read(state.sync_pipe[0], &sync_byte, 1);
 		if (bytes != 1) {
@@ -468,23 +483,37 @@ int main(int argc, char **argv)
 				fprintf(stderr,
 					"Error: failed to sync with parent\n");
 			close(state.sync_pipe[0]);
-			exit(1);
+			goto child_launch_failed;
 		}
 		close(state.sync_pipe[0]);
 		if (state.service_cfg &&
-		    apply_service_config(state.service_cfg) != 0)
-			_exit(1);
+		    apply_service_config(state.service_cfg) != 0) {
+			errno = EINVAL;
+			goto child_launch_failed;
+		}
 		/*
 		 * The earlier path check is only diagnostic. Repeat lookup here
 		 * so execvp() preserves PATH fallback if a candidate changes.
 		 */
 		execvp(state.target_argv[0], state.target_argv);
-		perror("execvp");
-		exit(1);
+child_launch_failed:
+		{
+			int error = errno ? errno : EIO;
+
+			fprintf(stderr, "Error: target launch failed: %s\n",
+				strerror(error));
+			/* An int is below PIPE_BUF and cannot be partially sent. */
+			while (write(exec_pipe[1], &error, sizeof(error)) < 0 &&
+			       errno == EINTR)
+				;
+			_exit(1);
+		}
 	} else if (child < 0) {
 		fprintf(stderr, "Error: fork failed: %s\n", strerror(errno));
 		close(state.sync_pipe[0]);
 		close(state.sync_pipe[1]);
+		close(exec_pipe[0]);
+		close(exec_pipe[1]);
 		ring_buffer__free(state.rb);
 		cap_audit_bpf__destroy(state.skel);
 		free(state.app.exe);
@@ -492,12 +521,15 @@ int main(int argc, char **argv)
 	}
 
 	state.app.pid = child;
+	state.skel->bss->initial_target_tid = child;
+	close(exec_pipe[1]);
 
 	close(state.sync_pipe[0]);
 	if (set_target_pid(child) != 0) {
 		close(state.sync_pipe[1]);
 		kill(child, SIGKILL);
 		waitpid(child, NULL, 0);
+		close(exec_pipe[0]);
 		ring_buffer__free(state.rb);
 		cap_audit_bpf__destroy(state.skel);
 		free(state.app.exe);
@@ -509,12 +541,20 @@ int main(int argc, char **argv)
 		close(state.sync_pipe[1]);
 		kill(child, SIGKILL);
 		waitpid(child, NULL, 0);
+		close(exec_pipe[0]);
 		ring_buffer__free(state.rb);
 		cap_audit_bpf__destroy(state.skel);
 		free(state.app.exe);
 		goto err_target_path;
 	}
 	close(state.sync_pipe[1]);
+	do {
+		exec_bytes = read(exec_pipe[0], &state.observation.launch_error,
+				  sizeof(state.observation.launch_error));
+	} while (exec_bytes < 0 && errno == EINTR && !state.stop);
+	close(exec_pipe[0]);
+	if (exec_bytes != 0 && exec_bytes != sizeof(int))
+		state.observation.launch_error = EIO;
 
 	{
 		char resolved[PATH_MAX];
@@ -549,11 +589,15 @@ int main(int argc, char **argv)
 		if (err < 0 && err != -EINTR) {
 			fprintf(stderr, "Error polling ring buffer: %s\n",
 				strerror(-err));
+			state.observation.stop_reason = TRACE_STOP_POLL_ERROR;
 			break;
 		}
 
 		ret_pid = waitpid(child, &wstatus, WNOHANG);
 		if (ret_pid == child) {
+			state.observation.target_exited = true;
+			state.observation.wait_status = wstatus;
+			state.observation.stop_reason = TRACE_STOP_TARGET_EXIT;
 			if (WIFEXITED(wstatus))
 				printf(
 				   "\n[*] Application exited with status %d\n",
@@ -564,7 +608,13 @@ int main(int argc, char **argv)
 				  WTERMSIG(wstatus));
 			break;
 		}
+		if (ret_pid < 0 && errno != EINTR) {
+			state.observation.stop_reason = TRACE_STOP_WAIT_ERROR;
+			break;
+		}
 	}
+	if (state.stop)
+		state.observation.stop_reason = TRACE_STOP_REQUESTED;
 
 	printf("[*] Analyzing results...\n");
 
@@ -573,7 +623,25 @@ int main(int argc, char **argv)
 	 * Drain time says nothing about when a queued check occurred, so do
 	 * not discard SYS_ADMIN/SETPCAP merely because the target has exited.
 	 */
-	ring_buffer__poll(state.rb, 0);
+	/* Freeze producers before draining and reading loss counters. Tasks
+	 * left in the target map identify descendants outside this trace.
+	 */
+	cap_audit_bpf__detach(state.skel);
+	if (ring_buffer__consume(state.rb) < 0)
+		state.observation.stop_reason = TRACE_STOP_POLL_ERROR;
+	{
+		__u32 key;
+		int fd = bpf_map__fd(state.skel->maps.target_pids);
+
+		if (bpf_map_get_next_key(fd, NULL, &key) == 0)
+			state.observation.descendants_remaining = true;
+		else if (errno != ENOENT)
+			state.observation.map_failures++;
+	}
+	state.observation.exec_confirmed = state.skel->bss->initial_exec_seen;
+	state.observation.map_failures += state.skel->bss->lost_map_updates;
+	state.observation.ring_failures = state.skel->bss->lost_ring_events;
+	state.observation.capset_read_failures = state.skel->bss->lost_capset_reads;
 	finish_cap_events();
 
 	if (state.json_output)
@@ -605,7 +673,10 @@ int main(int argc, char **argv)
 			free(state.app.checks[i].outcomes);
 	}
 
-	return 0;
+	/* A workload's nonzero exit remains diagnostic. Collection and launch
+	 * failures make this observation incomplete regardless of that exit.
+	 */
+	return audit_collection_reason() ? 2 : 0;
 
 err_target_path:
 	free(target_path);

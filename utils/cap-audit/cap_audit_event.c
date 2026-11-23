@@ -118,6 +118,7 @@ static void handle_keepcaps(const struct cap_event *e)
 		*link = calloc(1, sizeof(**link));
 		if (!*link) {
 			state.keepcaps_incomplete = true;
+			state.observation.userspace_failures++;
 			fprintf(stderr, "Warning: unable to track KEEPCAPS "
 				"transition for PID %u TID %u\n", e->pid, e->tid);
 			return;
@@ -213,8 +214,10 @@ static void add_denied_syscall(struct cap_check *check, int syscall_nr)
 		new_cap = check->denied_syscall_capacity ?
 			  check->denied_syscall_capacity * 2 : 4;
 		tmp = realloc(check->denied_syscalls, new_cap * sizeof(int));
-		if (!tmp)
+		if (!tmp) {
+			state.observation.userspace_failures++;
 			return;
+		}
 		check->denied_syscalls = tmp;
 		check->denied_syscall_capacity = new_cap;
 	}
@@ -248,9 +251,11 @@ static void handle_syscall_result(const struct cap_event *e)
 		if (!check_has_denied_syscall(check, e->syscall_nr))
 			continue;
 		if (add_cap_syscall_outcome(check, e->syscall_nr,
-					    e->syscall_ret) != 0 && state.verbose)
+					    e->syscall_ret) != 0) {
+			state.observation.userspace_failures++;
 			fprintf(stderr,
 				"Warning: unable to record syscall outcome\n");
+		}
 	}
 
 	if (state.verbose)

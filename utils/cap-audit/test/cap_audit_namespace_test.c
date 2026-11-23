@@ -127,6 +127,9 @@ static char *analyze_event(__u32 target_ns, int result)
 	};
 
 	memset(&state, 0, sizeof(state));
+	state.observation.exec_confirmed = true;
+	state.observation.target_exited = true;
+	state.observation.stop_reason = TRACE_STOP_TARGET_EXIT;
 	state.app.exe = "/usr/bin/validation-target";
 	state.app.pid = 1234;
 	state.app.prog_type = ELF;

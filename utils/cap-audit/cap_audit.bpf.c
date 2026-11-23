@@ -186,6 +186,25 @@ struct {
 	__uint(max_entries, 256 * 1024);
 } cap_events SEC(".maps");
 
+/* These counters must survive ring exhaustion. Userspace detaches the
+ * programs before reading them, so the final health decision is stable.
+ */
+__u64 lost_map_updates;
+__u64 lost_ring_events;
+__u64 lost_capset_reads;
+__u32 initial_target_tid;
+__u32 initial_exec_seen;
+
+static __always_inline struct cap_event *reserve_event(void)
+{
+	struct cap_event *out;
+
+	out = bpf_ringbuf_reserve(&cap_events, sizeof(*out), 0);
+	if (!out)
+		__sync_fetch_and_add(&lost_ring_events, 1);
+	return out;
+}
+
 /* Pair capability entry and return probes by thread. */
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
@@ -373,7 +392,8 @@ int BPF_KPROBE(trace_cap_capable, const struct cred *cred,
 	/* ns is embedded within user_namespace, not its first member. */
 	if (targ_ns)
 		ev.targ_ns_inum = BPF_CORE_READ(targ_ns, ns.inum);
-	bpf_map_update_elem(&cap_events_inflight, &pid_tgid, &ev, BPF_ANY);
+	if (bpf_map_update_elem(&cap_events_inflight, &pid_tgid, &ev, BPF_ANY))
+		__sync_fetch_and_add(&lost_map_updates, 1);
 	return 0;
 }
 
@@ -388,7 +408,7 @@ int BPF_KRETPROBE(trace_cap_capable_ret, int ret)
 	if (!stored)
 		return 0;
 
-	out = bpf_ringbuf_reserve(&cap_events, sizeof(*out), 0);
+	out = reserve_event();
 	if (!out)
 		goto cleanup;
 
@@ -429,7 +449,8 @@ int trace_sys_enter(struct trace_event_raw_sys_enter *ctx)
 		syscall.keepcaps_valid = 1;
 		syscall.keepcaps = ctx->args[1];
 	}
-	bpf_map_update_elem(&current_syscalls, &pid_tgid, &syscall, BPF_ANY);
+	if (bpf_map_update_elem(&current_syscalls, &pid_tgid, &syscall, BPF_ANY))
+		__sync_fetch_and_add(&lost_map_updates, 1);
 	return 0;
 }
 
@@ -517,7 +538,7 @@ static __always_inline void emit_syscall_result(
 	if (syscall->denied_caps == 0)
 		return;
 
-	out = bpf_ringbuf_reserve(&cap_events, sizeof(*out), 0);
+	out = reserve_event();
 	if (!out)
 		return;
 
@@ -546,10 +567,12 @@ static __always_inline void emit_capset_result(
 	 * the exact masks the kernel installed, even if another thread races the
 	 * original userspace buffer.
 	 */
-	if (read_current_capsets(&effective, &permitted, &inheritable))
+	if (read_current_capsets(&effective, &permitted, &inheritable)) {
+		__sync_fetch_and_add(&lost_capset_reads, 1);
 		return;
+	}
 
-	out = bpf_ringbuf_reserve(&cap_events, sizeof(*out), 0);
+	out = reserve_event();
 	if (!out)
 		return;
 
@@ -574,7 +597,7 @@ static __always_inline void emit_keepcaps_result(
 
 	if (!syscall->keepcaps_valid)
 		return;
-	out = bpf_ringbuf_reserve(&cap_events, sizeof(*out), 0);
+	out = reserve_event();
 	if (!out)
 		return;
 	__builtin_memset(out, 0, sizeof(*out));
@@ -641,8 +664,9 @@ int trace_sched_process_fork(struct trace_event_raw_sched_process_fork *ctx)
 	if (parent_val) {
 		__u8 child_val = *parent_val;
 
-		bpf_map_update_elem(&target_pids, &child_pid, &child_val,
-				    BPF_ANY);
+		if (bpf_map_update_elem(&target_pids, &child_pid, &child_val,
+				       BPF_ANY))
+			__sync_fetch_and_add(&lost_map_updates, 1);
 	}
 
 	return 0;
@@ -656,7 +680,7 @@ static __always_inline void emit_task_end(__u32 tid)
 
 	if (!should_record_tid(tid))
 		return;
-	out = bpf_ringbuf_reserve(&cap_events, sizeof(*out), 0);
+	out = reserve_event();
 	if (!out)
 		return;
 	__builtin_memset(out, 0, sizeof(*out));
@@ -687,7 +711,10 @@ int trace_sched_process_exec(struct trace_event_raw_sched_process_exec *ctx)
 	val = bpf_map_lookup_elem(&target_pids, &old_tid);
 	if (!val)
 		return 0;
-	bpf_map_update_elem(&target_pids, &tid, &new_val, BPF_ANY);
+	if (bpf_map_update_elem(&target_pids, &tid, &new_val, BPF_ANY))
+		__sync_fetch_and_add(&lost_map_updates, 1);
+	if (tid == initial_target_tid)
+		initial_exec_seen = 1;
 	if (old_tid != tid) {
 		__u64 old_key = (pid_tgid & 0xffffffff00000000ULL) | old_tid;
 		struct syscall_state *syscall;
@@ -696,9 +723,10 @@ int trace_sched_process_exec(struct trace_event_raw_sched_process_exec *ctx)
 		 * syscall context for capability checks after this tracepoint.
 		 */
 		syscall = bpf_map_lookup_elem(&current_syscalls, &old_key);
-		if (syscall)
-			bpf_map_update_elem(&current_syscalls, &pid_tgid,
-					    syscall, BPF_ANY);
+		if (syscall &&
+		    bpf_map_update_elem(&current_syscalls, &pid_tgid,
+					syscall, BPF_ANY))
+			__sync_fetch_and_add(&lost_map_updates, 1);
 		bpf_map_delete_elem(&current_syscalls, &old_key);
 		bpf_map_delete_elem(&cap_events_inflight, &old_key);
 		bpf_map_delete_elem(&target_pids, &old_tid);

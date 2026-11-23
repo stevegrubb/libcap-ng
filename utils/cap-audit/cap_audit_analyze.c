@@ -1410,7 +1410,21 @@ void analyze_capabilities(void)
 	}
 	printf("\n");
 
-	if (state.foreign_target_ns_observed) {
+	if (audit_collection_reason()) {
+		printf("RECOMMENDATIONS:\n");
+		print_rule('-');
+		printf("  Collection losses: map=%llu ring=%llu capset=%llu "
+		       "userspace=%lu\n",
+		       (unsigned long long)state.observation.map_failures,
+		       (unsigned long long)state.observation.ring_failures,
+		       (unsigned long long)state.observation.capset_read_failures,
+		       state.observation.userspace_failures);
+		print_wrappedf("  Warning: ",
+			"Observation is incomplete (%s). Automatic capability "
+			"recommendations are suppressed. Collected events remain "
+			"available for diagnosis.", audit_collection_reason());
+		printf("\n");
+	} else if (state.foreign_target_ns_observed) {
 		printf("RECOMMENDATIONS:\n");
 		print_rule('-');
 		print_wrapped_text("  Warning: ",

@@ -218,6 +218,9 @@ static void setup_events(void)
 	int i;
 
 	memset(&state, 0, sizeof(state));
+	state.observation.exec_confirmed = true;
+	state.observation.target_exited = true;
+	state.observation.stop_reason = TRACE_STOP_TARGET_EXIT;
 	state.app.exe = "/usr/bin/outcome-target";
 	state.app.pid = 1234;
 	state.app.prog_type = ELF;
@@ -526,6 +529,9 @@ static void test_optional_setpcap(void)
 
 	memset(&state, 0, sizeof(state));
 	state.app.exe = "/usr/bin/capset-target";
+	state.observation.exec_confirmed = true;
+	state.observation.target_exited = true;
+	state.observation.stop_reason = TRACE_STOP_TARGET_EXIT;
 	state.app.pid = event.pid;
 	state.baseline_user_ns_inum = 100;
 	check = &state.app.checks[CAP_SETPCAP];
@@ -619,6 +625,9 @@ static void reset_keepcaps_test(void)
 	memset(&state, 0, sizeof(state));
 	state.app.pid = 1234;
 	state.app.exe = "/usr/bin/keepcaps-target";
+	state.observation.exec_confirmed = true;
+	state.observation.target_exited = true;
+	state.observation.stop_reason = TRACE_STOP_TARGET_EXIT;
 	state.app.prog_type = ELF;
 }
 

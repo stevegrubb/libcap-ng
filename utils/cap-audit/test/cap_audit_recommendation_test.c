@@ -161,6 +161,9 @@ static void setup_analysis(service_config_t *service)
 	struct cap_check *check;
 
 	memset(&state, 0, sizeof(state));
+	state.observation.exec_confirmed = true;
+	state.observation.target_exited = true;
+	state.observation.stop_reason = TRACE_STOP_TARGET_EXIT;
 	memset(service, 0, sizeof(*service));
 	state.app.exe = "/usr/bin/recommendation-target";
 	state.app.pid = 1234;
@@ -213,6 +216,9 @@ static void setup_analysis(service_config_t *service)
 static void setup_empty_analysis(service_config_t *service)
 {
 	memset(&state, 0, sizeof(state));
+	state.observation.exec_confirmed = true;
+	state.observation.target_exited = true;
+	state.observation.stop_reason = TRACE_STOP_TARGET_EXIT;
 	memset(service, 0, sizeof(*service));
 	state.app.exe = "/usr/bin/empty-target";
 	state.app.pid = 5678;
@@ -256,6 +262,33 @@ static void test_setpcap_recommendations(void)
 	}
 }
 
+static void test_incomplete_observation(void)
+{
+	service_config_t service;
+	char *output;
+	int cause;
+
+	for (cause = 0; cause < 8; cause++) {
+		setup_analysis(&service);
+		switch (cause) {
+		case 0: state.observation.exec_confirmed = false; break;
+		case 1: state.observation.launch_error = 2; break;
+		case 2: state.observation.stop_reason = TRACE_STOP_POLL_ERROR; break;
+		case 3: state.observation.stop_reason = TRACE_STOP_REQUESTED; break;
+		case 4: state.observation.descendants_remaining = true; break;
+		case 5: state.observation.map_failures = 1; break;
+		case 6: state.observation.ring_failures = 1; break;
+		case 7: state.observation.userspace_failures = 1; break;
+		}
+		output = capture_analysis();
+		if (strstr(output, "    CapabilityBoundingSet=") ||
+		    !strstr(output, "Observation is incomplete") ||
+		    !strstr(output, "sys_resource"))
+			fail("Incomplete observation produced deployment advice");
+		free(output);
+	}
+}
+
 int main(void)
 {
 	static const char *const denied_guidance[] = {
@@ -281,6 +314,7 @@ int main(void)
 	char *output;
 
 	test_setpcap_recommendations();
+	test_incomplete_observation();
 	setup_analysis(&service);
 	output = capture_analysis();
 

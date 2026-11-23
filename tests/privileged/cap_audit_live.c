@@ -659,8 +659,14 @@ int main(int argc, char **argv)
 		}
 		done = waitpid(child, &status, WNOHANG);
 	} while (!done || (done < 0 && errno == EINTR));
+	cap_audit_bpf__detach(skel);
 	if (done < 0 || ring_buffer__consume(ring) < 0)
 		goto free_ring;
+	if (skel->bss->lost_map_updates || skel->bss->lost_ring_events ||
+	    skel->bss->lost_capset_reads) {
+		fprintf(stderr, "Production BPF lost observations\n");
+		goto free_ring;
+	}
 	result = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
 	if (!result && (!strcmp(mode, "leader-exit") ||
 			!strcmp(mode, "worker-exec"))) {

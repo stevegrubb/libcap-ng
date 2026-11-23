@@ -43,6 +43,7 @@ static long mock_probe_read_kernel(void *dst, __u32 size, const void *src);
 static __u64 current_task;
 static struct task_struct mock_task;
 static bool fail_kernel_read;
+static bool fail_map_update, fail_ring_reserve;
 
 /* Keep the production functions; replace only kernel helper boundaries. */
 #undef BPF_KPROBE
@@ -114,6 +115,8 @@ static long mock_update(const void *map, const void *key,
 	unsigned int tid = task_index(map, key);
 
 	(void)flags;
+	if (fail_map_update)
+		return -1;
 	if (map == &target_pids)
 		phases[tid] = *(__u8 *)value;
 	else if (map == &current_syscalls) {
@@ -147,6 +150,8 @@ static void *mock_reserve(const void *map, __u64 size, __u64 flags)
 	(void)flags;
 	check(map == &cap_events && size == sizeof(output),
 	      "Unexpected ring buffer reservation");
+	if (fail_ring_reserve)
+		return NULL;
 	return &output;
 }
 
@@ -435,6 +440,36 @@ static void test_exit_identity(void)
 	      "Exit event identified the wrong thread");
 }
 
+static void test_observation_losses(void)
+{
+	struct trace_event_raw_sys_enter enter = { .id = 123 };
+	struct trace_event_raw_sched_process_fork fork_event = {
+		.parent_pid = 25, .child_pid = 26,
+	};
+	struct syscall_state call = { .record_capset = 1 };
+	__u64 maps = lost_map_updates, rings = lost_ring_events;
+	__u64 reads = lost_capset_reads;
+
+	phases[25] = 2;
+	current_task = ((__u64)25 << 32) | 25;
+	fail_map_update = true;
+	trace_sys_enter(&enter);
+	trace_sched_process_fork(&fork_event);
+	check(lost_map_updates == maps + 2 && !phases[26],
+	      "Failed state updates were silently omitted");
+	fail_map_update = false;
+	fail_ring_reserve = true;
+	emit_task_end(25);
+	check(lost_ring_events == rings + 1,
+	      "Ring exhaustion did not survive outside the ring");
+	fail_ring_reserve = false;
+	fail_kernel_read = true;
+	emit_capset_result(&call, 0);
+	check(lost_capset_reads == reads + 1,
+	      "Unreadable installed masks did not mark missing evidence");
+	fail_kernel_read = false;
+}
+
 int main(void)
 {
 	test_namespace(100);
@@ -444,6 +479,7 @@ int main(void)
 	test_thread_lifecycle();
 	test_exec_gate();
 	test_exit_identity();
+	test_observation_losses();
 	puts("cap-audit BPF event tests passed");
 	return 0;
 }

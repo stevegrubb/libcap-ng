@@ -147,6 +147,7 @@ void output_json(void)
 	kernel_json = json_escape(state.app.kernel_version);
 
 	printf("{\n");
+	output_observation_json();
 	printf("  \"application\": {\n");
 	printf("    \"pid\": %d,\n", state.app.pid);
 	printf("    \"comm\": \"%s\"\n", exe_json ? exe_json : "");

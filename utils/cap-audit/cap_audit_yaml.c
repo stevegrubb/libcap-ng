@@ -121,6 +121,7 @@ void output_yaml(void)
 	char *exe_yaml = json_escape(state.app.exe);
 	char *kernel_yaml = json_escape(state.app.kernel_version);
 
+	output_observation_yaml();
 	printf("application:\n");
 	printf("  pid: %d\n", state.app.pid);
 	printf("  comm: \"%s\"\n", exe_yaml ? exe_yaml : "");

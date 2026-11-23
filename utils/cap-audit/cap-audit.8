@@ -199,13 +199,21 @@ execute under audit.
 .SH EXIT STATUS
 The program returns 0 on success. Non-zero values indicate an error occurred
 while setting up tracing or executing the target command.
+Status 1 indicates a tracing setup error. Status 2 indicates incomplete
+observation, including target launch failure, lost events, a polling error,
+a requested stop, or descendants still running when the initial target exits.
+The target's exit code and terminating signal are reported separately.
+Collected observations remain available, but incomplete runs produce no
+automatic deployment recommendations.
 .SH NOTES
 1. This utility observes the application behavior to decide what is needed. If you do not exercise all functionality, it can result in an incomplete inventory of needed capabilities. If it can't see it, cap-audit can't record it.
 
 2. Event collection has fixed memory limits: 8192 traced tasks, 1024 in-flight
 capability checks, 4096 syscall records, and a 256 KiB event ring buffer.
 Exhausting a map or the ring buffer can lose observations and produce an
-incomplete capability inventory. Such losses are not currently reported.
+incomplete capability inventory. Loss counters are collected outside the ring
+and reported after detaching the probes. JSON and YAML include observation
+status, target execution and exit status, stop reason, and loss counters.
 
 3. When auditing a daemon, pass options to keep it in the foreground. If it forks and exits, that will end the session and you will only get the capabilities traced up to the exit. Here's an example keeping the daemon in the foreground:
 

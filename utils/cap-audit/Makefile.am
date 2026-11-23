@@ -35,6 +35,7 @@ cap_audit_SOURCES = cap_audit.c \
 	cap_audit_outcome.c \
 	cap_audit_path.c \
 	cap_audit_path.h \
+	cap_audit_report.c \
 	cap_audit_service.c \
 	classify_app.c \
 	classify_app.h \
@@ -56,6 +57,7 @@ cap_audit_capset.$(OBJEXT) cap_audit_event.$(OBJEXT) \
 cap_audit_json.$(OBJEXT) \
 cap_audit_outcome.$(OBJEXT) cap_audit_service.$(OBJEXT) \
 cap_audit_util.$(OBJEXT) \
+cap_audit_report.$(OBJEXT) \
 cap_audit_yaml.$(OBJEXT): cap_audit.skel.h
 endif
 

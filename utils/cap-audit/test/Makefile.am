@@ -23,6 +23,23 @@ if BUILD_CAP_AUDIT
 check_PROGRAMS += cap_audit_namespace_test cap_audit_outcome_test \
 	cap_audit_recommendation_test cap_audit_service_test cap_audit_bpf_test \
 	cap_audit_json_escape_test
+check_PROGRAMS += cap_audit_cli_test
+cap_audit_cli_test_SOURCES = cap_audit_cli_test.c \
+	${top_srcdir}/utils/cap-audit/cap_audit_report.c \
+	${top_srcdir}/utils/cap-audit/cap_audit_event.c \
+	${top_srcdir}/utils/cap-audit/cap_audit_analyze.c \
+	${top_srcdir}/utils/cap-audit/cap_audit_capset.c \
+	${top_srcdir}/utils/cap-audit/cap_audit_json.c \
+	${top_srcdir}/utils/cap-audit/cap_audit_yaml.c \
+	${top_srcdir}/utils/cap-audit/cap_audit_outcome.c \
+	${top_srcdir}/utils/cap-audit/cap_audit_path.c \
+	${top_srcdir}/utils/cap-audit/cap_audit_service.c \
+	${top_srcdir}/utils/cap-audit/cap_audit_util.c \
+	${top_srcdir}/utils/cap-audit/classify_app.c \
+	${top_srcdir}/utils/proc-sanitize.c
+cap_audit_cli_test_CPPFLAGS = $(AM_CPPFLAGS) ${LIBAUDIT_CFLAGS} -D_GNU_SOURCE
+cap_audit_cli_test_LDADD = ${top_builddir}/src/libcap-ng.la ${LIBBPF_LIBS} \
+	${LIBAUDIT_LIBS}
 cap_audit_json_escape_test_SOURCES = cap_audit_json_escape_test.c \
 	${top_srcdir}/utils/cap-audit/cap_audit_util.c \
 	${top_srcdir}/utils/proc-sanitize.c
@@ -31,11 +48,13 @@ cap_audit_json_escape_test_CPPFLAGS = $(AM_CPPFLAGS) ${LIBAUDIT_CFLAGS} \
 cap_audit_json_escape_test_LDADD = ${top_builddir}/src/libcap-ng.la \
 	${LIBAUDIT_LIBS}
 cap_audit_namespace_test_SOURCES = cap_audit_namespace_test.c \
+	${top_srcdir}/utils/cap-audit/cap_audit_report.c \
 	${top_srcdir}/utils/cap-audit/cap_audit_event.c \
 	${top_srcdir}/utils/cap-audit/cap_audit_analyze.c \
 	${top_srcdir}/utils/cap-audit/cap_audit_capset.c \
 	${top_srcdir}/utils/cap-audit/cap_audit_outcome.c
 cap_audit_outcome_test_SOURCES = cap_audit_outcome_test.c \
+	${top_srcdir}/utils/cap-audit/cap_audit_report.c \
 	${top_srcdir}/utils/cap-audit/cap_audit_event.c \
 	${top_srcdir}/utils/cap-audit/cap_audit_analyze.c \
 	${top_srcdir}/utils/cap-audit/cap_audit_capset.c \
@@ -44,6 +63,7 @@ cap_audit_outcome_test_SOURCES = cap_audit_outcome_test.c \
 	${top_srcdir}/utils/cap-audit/cap_audit_yaml.c
 cap_audit_outcome_test_LDADD = ${top_builddir}/src/libcap-ng.la
 cap_audit_recommendation_test_SOURCES = cap_audit_recommendation_test.c \
+	${top_srcdir}/utils/cap-audit/cap_audit_report.c \
 	${top_srcdir}/utils/cap-audit/cap_audit_analyze.c \
 	${top_srcdir}/utils/cap-audit/cap_audit_capset.c \
 	${top_srcdir}/utils/cap-audit/cap_audit_outcome.c

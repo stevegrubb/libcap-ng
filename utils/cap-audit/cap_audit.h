@@ -185,6 +185,27 @@ typedef struct {
 	bool exec_start_no_setuid;
 } service_config_t;
 
+enum trace_stop_reason {
+	TRACE_STOP_NONE,
+	TRACE_STOP_TARGET_EXIT,
+	TRACE_STOP_REQUESTED,
+	TRACE_STOP_POLL_ERROR,
+	TRACE_STOP_WAIT_ERROR,
+};
+
+struct observation_status {
+	enum trace_stop_reason stop_reason;
+	bool exec_confirmed;
+	bool target_exited;
+	bool descendants_remaining;
+	int wait_status;
+	int launch_error;
+	__u64 map_failures;
+	__u64 ring_failures;
+	__u64 capset_read_failures;
+	unsigned long userspace_failures;
+};
+
 struct audit_state {
 	struct cap_audit_bpf *skel;
 	struct ring_buffer *rb;
@@ -201,6 +222,7 @@ struct audit_state {
 	bool keepcaps_incomplete;
 	__u32 baseline_user_ns_inum;
 	bool foreign_target_ns_observed;
+	struct observation_status observation;
 	volatile sig_atomic_t stop;
 	char *service_file;
 	service_config_t *service_cfg;
@@ -215,6 +237,10 @@ void finish_cap_events(void);
 void analyze_capabilities(void);
 void output_json(void);
 void output_yaml(void);
+const char *audit_collection_reason(void);
+const char *audit_stop_reason(void);
+void output_observation_json(void);
+void output_observation_yaml(void);
 const char *cap_name_safe(int cap) __returns_nonnull;
 const char *syscall_name_from_nr(int nr);
 void read_sysctl(const char *path, int *value)
