@@ -31,6 +31,26 @@ static void die(const char *s)
 	exit(1);
 }
 
+static void unavailable(const char *operation)
+{
+	int error = errno;
+
+	fprintf(stderr, "UNAVAILABLE: %s: %s (%d)\n", operation,
+		strerror(error), error);
+	exit(77);
+}
+
+static void procfs_failure(const char *operation)
+{
+	/* Missing or denied metadata prevents an independent observation.
+	 * Other failures, such as EIO, must not silently become coverage skips.
+	 */
+	if (errno == ENOENT || errno == ENOTDIR || errno == ENOSYS ||
+	    errno == EACCES || errno == EPERM)
+		unavailable(operation);
+	die(operation);
+}
+
 static void record(const char *tag, unsigned int tid, unsigned int pid,
 		   struct masks m)
 {
@@ -278,8 +298,14 @@ static unsigned long long user_namespace(void)
 {
 	struct stat st;
 
-	if (stat("/proc/self/ns/user", &st))
-		die("stat user namespace");
+	if (stat("/proc/self/ns/user", &st)) {
+		/* CONFIG_USER_NS may be absent, or procfs/LSM/seccomp policy
+		 * may deny this lookup before unshare is even attempted. Without
+		 * an independent namespace inode we cannot validate attribution;
+		 * missing evidence is incomplete coverage, not a tracer failure.
+		 */
+		procfs_failure("stat /proc/self/ns/user");
+	}
 	return st.st_ino;
 }
 
@@ -319,12 +345,12 @@ static void wait_for_leader_exit(void)
 		char line[256], state = 0;
 
 		if (!status)
-			die("open leader status");
+			procfs_failure("open leader status");
 		while (fgets(line, sizeof(line), status))
 			if (sscanf(line, "State: %c", &state) == 1)
 				break;
 		if (ferror(status))
-			die("read leader status");
+			procfs_failure("read leader status");
 		fclose(status);
 		if (!state) {
 			fprintf(stderr, "Leader status has no task state\n");
@@ -396,19 +422,24 @@ static void foreign_namespace(void)
 
 	/* All hostname changes are confined to this new UTS namespace. */
 	if (unshare(CLONE_NEWUSER | CLONE_NEWUTS)) {
-		int error = errno;
-		int missing = error == EPERM || error == EACCES ||
-			error == EINVAL || error == ENOSYS || error == ENOSPC ||
-			error == EUSERS;
-
-		fprintf(stderr, "%s: private user/UTS namespace: %s\n",
-			missing ? "UNAVAILABLE" : "FAIL", strerror(error));
-		exit(missing ? 77 : 1);
+		if (errno == EPERM || errno == EACCES || errno == EINVAL ||
+		    errno == ENOSYS || errno == ENOSPC || errno == EUSERS)
+			unavailable("private user/UTS namespace");
+		die("private user/UTS namespace");
 	}
 	printf("NAMESPACE %llu %llu\n", baseline, user_namespace());
 	fflush(stdout);
-	if (syscall(SYS_sethostname, "cap-audit-test", 14))
+	if (syscall(SYS_sethostname, "cap-audit-test", 14)) {
+		/* Creating a namespace does not bypass host policy. An LSM or
+		 * seccomp filter can still prohibit its first hostname change.
+		 * This call establishes that the fixture can run; after E is
+		 * dropped below, the expected EPERM remains a tested invariant.
+		 * Do not hide unexpected errors (e.g. EFAULT) as missing access.
+		 */
+		if (errno == EPERM || errno == EACCES || errno == ENOSYS)
+			unavailable("sethostname in private namespace");
 		die("sethostname in private namespace");
+	}
 	expected_check(SYS_sethostname, CAP_SYS_ADMIN, 1);
 	m = get_masks();
 	m.e = 0;

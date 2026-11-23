@@ -36,6 +36,9 @@ and denied hostname changes against `stat(/proc/self/ns/user)` and the syscall
 results. The CLI run additionally requires the foreign-namespace warning and
 suppression of automatic deployment recommendations. It never changes the host
 hostname. Missing user-namespace support or permission is INCOMPLETE, not PASS.
+This includes unavailable namespace metadata and policy blocking the initial
+hostname change even when namespace creation succeeds. Unexpected errors and
+violations of the expected behavior after dropping capabilities remain FAIL.
 
 This is not yet exhaustive coverage of credential changes or file-capability
 execution. It tests the running kernel; a passing modern-kernel run does not
