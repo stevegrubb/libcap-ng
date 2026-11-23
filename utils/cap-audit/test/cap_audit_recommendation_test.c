@@ -288,8 +288,7 @@ int main(void)
 	if (!contains_tokens(output,
 		(const char *const[]) {
 			"Recommended current-service-compatible [Service]",
-			"AmbientCapabilities=dac_override fowner "
-				"net_bind_service sys_chroot sys_admin sys_resource",
+			"AmbientCapabilities=sys_admin",
 			"CapabilityBoundingSet=dac_override fowner "
 				"net_bind_service sys_chroot sys_ptrace sys_admin "
 				"sys_resource",
@@ -378,6 +377,18 @@ int main(void)
 
 	free(output);
 	setup_empty_analysis(&service);
+	service.user_is_set = true;
+	service.user_uid = 1000;
+	/* An inheritable-only request requires compatibility at the ceiling,
+	 * without establishing effective authority across ordinary exec.
+	 */
+	state.app.capset.inheritable = 1ULL << CAP_SYS_RESOURCE;
+	state.app.capset.successful_calls = 1;
+	output = capture_analysis();
+	expect_line(output, "    CapabilityBoundingSet=sys_resource");
+	expect_line(output, "    AmbientCapabilities=");
+	free(output);
+	setup_empty_analysis(&service);
 	output = capture_analysis();
 	if (!strstr(output,
 		    "None - No confirmed granted capability use was observed."))
@@ -416,6 +427,8 @@ int main(void)
 			"-1);",
 		}, 5) || strstr(output, ", DAC_OVERRIDE"))
 		fail("C recommendation did not use CAP_ constants");
+	if (strstr(output, "    AmbientCapabilities="))
+		fail("Generic recommendation inferred ambient delivery");
 
 	free(output);
 	puts("cap-audit service recommendation tests passed");

@@ -160,7 +160,7 @@ int main(void)
 	char *output;
 
 	output = analyze_event(100, 1);
-	if (!strstr(output, "AmbientCapabilities=sys_admin") ||
+	if (!strstr(output, "    AmbientCapabilities=\n") ||
 	    !strstr(output, "CapabilityBoundingSet=sys_admin"))
 		fail("Baseline namespace recommendation was suppressed");
 	free(output);

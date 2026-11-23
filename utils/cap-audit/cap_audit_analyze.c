@@ -387,6 +387,15 @@ static void svc_build_recommendations(const service_config_t *cfg,
 		 * does not prove that the capability is required.
 		 */
 		if (cap_is_compat_requirement(cap)) {
+			caps->compatible.bounding[cap] = true;
+		}
+
+		/* A retained mask or a granted check does not show how the
+		 * application obtained authority. Preserve ambient delivery only
+		 * when the audited unit already requested it.
+		 */
+		if (cfg->ambient.seen && cfg->ambient.caps[cap] &&
+		    (!cfg->bounding.seen || cfg->bounding.caps[cap])) {
 			caps->compatible.ambient[cap] = true;
 			caps->compatible.bounding[cap] = true;
 		}
@@ -401,10 +410,6 @@ static void svc_build_recommendations(const service_config_t *cfg,
 		 */
 		if (cfg->bounding.seen && cfg->bounding.caps[cap])
 			caps->compatible.bounding[cap] = true;
-		if (cfg->ambient.seen && cfg->ambient.caps[cap]) {
-			caps->compatible.ambient[cap] = true;
-			caps->compatible.bounding[cap] = true;
-		}
 		caps->configured_unobserved++;
 	}
 }
@@ -945,6 +950,12 @@ static void print_service_recommendations(void)
 		svc_print_phase_caps("Operational capabilities: ", 1);
 	}
 	svc_print_transition_caps(cfg);
+	if (!is_root)
+		print_wrapped_text("    AmbientCapabilities: ",
+			"Preserved from the audited unit. Granted checks and "
+			"capset requests alone do not establish that additional "
+			"capabilities should be delivered through ambient "
+			"inheritance.");
 	if (is_root)
 		print_wrapped_text("    ",
 				   "AmbientCapabilities omitted because ambient "
@@ -1466,23 +1477,12 @@ void analyze_capabilities(void)
 				"these deployment sets.");
 		printf("  For systemd service%s:\n",
 		       capset_only > 0 ? " (current-binary-compatible)" : "");
-		if (state.capset_observed)
-			print_wrapped_text("    Note: ",
-					   "Ambient capabilities must include initialization requirements. The application drops to the operational set internally via capset.");
+		print_wrapped_text("    Note: ",
+			"This bounding limit retains initialization and capset "
+			"requirements. Configure the service identity and "
+			"capability delivery separately. Ambient grants require "
+			"validation across the service's exec paths.");
 		printf("    [Service]\n");
-		printf("    User=<non-root-user>\n");
-		printf("    Group=<non-root-group>\n");
-		printf("    AmbientCapabilities=");
-		first = 1;
-		for (i = 0; i <= CAP_LAST_CAP; i++) {
-			if (cap_is_compat_requirement(i)) {
-				if (!first)
-					printf(" ");
-				printf("%s", cap_name_safe(i));
-				first = 0;
-			}
-		}
-		printf("\n");
 		printf("    CapabilityBoundingSet=");
 		first = 1;
 		for (i = 0; i <= CAP_LAST_CAP; i++) {

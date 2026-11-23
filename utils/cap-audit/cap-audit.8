@@ -132,6 +132,13 @@ not have been exercised. Cap-audit does not generate a configuration that
 removes them; targeted testing or manual review must first confirm that each
 configured capability is unnecessary.
 .PP
+Service recommendations preserve the ambient capabilities configured in the
+audited unit. Granted checks and successful capset requests constrain the
+bounding set, but do not by themselves establish that additional ambient
+capabilities should be granted across exec. For a direct command audit,
+configure the service identity and capability delivery separately from the
+suggested bounding limit.
+.PP
 The generated service configuration preserves the
 .B NoNewPrivileges=
 setting used for the audit. When the setting is disabled, enabling it has not
