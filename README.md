@@ -206,6 +206,13 @@ your case, just don't do the "make check" as part of the build process. This
 problem should go away as build roots eventually switch to the 5.0 or later
 kernels.
 
+Optional privileged integration tests live in `tests/privileged/`. They are
+separate from `make check` and exercise real capability transitions, procfs and
+namespace behavior, and live cap-audit BPF events. First run the unprivileged
+preparation step, then explicitly probe and run the selected suites as root.
+See [the maintainer guide](tests/privileged/README.md) for commands, prerequisites,
+build selection, and interpretation of PASS, FAIL, and INCOMPLETE results.
+
 cap-audit
 ---------
 As of the 0.9 release of libcap-ng, there is a new utility **cap-audit**. This

@@ -21,7 +21,7 @@
 #   Steve Grubb <sgrubb@redhat.com>
 #
 ACLOCAL_AMFLAGS = -I m4
-SUBDIRS = src utils m4 docs
+SUBDIRS = src utils m4 docs tests/privileged
 if HAVE_SWIG
 SUBDIRS += bindings
 endif

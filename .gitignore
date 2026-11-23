@@ -54,4 +54,11 @@ utils/Makefile.in
 utils/cap-audit/.deps/
 utils/cap-audit/Makefile
 utils/cap-audit/Makefile.in
+tests/privileged/.deps/
+tests/privileged/.libs/
+tests/privileged/__pycache__/
+tests/privileged/kernel_workload
+tests/privileged/cap_audit_live
+tests/privileged/prepared.json
+tests/privileged/prepare.log
 
