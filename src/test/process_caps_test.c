@@ -27,6 +27,7 @@ static int ambient_error;
 static unsigned int bounds_calls;
 static unsigned int ambient_calls;
 static unsigned int capget_calls;
+static pid_t capget_pid;
 
 static void check(int condition, const char *message)
 {
@@ -46,6 +47,7 @@ int capget(cap_user_header_t header, const cap_user_data_t data)
 		return -1;
 	}
 	capget_calls++;
+	capget_pid = header->pid;
 	if (capget_error) {
 		errno = capget_error;
 		return -1;
@@ -162,6 +164,50 @@ static void test_capget_failure(int error)
 	check(capng_get_caps_process() == 0, "Snapshot recovery failed");
 }
 
+static void test_capget_recovery(int error)
+{
+	int recovery;
+
+	for (recovery = 0; recovery < 4; recovery++) {
+		capng_clear(CAPNG_SELECT_ALL);
+		capng_setpid(0);
+		check(capng_get_caps_process() == 0,
+		      "Initial recovery snapshot failed");
+		capget_error = error;
+		check(capng_get_caps_process() == -1 && errno == error,
+		      "Expected capget failure before recovery");
+		check(capng_have_capabilities(CAPNG_SELECT_ALL) == CAPNG_FAIL,
+		      "Failed read exposed a usable snapshot");
+
+		/* Recover without restoring saved state. Cover both direct
+		 * retries and the clear/setpid sequence used by process scanners.
+		 */
+		if (recovery == 2)
+			capng_clear(CAPNG_SELECT_ALL);
+		if (recovery == 1 || recovery == 2) {
+			capng_setpid(getpid() + 1);
+			status_text = "CapBnd:\t0000000000000001\n"
+				      "CapAmb:\t0000000000000001\n";
+		} else if (recovery == 3) {
+			/* Clearing only E/P/I must not revive stale Bnd or Amb. */
+			capng_clear(CAPNG_SELECT_CAPS);
+			check(capng_have_capabilities(CAPNG_SELECT_ALL) ==
+			      CAPNG_NONE, "Partial clear revived stale sets");
+		}
+		capget_error = 0;
+		capget_calls = 0;
+		check(capng_get_caps_process() == 0 && capget_calls == 1,
+		      "A failed capget prevented a fresh read");
+		check(capget_pid == ((recovery == 1 || recovery == 2) ?
+				    getpid() + 1 : 0),
+		      "Recovery read used the wrong target PID");
+		check(capng_have_capability(CAPNG_EFFECTIVE, CAP_CHOWN),
+		      "Recovery did not install the fresh capabilities");
+		status_text = NULL;
+	}
+	capng_setpid(0);
+}
+
 static void test_target(pid_t pid, const char *status, int expected_errno)
 {
 	void *saved = capng_save_state();
@@ -214,6 +260,8 @@ int main(void)
 	test_read(EPERM, EACCES, EPERM);
 	test_capget_failure(ESRCH);
 	test_capget_failure(EPERM);
+	test_capget_recovery(ESRCH);
+	test_capget_recovery(EPERM);
 	test_target(0, NULL, 0);
 	/* A nonzero target distinct from the caller, with mocked capget. */
 	test_target(getpid() + 1, NULL, ENOENT);

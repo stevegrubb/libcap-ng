@@ -743,6 +743,19 @@ static int get_ambient_set(void)
 }
 #endif
 
+/* A failed read is recoverable, unlike an initialization failure. Erase all
+ * sets before returning to the unread state: a later partial clear or fill
+ * must not make data from the previous or incomplete snapshot usable again.
+ */
+static void invalidate_process_caps(void)
+{
+	memset(&m.data, 0, sizeof(m.data));
+	memset(m.bounds, 0, sizeof(m.bounds));
+	memset(m.ambient, 0, sizeof(m.ambient));
+	clear_bounding_set_changed(&m);
+	m.state = CAPNG_ALLOCATED;
+}
+
 /*
  * Returns 0 on success and -1 on failure
  */
@@ -757,8 +770,7 @@ int capng_get_caps_process(void)
 
 	rc = capget((cap_user_header_t)&m.hdr, (cap_user_data_t)&m.data);
 	if (rc < 0) {
-		/* A failed refresh must not leave the previous snapshot usable. */
-		m.state = CAPNG_ERROR;
+		invalidate_process_caps();
 		return rc;
 	}
 	if (rc == 0) {
