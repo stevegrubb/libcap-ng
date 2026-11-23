@@ -18,6 +18,7 @@
 - Fail if another thread's bounding or ambient capabilities cannot be read
 - Invalidate the previous capability snapshot when capget fails
 - Fix cap-audit JSON output for executable names containing invalid UTF-8
+- Add on-demand tests to verify kernel interaction. tests/privileged/README.md
 
 0.9.6
 - Fix supplementary group changes in capng_change_id
