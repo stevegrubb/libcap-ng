@@ -21,6 +21,7 @@ AUDIT_CASES = {
     "zero": 1, "mixed": 1, "v1": 2, "v2": 1, "noop": 8,
     "unknown-bits": 1, "failures": 0, "collision": 0, "compat-capset": 1,
     "stale": 2, "threads": 64, "race": 512, "preexec": 0, "exec": 1,
+    "leader-exit": 1, "worker-exec": 1, "userns": 1,
 }
 KERNEL_CASES = ("exit", "threads", "bounding", "ambient", "procfs")
 
@@ -200,6 +201,85 @@ def records(text):
     return result
 
 
+def check_records(text, tag):
+    result = []
+    for line in text.splitlines():
+        fields = line.split()
+        if fields and fields[0] == tag:
+            if len(fields) != 7:
+                raise AssertionError("Malformed capability check: " + line)
+            values = tuple(int(v) for v in fields[1:])
+            pid, tid, nr, cap, granted, namespace = values
+            if (pid <= 0 or tid <= 0 or nr < 0 or not 0 <= cap < 64 or
+                    granted not in (0, 1) or not 0 < namespace < 1 << 32):
+                raise AssertionError("Invalid capability check: " + line)
+            result.append(values)
+    return result
+
+
+def check_fixture(text, case, live=True):
+    expected = check_records(text, "ECHK")
+    caps = records(text)["EXP"]
+    if len(caps) != 1 or sum(map(len, caps.values())) != 1:
+        raise AssertionError("Expected one independent capget observation")
+    tid, pid = next(iter(caps))
+    if case == "userns":
+        namespaces = re.findall(r"^NAMESPACE (\d+) (\d+)$", text, re.MULTILINE)
+        if len(namespaces) != 1:
+            raise AssertionError("Missing namespace transition evidence")
+        baseline, target = map(int, namespaces[0])
+        if baseline <= 0 or target <= 0 or baseline == target:
+            raise AssertionError("Workload did not change user namespace")
+        if (len(expected) != 2 or
+                [e[3:5] for e in expected] != [(21, 1), (21, 0)] or
+                any(e[5] != target or e[:2] != (pid, tid) for e in expected) or
+                expected[0][2] != expected[1][2]):
+            raise AssertionError("Expected granted/denied SYS_ADMIN in the new namespace")
+    else:
+        markers = re.findall(r"^LIFE (\S+) (\d+) (\d+)$", text, re.MULTILINE)
+        markers = [(tag, int(p), int(t)) for tag, p, t in markers]
+        if case == "leader-exit":
+            if markers != [("survivor", pid, tid)] or tid == pid:
+                raise AssertionError("No surviving non-leader operation was demonstrated")
+        elif case == "worker-exec":
+            if (len(markers) != 2 or markers[0][0] != "before-exec" or
+                    markers[0][1] != pid or markers[0][2] == pid or
+                    markers[0][2] <= 0 or
+                    markers[1] != ("after-exec", pid, pid) or tid != pid):
+                raise AssertionError("Non-leader exec did not demonstrate the TID change")
+        if (len(expected) != 1 or expected[0][:2] != (pid, tid) or
+                expected[0][3:5] != (8, 0)):
+            raise AssertionError("Missing post-transition SETPCAP denial")
+        if live and text.splitlines().count("CLEANUP empty") != 1:
+            raise AssertionError("Task map cleanup was not confirmed")
+    if live and check_records(text, "OCHK") != expected:
+        raise AssertionError("BPF check PID/TID, syscall, capability, result or namespace "
+                             "differs: expected {} observed {}".format(
+                                 expected, check_records(text, "OCHK")))
+
+
+def compare_namespace_cli(text):
+    if "Application exited with status 77" in text:
+        return "User namespace workload unavailable; see log"
+    if "Application exited with status 0" not in text:
+        raise AssertionError("Namespace workload did not exit successfully")
+    check_fixture(text, "userns", live=False)
+    expected = [(str(e[0]), "GRANTED" if e[4] else "DENIED")
+                for e in check_records(text, "ECHK")]
+    observed = re.findall(r"\[CAP\] pid=(\d+) cap=sys_admin "
+                          r"result=(GRANTED|DENIED) syscall=sethostname\b", text)
+    if observed != expected:
+        raise AssertionError("CLI did not classify both namespace capability checks")
+    plain = " ".join(text.split())
+    if ("Capability checks targeted a different user namespace." not in plain or
+            "Automatic capability recommendations are suppressed" not in plain):
+        raise AssertionError("CLI failed to suppress recommendations for a foreign namespace")
+    if any(token in text for token in ("Programmatic solution", "setcap ",
+                                      "CapabilityBoundingSet=")):
+        raise AssertionError("CLI emitted deployment advice for a foreign namespace")
+    return None
+
+
 def compare_events(text, case):
     data = records(text)
     if sum(map(len, data["EXP"].values())) != AUDIT_CASES[case]:
@@ -221,6 +301,8 @@ def compare_events(text, case):
     if grouped["EXP"] != grouped["OBS"]:
         raise AssertionError(
             "BPF mask triples, process IDs, counts, or order differ from capget")
+    if case in ("leader-exit", "worker-exec", "userns"):
+        check_fixture(text, case)
     if case == "race":
         values = {m[0] for group in data["EXP"].values() for m in group}
         if len(values) < 2:
@@ -233,6 +315,8 @@ def compare_cli(text, case):
         return "Workload prerequisite unavailable; see log"
     if "Application exited with status 0" not in text:
         raise AssertionError("Audited workload did not exit successfully")
+    if case in ("leader-exit", "worker-exec"):
+        check_fixture(text, case, live=False)
     obj, _ = json.JSONDecoder().raw_decode(text[text.index("{\n"):])
     expected = [(pid, m) for (_, pid), v in records(text)["EXP"].items() for m in v]
     observed = [(int(pid), tuple(int(m, 16) for m in (e, p, i)))
@@ -293,6 +377,7 @@ class Run:
                            if "UNAVAILABLE:" in line or "SKIP:" in line), text[-500:])
             return self.result(name, "SKIP", reason or "Prerequisite unavailable")
         if status:
+            print("--- {}: log tail ---\n{}".format(name, text[-5000:]), flush=True)
             detail = text.strip().splitlines()[-1][:300] if text.strip() else "no output"
             return self.result(name, "FAIL", "exit {}: {}; see {}.log".format(
                 status, detail, name))
@@ -301,6 +386,7 @@ class Run:
             if incomplete:
                 return self.result(name, "SKIP", incomplete)
         except (AssertionError, ValueError, KeyError) as error:
+            print("--- {}: log tail ---\n{}".format(name, text[-5000:]), flush=True)
             return self.result(name, "FAIL", str(error) + "; see " + name + ".log")
         return self.result(name, "PASS", "checks passed")
 
@@ -361,7 +447,7 @@ def run_suites(run):
                     run.test("bpf-" + case, [helper, "--trace", case],
                              lambda text, case=case: compare_events(text, case))
                 for case in ("zero", "mixed", "v1", "failures", "collision",
-                             "compat-capset"):
+                             "compat-capset", "leader-exit", "worker-exec"):
                     if (case in ("collision", "compat-capset") and
                             platform.machine() != "x86_64"):
                         continue
@@ -369,6 +455,9 @@ def run_suites(run):
                                "-v", "-j", "--", helper, "--work", case]
                     run.test("cli-" + case, command,
                              lambda text, case=case: compare_cli(text, case))
+                run.test("cli-userns", [helpers / "cap-audit", "-v", "--",
+                                       helper, "--work", "userns"],
+                         compare_namespace_cli)
     return run.finish()
 
 

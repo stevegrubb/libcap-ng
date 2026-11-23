@@ -4,6 +4,9 @@
 #include <bpf/bpf.h>
 #include <errno.h>
 #include <pthread.h>
+#include <sched.h>
+#include <sys/stat.h>
+#include <sys/prctl.h>
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -17,6 +20,8 @@
 struct masks { uint64_t e, p, i; };
 static int emit_expected = 1;
 static int expected_nr = SYS_capset;
+static const char *trace_case;
+static pthread_t leader;
 static atomic_int stop_race;
 static struct __user_cap_data_struct raced[2];
 
@@ -268,6 +273,118 @@ static void compat_capset(void)
 #endif
 }
 
+/* These fixtures use actual task lifecycle synchronization, never sleeps. */
+static unsigned long long user_namespace(void)
+{
+	struct stat st;
+
+	if (stat("/proc/self/ns/user", &st))
+		die("stat user namespace");
+	return st.st_ino;
+}
+
+static void expected_check(int nr, int capability, int granted)
+{
+	printf("ECHK %u %u %d %d %d %llu\n", (unsigned)getpid(),
+	       (unsigned)syscall(SYS_gettid), nr, capability, granted,
+	       user_namespace());
+	fflush(stdout);
+}
+
+static void denied_bounding_check(void)
+{
+	/* After zeroing E/P/I, this must fail and generate a SETPCAP check.
+	 * CHECK events carry TID even though CAPSET events currently do not.
+	 */
+	if (prctl(PR_CAPBSET_DROP, CAP_CHOWN, 0, 0, 0) != -1 ||
+	    errno != EPERM) {
+		fprintf(stderr, "Expected bounding-drop failure without SETPCAP\n");
+		exit(1);
+	}
+	expected_check(SYS_prctl, CAP_SETPCAP, 0);
+}
+
+static void *survive_leader(void *unused)
+{
+	int rc;
+	(void)unused;
+
+	/* Join proves the leader exited before the observed operations. */
+	rc = pthread_join(leader, NULL);
+	if (rc) {
+		errno = rc;
+		die("join exited leader");
+	}
+	printf("LIFE survivor %u %u\n", (unsigned)getpid(),
+	       (unsigned)syscall(SYS_gettid));
+	fflush(stdout);
+	install((struct masks){ 0 }, _LINUX_CAPABILITY_VERSION_3);
+	denied_bounding_check();
+	return NULL;
+}
+
+static void *exec_worker(void *unused)
+{
+	(void)unused;
+	printf("LIFE before-exec %u %u\n", (unsigned)getpid(),
+	       (unsigned)syscall(SYS_gettid));
+	fflush(stdout);
+	execl("/proc/self/exe", "cap_audit_live", "--work",
+	      "worker-exec-child", NULL);
+	die("worker exec");
+	return NULL;
+}
+
+static void thread_lifecycle(int do_exec)
+{
+	pthread_t worker;
+	int rc;
+
+	leader = pthread_self();
+	rc = pthread_create(&worker, NULL,
+			    do_exec ? exec_worker : survive_leader, NULL);
+	if (rc) {
+		errno = rc;
+		die("create lifecycle worker");
+	}
+	if (!do_exec)
+		pthread_exit(NULL);
+	/* Keep the leader alive until exec kills it. */
+	for (;;)
+		pause();
+}
+
+static void foreign_namespace(void)
+{
+	unsigned long long baseline = user_namespace();
+	struct masks m;
+
+	/* All hostname changes are confined to this new UTS namespace. */
+	if (unshare(CLONE_NEWUSER | CLONE_NEWUTS)) {
+		int error = errno;
+		int missing = error == EPERM || error == EACCES ||
+			error == EINVAL || error == ENOSYS || error == ENOSPC ||
+			error == EUSERS;
+
+		fprintf(stderr, "%s: private user/UTS namespace: %s\n",
+			missing ? "UNAVAILABLE" : "FAIL", strerror(error));
+		exit(missing ? 77 : 1);
+	}
+	printf("NAMESPACE %llu %llu\n", baseline, user_namespace());
+	fflush(stdout);
+	if (syscall(SYS_sethostname, "cap-audit-test", 14))
+		die("sethostname in private namespace");
+	expected_check(SYS_sethostname, CAP_SYS_ADMIN, 1);
+	m = get_masks();
+	m.e = 0;
+	install(m, _LINUX_CAPABILITY_VERSION_3);
+	if (syscall(SYS_sethostname, "denied", 6) != -1 || errno != EPERM) {
+		fprintf(stderr, "Expected sethostname failure without SYS_ADMIN\n");
+		exit(1);
+	}
+	expected_check(SYS_sethostname, CAP_SYS_ADMIN, 0);
+}
+
 static void workload(const char *mode)
 {
 	struct masks zero = { 0 };
@@ -277,6 +394,18 @@ static void workload(const char *mode)
 	if (!strcmp(mode, "zero") || !strcmp(mode, "preexec") ||
 	    !strcmp(mode, "exec")) {
 		install(zero, _LINUX_CAPABILITY_VERSION_3);
+	} else if (!strcmp(mode, "leader-exit")) {
+		thread_lifecycle(0);
+	} else if (!strcmp(mode, "worker-exec")) {
+		thread_lifecycle(1);
+	} else if (!strcmp(mode, "worker-exec-child")) {
+		printf("LIFE after-exec %u %u\n", (unsigned)getpid(),
+		       (unsigned)syscall(SYS_gettid));
+		fflush(stdout);
+		install(zero, _LINUX_CAPABILITY_VERSION_3);
+		denied_bounding_check();
+	} else if (!strcmp(mode, "userns")) {
+		foreign_namespace();
 	} else if (!strcmp(mode, "mixed")) {
 		install(mixed_masks(), _LINUX_CAPABILITY_VERSION_3);
 	} else if (!strcmp(mode, "v1")) {
@@ -343,6 +472,15 @@ static int event(void *ctx, void *data, size_t size)
 		fprintf(stderr, "Unexpected BPF event size: %zu\n", size);
 		return -EINVAL;
 	}
+	if (e->event_type == CAP_EVENT_CHECK &&
+	    ((!strcmp(trace_case, "userns") &&
+	      e->syscall_nr == SYS_sethostname) ||
+	     ((!strcmp(trace_case, "leader-exit") ||
+	       !strcmp(trace_case, "worker-exec")) &&
+	      e->syscall_nr == SYS_prctl)))
+		printf("OCHK %u %u %d %d %d %u\n", e->pid, e->tid,
+		       e->syscall_nr, e->capability, e->result,
+		       e->targ_ns_inum);
 	if (e->event_type == CAP_EVENT_CAPSET) {
 		if (e->syscall_ret != 0 || e->syscall_nr != expected_nr) {
 			fprintf(stderr, "CAPSET event has unexpected syscall "
@@ -371,6 +509,7 @@ int main(int argc, char **argv)
 	if (argc != 3)
 		return 2;
 	mode = argv[2];
+	trace_case = mode;
 	if (!strcmp(argv[1], "--work")) {
 		workload(mode);
 		return 0;
@@ -432,7 +571,8 @@ int main(int argc, char **argv)
 	}
 	close(gate[0]);
 	tid = child;
-	phase = (!strcmp(mode, "preexec") || !strcmp(mode, "exec")) ? 1 : 2;
+	phase = (!strcmp(mode, "preexec") || !strcmp(mode, "exec") ||
+		 !strcmp(mode, "worker-exec")) ? 1 : 2;
 	if (bpf_map_update_elem(bpf_map__fd(skel->maps.target_pids), &tid,
 				&phase, BPF_ANY)) {
 		perror("select traced child");
@@ -456,6 +596,26 @@ int main(int argc, char **argv)
 	if (done < 0 || ring_buffer__consume(ring) < 0)
 		goto free_ring;
 	result = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
+	if (!result && (!strcmp(mode, "leader-exit") ||
+			!strcmp(mode, "worker-exec"))) {
+		/* Once waitpid reaps the task, no per-task entries may remain. */
+		int fds[] = { bpf_map__fd(skel->maps.target_pids),
+			      bpf_map__fd(skel->maps.current_syscalls),
+			      bpf_map__fd(skel->maps.cap_events_inflight) };
+		unsigned int i;
+		__u64 key;
+
+		for (i = 0; i < sizeof(fds) / sizeof(fds[0]); i++) {
+			if (bpf_map_get_next_key(fds[i], NULL, &key) == 0 ||
+			    errno != ENOENT) {
+				fprintf(stderr, "Task state map %u not empty "
+					"after exit\n", i);
+				result = 1;
+			}
+		}
+		if (!result)
+			puts("CLEANUP empty");
+	}
 free_ring:
 	ring_buffer__free(ring);
 destroy:

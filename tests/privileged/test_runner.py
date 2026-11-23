@@ -8,7 +8,7 @@ import stat
 import tempfile
 import unittest
 
-from run import compare_cli, compare_events, copy_program
+from run import compare_cli, compare_events, compare_namespace_cli, copy_program
 
 
 def record(tag, masks, tid=10, pid=10):
@@ -96,6 +96,69 @@ class EventCheckerTest(unittest.TestCase):
         text = text.replace(record("OBS", (0, 1, 0), tid=0),
                             record("OBS", (1, 1, 0), tid=0), 1)
         self.assertIsNone(compare_events(text, "race"))
+
+    def test_lifecycle(self):
+        for case, tid, marker in (
+                ("leader-exit", 11, "LIFE survivor 10 11\n"),
+                ("worker-exec", 10,
+                 "LIFE before-exec 10 11\nLIFE after-exec 10 10\n")):
+            expected = "ECHK 10 {} 157 8 0 4026531837\n".format(tid)
+            observed = expected.replace("ECHK", "OCHK")
+            text = (marker + record("EXP", (0, 0, 0), tid=tid) +
+                    record("OBS", (0, 0, 0), tid=0) + expected + observed +
+                    "CLEANUP empty\n")
+            with self.subTest(case=case):
+                self.assertIsNone(compare_events(text, case))
+            damaged = [text.replace(marker, ""),
+                       text.replace("CLEANUP empty\n", ""),
+                       text.replace(observed, ""), text + observed]
+            fields = observed.split()
+            for index, value in ((1, "12"), (2, "12"), (3, "59"),
+                                 (4, "21"), (5, "1"), (6, "7")):
+                corrupt = fields.copy()
+                corrupt[index] = value
+                damaged.append(text.replace(observed, " ".join(corrupt) + "\n"))
+            if case == "worker-exec":
+                damaged.append(text.replace("before-exec 10 11", "before-exec 10 10"))
+            for n, bad in enumerate(damaged):
+                with self.subTest(case=case, corruption=n):
+                    with self.assertRaises(AssertionError):
+                        compare_events(bad, case)
+            cli = (marker + record("EXP", (0, 0, 0), tid=tid) + expected +
+                   "[CAPSET] pid=10 effective=0x0 permitted=0x0 inheritable=0x0\n" +
+                   "Application exited with status 0\n" +
+                   json.dumps({"successful_capset_calls": 1,
+                               "capability_drop_observed": True}, indent=2))
+            self.assertIsNone(compare_cli(cli, case))
+
+    def test_namespace(self):
+        expected = ("ECHK 10 10 170 21 1 4026533000\n"
+                    "ECHK 10 10 170 21 0 4026533000\n")
+        observed = expected.replace("ECHK", "OCHK")
+        prefix = ("NAMESPACE 4026531837 4026533000\n" + expected +
+                  record("EXP", (0, 1, 0)))
+        text = prefix + observed + record("OBS", (0, 1, 0), tid=0)
+        self.assertIsNone(compare_events(text, "userns"))
+        for bad in (text.replace(observed, ""), text + observed,
+                    text.replace(observed, observed.replace("4026533000", "4026531837")),
+                    text.replace("NAMESPACE 4026531837", "NAMESPACE 4026533000"),
+                    text.replace("OCHK 10 10", "OCHK 10 11"),
+                    text.replace("OCHK 10 10 170", "OCHK 10 10 59"),
+                    text.replace("OCHK 10 10 170 21 0", "OCHK 10 10 170 21 1")):
+            with self.subTest(bad=bad), self.assertRaises(AssertionError):
+                compare_events(bad, "userns")
+        cli = (prefix + "Application exited with status 0\n" +
+               "[CAP] pid=10 cap=sys_admin result=GRANTED syscall=sethostname\n" +
+               "[CAP] pid=10 cap=sys_admin result=DENIED syscall=sethostname\n" +
+               "Capability checks targeted a different user namespace.\n" +
+               "Automatic capability recommendations are suppressed\n")
+        self.assertIsNone(compare_namespace_cli(cli))
+        for bad in (cli.replace("are suppressed", "are available"),
+                    cli.replace("GRANTED", "DENIED"), cli + "setcap cap_sys_admin+ep app",
+                    cli.replace("status 0", "status 1")):
+            with self.subTest(bad=bad), self.assertRaises(AssertionError):
+                compare_namespace_cli(bad)
+        self.assertIsNotNone(compare_namespace_cli("Application exited with status 77"))
 
     def test_cli(self):
         text = (record("EXP", (0, 0, 0)) +

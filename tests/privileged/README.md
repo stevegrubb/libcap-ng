@@ -16,7 +16,23 @@ The initial suites are:
   normalization, failed calls, stale events, concurrent threads, raced buffers,
   and the exec gate. On x86_64, additional cases cover a colliding i386 syscall
   number and genuine i386 capset. CLI cases verify masks, counts, and phase
-  tracking through the actual userspace event handler.
+  tracking through the actual userspace event handler. Additional cases cover
+  a worker continuing after its leader exits, exec from a non-leader thread,
+  and granted/denied capability checks in a new user namespace.
+
+The lifecycle fixtures synchronize with thread exit or exec rather than sleeps.
+They compare a post-transition capset with `capget`, then verify the PID, TID,
+syscall, capability, result, and user-namespace inode of a deliberately denied
+bounding-set operation. The tracer also requires its task-state maps to be empty
+after the workload exits. The worker-exec case starts behind the pre-exec gate
+and checks the old worker TID becomes the process leader's TID. It verifies
+post-exec attribution, not every intermediate capability check inside exec.
+
+The `userns` fixture creates private user and UTS namespaces. It checks successful
+and denied hostname changes against `stat(/proc/self/ns/user)` and the syscall
+results. The CLI run additionally requires the foreign-namespace warning and
+suppression of automatic deployment recommendations. It never changes the host
+hostname. Missing user-namespace support or permission is INCOMPLETE, not PASS.
 
 This is not yet exhaustive coverage of credential changes or file-capability
 execution. It tests the running kernel; a passing modern-kernel run does not
@@ -35,7 +51,7 @@ Build and prepare **as your regular user**:
 ```sh
 ./autogen.sh                       # Git checkouts only
 ./configure --enable-cap-audit --with-python3
-python3 tests/privileged/run.py prepare --jobs 20
+python3 tests/privileged/run.py prepare --jobs 32
 ```
 
 `prepare` checks the runner's event comparator and fixture staging, then runs
@@ -87,6 +103,22 @@ This also works from a release source tarball; Git is not needed.
 `make clean` removes the helpers and receipt. `make maintainer-clean` also removes
 the generated build machinery; prepare again after rebuilding.
 
+## Unprivileged workload checks
+
+On hosts permitting unprivileged user namespaces, the new workloads can also be
+exercised without host-root access after preparation:
+
+```sh
+unshare --user --map-root-user tests/privileged/cap_audit_live --work leader-exit
+unshare --user --map-root-user tests/privileged/cap_audit_live --work worker-exec
+unshare --user --map-root-user tests/privileged/cap_audit_live --work userns
+```
+
+These commands validate workload behavior only. They print independent expected
+observations but do not load BPF or validate cap-audit's event handling. The
+privileged runner still supplies those checks. Run each command separately:
+capability drops and namespace changes are confined to the disposable workload.
+
 ## Diagnostics and system effects
 
 The runner prints a results directory containing `environment.json`, per-case
@@ -99,7 +131,9 @@ The output filesystem must allow execution and its parent directories must be
 traversable by root without DAC capabilities. The exec probe diagnoses access
 restrictions; choose a different `--output` location when needed.
 
-Each case reports PASS, FAIL, or SKIP with a reason. Exit status is:
+Each case reports PASS, FAIL, or SKIP with a reason. Failed cases also print a
+bounded log tail (up to 5000 characters), including expected and observed records
+where available, so the console output is useful when reporting a failure. Exit status is:
 
 * **0 / PASS:** all selected applicable cases passed (for `probe`, prerequisites
   only; no integration success is implied).
