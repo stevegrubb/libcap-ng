@@ -204,7 +204,8 @@ are omitted.
 
 Each process object has \fBcomm\fP, optional \fBexe\fP, \fBpid\fP,
 \fBuid\fP, optional \fBunit\fP, \fBcaps\fP,
-\fBambient_present\fP (boolean), \fBopen_ended_bounding\fP (boolean),
+\fBeuid\fP (effective UID, or null when unavailable), \fBcaps_known\fP,
+\fBambient_present\fP and \fBopen_ended_bounding\fP (boolean or null),
 \fBdefenses\fP object, and \fBflags\fP array.
 
 \fBambient_present\fP and \fBopen_ended_bounding\fP are the structured
@@ -213,11 +214,22 @@ equivalents of the \fB[ambient-present]\fP and
 string; both fields are always present in JSON output.
 
 Fields under endpoints/processes/defenses may be omitted when unavailable.
-When process defenses are present, they include \fBruns_as_nonroot\fP, derived
-from the real UID (first field of \fBUid:\fP in \fB/proc/<pid>/status\fP):
-\fByes\fP when real uid != 0, \fBno\fP when real uid == 0. A process that
-started as root and later changed only effective UID via setuid still reports
-\fBno\fP.
+When process defenses are present, they include \fBruns_as_nonroot\fP,
+derived from the effective UID in \fB/proc/<pid>/status\fP. It is
+\fByes\fP for a nonzero effective UID, \fBno\fP for effective UID zero,
+and \fBunknown\fP when effective identity could not be read. The existing
+\fBuid\fP field reports real UID separately.
+
+Unreadable capabilities appear as \fB(unknown)\fP with the
+\fBcapabilities-unknown\fP flag. In that case \fBcaps_known\fP is false,
+and the ambient and bounding booleans are null. Missing or unfamiliar seccomp
+metadata is reported as \fBunknown\fP. These states must be retained when
+assessing privilege or hardening.
+
+The top-level \fBinspection_failures\fP object counts failed process,
+file-descriptor, capability, and socket-table inspections. Text reports show
+these counts when any inspection failed. Process exits and unavailable kernel
+interfaces can make an inventory incomplete, including when a plane is empty.
 
 If a plane has no discovered binds, it appears with an empty list. If a
 consumer does not receive a given plane, treat it as none found or omitted by

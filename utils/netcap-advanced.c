@@ -127,6 +127,7 @@ enum endpoint_flags {
 	FLAG_SSH_VSOCK_22 = 1U << 5,
 	FLAG_REUSEPORT = 1U << 6,
 	FLAG_PROXIMITY_PLANE = 1U << 7,
+	FLAG_CAPS_UNKNOWN = 1U << 8,
 };
 
 struct strset {
@@ -158,6 +159,8 @@ struct defense_info {
 struct process_info {
 	int pid;
 	uid_t uid;
+	uid_t euid;
+	int seen_euid;
 	char *comm;
 	char *exe;
 	char *unit;
@@ -166,6 +169,7 @@ struct process_info {
 	int ambient_present;
 	int open_ended_bounding;
 	int has_privileged_caps;
+	int caps_unknown;
 	struct defense_info defenses;
 };
 
@@ -194,6 +198,10 @@ struct endpoint {
 };
 
 struct model {
+	unsigned long process_read_failures;
+	unsigned long fd_read_failures;
+	unsigned long capability_read_failures;
+	unsigned long socket_read_failures;
 	struct iface_info *ifaces;
 	size_t ifaces_n;
 	size_t ifaces_cap;
@@ -858,6 +866,7 @@ static const struct {
 	{ FLAG_WILDCARD_BIND, "wildcard-bind", COLOR_YELLOW },
 	{ FLAG_REUSEPORT, "reuseport", COLOR_YELLOW },
 	{ FLAG_PRIVILEGED_CAPS, "privileged-caps", NULL },
+	{ FLAG_CAPS_UNKNOWN, "capabilities-unknown", COLOR_YELLOW },
 };
 
 /* Keep tree and JSON flag selection identical, including VSOCK exclusions. */
@@ -866,6 +875,8 @@ static unsigned int process_flags(const struct process_info *p,
 {
 	unsigned int flags = p->has_privileged_caps ? FLAG_PRIVILEGED_CAPS : 0;
 
+	if (p->caps_unknown)
+		flags |= FLAG_CAPS_UNKNOWN;
 	if (e->plane == PLANE_VSOCK) {
 		flags |= FLAG_HYPERVISOR_PLANE;
 		if (e->port == 22)
@@ -1204,8 +1215,8 @@ static void format_cap_list(capng_type_t type, char *buf, size_t size)
 	}
 }
 
-/* Fill the capability fields of a new, zero-initialized process record.
- * A process that cannot be queried retains the "(none)" summary.
+/* Inspection failure cannot establish that a process has no authority.
+ * Preserve that uncertainty through summaries, flags and JSON booleans.
  */
 static void collect_process_caps(struct process_info *p)
 {
@@ -1216,7 +1227,8 @@ static void collect_process_caps(struct process_info *p)
 	capng_clear(CAPNG_SELECT_ALL);
 	capng_setpid(p->pid);
 	if (capng_get_caps_process()) {
-		p->caps = xstrdup(summary);
+		p->caps = xstrdup("(unknown)");
+		p->caps_unknown = 1;
 		return;
 	}
 
@@ -1253,9 +1265,9 @@ static void collect_process_caps(struct process_info *p)
  * parse_status_defenses - read process hardening metadata into @d.
  * @pid: process ID whose procfs status/attr files are parsed.
  * @d: destination for static labels and the caller-owned LSM label.
- * @status: parsed /proc/<pid>/status, including the real UID.
+ * @status: parsed /proc/<pid>/status, including the effective UID.
  *
- * Missing fields are tolerated; function leaves best-effort defaults.
+ * Missing fields are reported as unknown.
  * Returns no value.
  * Side effects/assumptions: Operates on in-memory data and may read
  * procfs/netns state; it does not change kernel configuration.
@@ -1265,13 +1277,15 @@ static void parse_status_defenses(int pid, struct defense_info *d,
 {
 	char path[64];
 
-	d->runs_as_nonroot = status->uid != 0 ? "yes" : "no";
+	d->runs_as_nonroot = !status->seen_euid ? "unknown" :
+			    status->euid != 0 ? "yes" : "no";
 	d->no_new_privs = "unknown";
 	if (status->seen_no_new_privs)
 		d->no_new_privs = status->no_new_privs ? "yes" : "no";
-	d->seccomp = "disabled";
-	if (status->seen_seccomp && status->seccomp)
-		d->seccomp = status->seccomp == 1 ? "strict" : "filter";
+	d->seccomp = "unknown";
+	if (status->seen_seccomp && status->seccomp <= 2)
+		d->seccomp = status->seccomp == 0 ? "disabled" :
+			     status->seccomp == 1 ? "strict" : "filter";
 
 	snprintf(path, sizeof(path), "/proc/%d/attr/current", pid);
 	d->lsm_label = read_first_line(path);
@@ -1304,6 +1318,8 @@ static struct process_info *add_process(struct model *m, int pid)
 	}
 	p->pid = pid;
 	p->uid = status.uid;
+	p->euid = status.euid;
+	p->seen_euid = status.seen_euid;
 	p->comm = xstrdup(status.seen_name ? status.name : "?");
 	snprintf(path, sizeof(path), "/proc/%d/exe", pid);
 	exelen = readlink(path, exepath, sizeof(exepath) - 1);
@@ -1319,6 +1335,8 @@ static struct process_info *add_process(struct model *m, int pid)
 	}
 	p->unit = extract_unit_from_cgroup(pid);
 	collect_process_caps(p);
+	if (p->caps_unknown)
+		m->capability_read_failures++;
 	parse_status_defenses(pid, &p->defenses, &status);
 	if (!p->comm || (exelen >= 0 && !p->exe) || !p->caps ||
 	    (p->ambient_present && !p->ambient_caps))
@@ -1457,8 +1475,10 @@ static void collect_proc_inodes(struct model *m)
 	struct dirent *ent;
 
 	d = opendir("/proc");
-	if (!d)
+	if (!d) {
+		m->process_read_failures++;
 		return;
+	}
 	while ((ent = readdir(d))) {
 		int pid;
 		DIR *fds;
@@ -1472,12 +1492,16 @@ static void collect_proc_inodes(struct model *m)
 		if (pid <= 0)
 			continue;
 		p = add_process(m, pid);
-		if (!p)
+		if (!p) {
+			m->process_read_failures++;
 			continue;
+		}
 		snprintf(fdpath, sizeof(fdpath), "/proc/%d/fd", pid);
 		fds = opendir(fdpath);
-		if (!fds)
+		if (!fds) {
+			m->fd_read_failures++;
 			continue;
+		}
 		while ((fdent = readdir(fds))) {
 			char link[256], *s;
 			ssize_t l;
@@ -1492,8 +1516,10 @@ static void collect_proc_inodes(struct model *m)
 			/* Resolve links in the directory we are enumerating. */
 			l = readlinkat(dirfd(fds), fdent->d_name, link,
 				       sizeof(link) - 1);
-			if (l < 0)
+			if (l < 0) {
+				m->fd_read_failures++;
 				continue;
+			}
 			link[l] = 0;
 			/*
 			 * procfs may expose socket links in kernel-dependent formats.
@@ -1766,8 +1792,10 @@ static void parse_inet_file(struct model *m, const char *path,
 	int row = 0;
 
 	f = fopen(path, "rte");
-	if (!f)
+	if (!f) {
+		m->socket_read_failures++;
 		return;
+	}
 	__fsetlocking(f, FSETLOCKING_BYCALLER);
 	while (fgets(line, sizeof(line), f)) {
 		unsigned int lport, rport, state;
@@ -1835,6 +1863,8 @@ static void parse_inet_file(struct model *m, const char *path,
 		}
 		endpoint_to_ifaces(m, proto, af, addr, lport, ip->reuseport, ip);
 	}
+	if (ferror(f))
+		m->socket_read_failures++;
 	fclose(f);
 }
 
@@ -1854,8 +1884,10 @@ static void parse_packet_file(struct model *m)
 	int row = 0;
 
 	f = fopen("/proc/net/packet", "rte");
-	if (!f)
+	if (!f) {
+		m->socket_read_failures++;
 		return;
+	}
 	__fsetlocking(f, FSETLOCKING_BYCALLER);
 	while (fgets(line, sizeof(line), f)) {
 		unsigned long sk, inode;
@@ -1883,6 +1915,8 @@ static void parse_packet_file(struct model *m)
 		add_endpoint(m, name, bind, proto, PLANE_PACKET, ifn, addr,
 			&attrs, ip);
 	}
+	if (ferror(f))
+		m->socket_read_failures++;
 	fclose(f);
 }
 
@@ -2107,8 +2141,10 @@ static void parse_bluetooth_file(struct model *m, const char *path,
 	struct endpoint_attrs attrs = { 0, 0 };
 
 	f = fopen(path, "rte");
-	if (!f)
+	if (!f) {
+		m->socket_read_failures++;
 		return;
+	}
 	__fsetlocking(f, FSETLOCKING_BYCALLER);
 	while (fgets(line, sizeof(line), f)) {
 		unsigned long sk, inode, parent;
@@ -2127,6 +2163,8 @@ static void parse_bluetooth_file(struct model *m, const char *path,
 		add_endpoint(m, proto, ifaddr, 0, PLANE_BLUETOOTH, ifname,
 			     ifaddr, &attrs, ip);
 	}
+	if (ferror(f))
+		m->socket_read_failures++;
 	fclose(f);
 }
 #endif
@@ -2147,8 +2185,10 @@ static void parse_vsock_file(struct model *m)
 	char line[512];
 
 	f = fopen("/proc/net/vsock", "rte");
-	if (!f)
+	if (!f) {
+		m->socket_read_failures++;
 		return;
+	}
 	__fsetlocking(f, FSETLOCKING_BYCALLER);
 	while (fgets(line, sizeof(line), f)) {
 		char work[512];
@@ -2218,6 +2258,8 @@ static void parse_vsock_file(struct model *m)
 			continue;
 		add_vsock_endpoint(m, kind, cid, port, ip);
 	}
+	if (ferror(f))
+		m->socket_read_failures++;
 	fclose(f);
 }
 
@@ -2705,8 +2747,17 @@ static void render_tree_process_details(const char *prefix,
 		unit ? " unit=" : "", unit ? unit : "");
 	proc_tree_print_node(prefix, is_last, line, width);
 	proc_tree_build_child_prefix(pfx_child, sizeof(pfx_child), prefix, is_last);
+	if (p->seen_euid)
+		snprintf(line, sizeof(line), "effective_uid: %u",
+			 (unsigned int)p->euid);
+	else
+		snprintf(line, sizeof(line), "effective_uid: unknown");
+	proc_tree_print_node(pfx_child, 0, line, width);
 
-	if (strcmp(p->caps, "(full)") == 0 || strcmp(p->caps, "(none)") == 0) {
+	if (p->caps_unknown) {
+		snprintf(line, sizeof(line), "caps: (unknown)");
+	} else if (strcmp(p->caps, "(full)") == 0 ||
+		   strcmp(p->caps, "(none)") == 0) {
 		const char *c = strcmp(p->caps, "(full)") == 0 ? COLOR_ORANGE :
 			COLOR_GREEN;
 		if (use_color)
@@ -2823,20 +2874,26 @@ static void render_json_process(struct process_info *p,
 	}
 	printf(", \"pid\": %d, \"uid\": %u", p->pid,
 		(unsigned int)p->uid);
+	printf(", \"euid\": ");
+	if (p->seen_euid)
+		printf("%u", (unsigned int)p->euid);
+	else
+		printf("null");
 	if (p->unit) {
 		printf(", \"unit\": ");
 		json_escape(p->unit);
 	}
 	printf(", \"caps\": ");
 	json_escape(p->caps);
+	printf(", \"caps_known\": %s", p->caps_unknown ? "false" : "true");
 	printf(", \"ambient_present\": %s",
-		p->ambient_present ? "true" : "false");
+		p->caps_unknown ? "null" : p->ambient_present ? "true" : "false");
 	if (p->ambient_caps) {
 		printf(", \"ambient_caps\": ");
 		json_escape(p->ambient_caps);
 	}
 	printf(", \"open_ended_bounding\": %s",
-		p->open_ended_bounding ? "true" : "false");
+		p->caps_unknown ? "null" : p->open_ended_bounding ? "true" : "false");
 	printf(", \"defenses\": {\"" DEFENSES_RUNS_AS_KEY "\": ");
 	json_escape(p->defenses.runs_as_nonroot);
 	printf(", \"no_new_privs\": ");
@@ -2907,6 +2964,12 @@ static void render_tree(struct model *m)
 	size_t i, plane_end;
 	int width = proc_output_width();
 
+	if (m->process_read_failures || m->fd_read_failures ||
+	    m->capability_read_failures || m->socket_read_failures)
+		printf("Inspection incomplete: process=%lu fd=%lu "
+		       "capability=%lu socket_table=%lu\n",
+		       m->process_read_failures, m->fd_read_failures,
+		       m->capability_read_failures, m->socket_read_failures);
 	if (m->eps_n > 1)
 		qsort(m->eps, m->eps_n, sizeof(struct endpoint), endpoint_cmp);
 	for (i = 0; i < m->eps_n; i = plane_end) {
@@ -3095,6 +3158,10 @@ static void render_json(struct model *m)
 		qsort(m->eps, m->eps_n, sizeof(struct endpoint), endpoint_cmp);
 	puts("{");
 	puts("  \"schema_version\": 1,");
+	printf("  \"inspection_failures\": {\"process\": %lu, \"fd\": %lu, "
+	       "\"capability\": %lu, \"socket_table\": %lu},\n",
+	       m->process_read_failures, m->fd_read_failures,
+	       m->capability_read_failures, m->socket_read_failures);
 	puts("  \"planes\": [");
 	for (i = 0; i < PLANE_COUNT; i++) {
 		const char *pname = i == PLANE_INET_EXTERNAL ? "INET" :

@@ -17,6 +17,10 @@ int __wrap_capng_get_caps_process(void)
 	int cap;
 
 	capng_clear(CAPNG_SELECT_ALL);
+	if (capability_case == 4) {
+		errno = EACCES;
+		return -1;
+	}
 	if (capability_case == 3) {
 		capng_fill(CAPNG_SELECT_CAPS);
 		for (cap = 0; cap <= CAP_LAST_CAP; cap++)
@@ -179,6 +183,90 @@ static void test_process_rendering(void)
 	    strcmp(defense_color("disabled"), COLOR_YELLOW))
 		fail("Defense state classification changed");
 	use_color = 0;
+}
+
+static void test_unknown_posture(void)
+{
+	struct process_info p = {
+		.pid = getpid(), .uid = 1000, .euid = 0, .seen_euid = 1,
+		.comm = "unreadable",
+	};
+	struct proc_status status = {
+		.uid = 1000, .euid = 0, .seen_uid = 1, .seen_euid = 1,
+	};
+	struct endpoint endpoint = { 0 };
+	struct model m = { .process_read_failures = 1, .fd_read_failures = 2 };
+	char *text;
+	FILE *capture;
+	int saved, mode;
+
+	capability_case = 4;
+	collect_process_caps(&p);
+	parse_status_defenses(-1, &p.defenses, &status);
+	if (!p.caps_unknown || strcmp(p.caps, "(unknown)") ||
+	    strcmp(p.defenses.runs_as_nonroot, "no") ||
+	    strcmp(p.defenses.seccomp, "unknown") ||
+	    !(process_flags(&p, &endpoint) & FLAG_CAPS_UNKNOWN))
+		fail("Unreadable posture was classified as unprivileged");
+	capture = capture_output(&saved);
+	render_json_process(&p, &endpoint, "");
+	text = finish_output(capture, saved);
+	if (!strstr(text, "\"caps_known\": false") ||
+	    !strstr(text, "\"ambient_present\": null") ||
+	    !strstr(text, "\"open_ended_bounding\": null") ||
+	    !strstr(text, "\"uid\": 1000, \"euid\": 0") ||
+	    !strstr(text, "capabilities-unknown"))
+		fail("JSON lost unknown capability or effective identity state");
+	free(text);
+	use_color = 1;
+	capture = capture_output(&saved);
+	render_tree_process_details("", 1, &p, &endpoint, 120);
+	text = finish_output(capture, saved);
+	if (!strstr(text, "caps: (unknown)") ||
+	    strstr(text, "caps: " COLOR_GREEN) ||
+	    !strstr(text, "capabilities-unknown"))
+		fail("Tree displayed unreadable capabilities as safe");
+	free(text);
+	use_color = 0;
+	free(p.caps);
+	free(p.defenses.lsm_label);
+	status.uid = 0;
+	status.euid = 1000;
+	parse_status_defenses(-1, &p.defenses, &status);
+	if (strcmp(p.defenses.runs_as_nonroot, "yes"))
+		fail("Effective non-root identity was hidden by real UID");
+	free(p.defenses.lsm_label);
+	status.seen_euid = 0;
+	for (mode = -1; mode <= 3; mode++) {
+		struct defense_info d = { 0 };
+		const char *expected[] = { "unknown", "disabled", "strict",
+					   "filter", "unknown" };
+
+		status.seen_seccomp = mode >= 0;
+		status.seccomp = mode;
+		parse_status_defenses(-1, &d, &status);
+		if (strcmp(d.seccomp, expected[mode + 1]) ||
+		    strcmp(d.runs_as_nonroot, "unknown"))
+			fail("Missing or unfamiliar defense metadata was misclassified");
+		free(d.lsm_label);
+	}
+	parse_inet_file(&m, "/missing-netcap-test-table", "tcp", AF_INET);
+	capture = capture_output(&saved);
+	render_tree(&m);
+	text = finish_output(capture, saved);
+	if (!strstr(text, "Inspection incomplete: process=1 fd=2") ||
+	    !strstr(text, "socket_table=1"))
+		fail("Text omitted inventory inspection failures");
+	free(text);
+	capture = capture_output(&saved);
+	render_json(&m);
+	text = finish_output(capture, saved);
+	if (!strstr(text, "\"inspection_failures\"") ||
+	    !strstr(text, "\"process\": 1") ||
+	    !strstr(text, "\"socket_table\": 1"))
+		fail("JSON omitted inventory inspection failures");
+	free(text);
+	capability_case = 0;
 }
 
 static void test_tree_groups(void)
@@ -461,6 +549,7 @@ int main(int argc, char **argv)
 	test_permitted_summary();
 	test_json_string_encoding();
 	test_process_rendering();
+	test_unknown_posture();
 	test_tree_groups();
 	test_inet6_proc_reports();
 #ifdef HAVE_NETCAP_VSOCK
