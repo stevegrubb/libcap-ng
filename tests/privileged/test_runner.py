@@ -131,12 +131,24 @@ class EventCheckerTest(unittest.TestCase):
                 with self.subTest(case=case, corruption=n):
                     with self.assertRaises(AssertionError):
                         compare_events(bad, case)
+            cli_check = "[CAP] pid=10 cap=setpcap result=DENIED syscall=prctl\n"
             cli = (marker + record("EXP", (0, 0, 0), tid=tid) + expected +
                    "[CAPSET] pid=10 effective=0x0 permitted=0x0 inheritable=0x0\n" +
+                   cli_check +
                    "Application exited with status 0\n" +
                    json.dumps({"successful_capset_calls": 1,
                                "capability_drop_observed": True}, indent=2))
             self.assertIsNone(compare_cli(cli, case))
+            # Keep the workload's ECHK and CAPSET evidence intact: neither
+            # proves the CLI received the separate capability-check event.
+            for replacement in ("", cli_check * 2,
+                                cli_check.replace("pid=10", "pid=12"),
+                                cli_check.replace("setpcap", "sys_admin"),
+                                cli_check.replace("DENIED", "GRANTED"),
+                                cli_check.replace("prctl", "capset")):
+                with self.subTest(case=case, cli_check=replacement):
+                    with self.assertRaises(AssertionError):
+                        compare_cli(cli.replace(cli_check, replacement), case)
 
     def test_namespace(self):
         expected = ("ECHK 10 10 170 21 1 4026533000\n"
@@ -162,6 +174,9 @@ class EventCheckerTest(unittest.TestCase):
         self.assertIsNone(compare_namespace_cli(cli))
         for bad in (cli.replace("are suppressed", "are available"),
                     cli.replace("GRANTED", "DENIED"), cli + "setcap cap_sys_admin+ep app",
+                    cli + "AmbientCapabilities=CAP_SYS_ADMIN\n",
+                    cli + "CapabilityBoundingSet=CAP_SYS_ADMIN\n",
+                    cli + "Programmatic solution (C with libcap-ng):\n",
                     cli.replace("status 0", "status 1")):
             with self.subTest(bad=bad), self.assertRaises(AssertionError):
                 compare_namespace_cli(bad)

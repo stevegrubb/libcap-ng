@@ -278,7 +278,11 @@ def compare_namespace_cli(text):
     if ("Capability checks targeted a different user namespace." not in plain or
             "Automatic capability recommendations are suppressed" not in plain):
         raise AssertionError("CLI failed to suppress recommendations for a foreign namespace")
+    # A warning does not prove suppression if deployment advice follows it.
+    # Ambient grants and bounding limits are independent directives, so an
+    # unsafe ambient recommendation must be rejected even without a bound.
     if any(token in text for token in ("Programmatic solution", "setcap ",
+                                      "AmbientCapabilities=",
                                       "CapabilityBoundingSet=")):
         raise AssertionError("CLI emitted deployment advice for a foreign namespace")
     return None
@@ -321,6 +325,17 @@ def compare_cli(text, case):
         raise AssertionError("Audited workload did not exit successfully")
     if case in ("leader-exit", "worker-exec"):
         check_fixture(text, case, live=False)
+        # ECHK is printed by the workload, not the tracer. Its presence and
+        # a correct CAPSET summary can hide a dropped capability-check event
+        # in the CLI path. Require the auditor's own post-transition denial.
+        # Verbose CLI records have PID only; the BPF check also verifies TID.
+        expected_checks = [(str(e[0]), "setpcap", "DENIED")
+                           for e in check_records(text, "ECHK")]
+        observed_checks = re.findall(
+            r"\[CAP\] pid=(\d+) cap=(\S+) result=(GRANTED|DENIED) syscall=prctl\b",
+            text)
+        if observed_checks != expected_checks:
+            raise AssertionError("CLI post-transition capability checks differ")
     obj, _ = json.JSONDecoder().raw_decode(text[text.index("{\n"):])
     expected = [(pid, m) for (_, pid), v in records(text)["EXP"].items() for m in v]
     observed = [(int(pid), tuple(int(m, 16) for m in (e, p, i)))
