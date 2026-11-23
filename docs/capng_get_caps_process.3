@@ -14,7 +14,7 @@ capng_get_caps_process will get the capabilities and bounding set of the pid sto
 
 This returns 0 on success and -1 on failure. A failed read invalidates the capability snapshot, so queries cannot return stale capabilities from an earlier successful read.
 
-After a failed capget, callers can retry the read or use capng_setpid to select another target. Queries made without a valid snapshot may attempt a fresh read.
+After a failed process capability read, callers can retry the read or use capng_setpid to select another target. Queries made without a valid snapshot may attempt a fresh read.
 
 .SH NOTES
 

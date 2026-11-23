@@ -779,7 +779,7 @@ int capng_get_caps_process(void)
 if (HAVE_PR_CAPBSET_DROP) {
 		rc = get_bounding_set();
 		if (rc < 0) {
-			m.state = CAPNG_ERROR;
+			invalidate_process_caps();
 			return rc;
 		}
 }
@@ -788,7 +788,7 @@ if (HAVE_PR_CAPBSET_DROP) {
 if (HAVE_PR_CAP_AMBIENT) {
 		rc = get_ambient_set();
 		if (rc < 0)
-			m.state = CAPNG_ERROR;
+			invalidate_process_caps();
 }
 #endif
 	}

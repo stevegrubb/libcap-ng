@@ -21,6 +21,7 @@
 #if defined(PR_CAPBSET_DROP) && defined(PR_CAP_AMBIENT)
 
 static const char *status_text;
+static int status_error = ENOENT;
 static int capget_error;
 static int bounds_error;
 static int ambient_error;
@@ -65,7 +66,7 @@ FILE *fopen(const char *path, const char *mode)
 	/* Supply only the metadata selected by the test, never host procfs. */
 	if (status_text)
 		return fmemopen((void *)status_text, strlen(status_text), "r");
-	errno = ENOENT;
+	errno = status_error;
 	return NULL;
 }
 
@@ -116,12 +117,20 @@ static void test_read(int bounds_errno, int ambient_errno, int expected_errno)
 	errno = 0;
 	rc = capng_get_caps_process();
 	read_errno = errno;
+	/* Queries on an unread snapshot can retry, so inspect this read first. */
+	check(capget_calls == 1, "Expected one process capability read");
+	check(bounds_calls > 0, "Bounding queries were not exercised");
+	if (!bounds_errno)
+		check(ambient_calls > 0, "Ambient queries were not exercised");
 	if (expected_errno) {
 		check(rc == -1, "Capability read returned success after failure");
 		check(read_errno == expected_errno,
 		      "Capability read lost the first failure's errno");
 		check(capng_have_capabilities(CAPNG_SELECT_ALL) == CAPNG_FAIL,
 		      "Failed capability snapshot was accepted");
+		bounds_error = ambient_error = 0;
+		check(capng_get_caps_process() == 0,
+		      "Failed prctl read prevented snapshot recovery");
 	} else {
 		check(rc == 0, "Successful capability read returned failure");
 		check(capng_have_capability(CAPNG_EFFECTIVE, CAP_CHOWN) &&
@@ -129,11 +138,7 @@ static void test_read(int bounds_errno, int ambient_errno, int expected_errno)
 		      capng_have_capability(CAPNG_AMBIENT, CAP_CHOWN),
 		      "Successful read lost capability set contents");
 	}
-	check(capget_calls == 1, "Expected one process capability read");
-	check(bounds_calls > 0, "Bounding queries were not exercised");
-	if (!bounds_errno)
-		check(ambient_calls > 0, "Ambient queries were not exercised");
-	/* Each case starts with a usable state, including after CAPNG_ERROR. */
+	/* Restore the caller's snapshot only after exercising recovery. */
 	capng_restore_state(&saved);
 }
 
@@ -237,6 +242,83 @@ static void test_target(pid_t pid, const char *status, int expected_errno)
 	capng_restore_state(&saved);
 }
 
+static void test_metadata_recovery(void)
+{
+	static const struct {
+		const char *status;
+		int error;
+	} cases[] = {
+		{ NULL, ENOENT },
+		{ NULL, EACCES },
+		{ "Name:\ttarget\n", ENODATA },
+		{ "CapBnd:\t0000000000000002\n", ENODATA },
+		{ "CapBnd:\tinvalid\n", 0 },
+		{ "CapBnd:\t0000000000000002\nCapAmb:\tinvalid\n", 0 },
+	};
+	size_t i;
+	int recovery;
+
+	for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+		for (recovery = 0; recovery < 4; recovery++) {
+			pid_t target = getpid() + 1;
+			int rc, read_errno;
+
+			status_text = NULL;
+			capng_clear(CAPNG_SELECT_ALL);
+			capng_setpid(0);
+			check(capng_get_caps_process() == 0,
+			      "Initial metadata recovery snapshot failed");
+			capng_setpid(target);
+			status_text = cases[i].status;
+			status_error = cases[i].error;
+			bounds_calls = ambient_calls = 0;
+			rc = capng_get_caps_process();
+			read_errno = errno;
+			check(rc == -1, "Remote metadata failure was ignored");
+			if (cases[i].error)
+				check(read_errno == cases[i].error,
+				      "Remote metadata errno was lost");
+			check(capng_have_capabilities(CAPNG_SELECT_ALL) ==
+			      CAPNG_FAIL, "Partial snapshot became usable");
+			check(!bounds_calls && !ambient_calls,
+			      "Remote failure queried the caller's sets");
+
+			if (recovery == 2)
+				capng_clear(CAPNG_SELECT_ALL);
+			if (recovery == 1 || recovery == 2)
+				capng_setpid(++target);
+			if (recovery == 3) {
+				/* A late ambient failure must discard E/P/I and
+				 * Bnd too, not just the set that failed to load.
+				 */
+				capng_clear(CAPNG_SELECT_AMBIENT);
+				check(capng_have_capabilities(CAPNG_SELECT_ALL)
+				      == CAPNG_NONE,
+				      "Partial clear revived an incomplete read");
+				check(!capng_have_capability(CAPNG_PERMITTED,
+							    CAP_CHOWN),
+				      "Partial clear revived permitted bits");
+			}
+			status_text = "CapBnd:\t0000000000000004\n"
+				      "CapAmb:\t0000000000000004\n";
+			capget_calls = 0;
+			check(capng_get_caps_process() == 0 &&
+			      capget_calls == 1 && capget_pid == target,
+			      "Metadata failure prevented a fresh target read");
+			check(capng_have_capability(CAPNG_BOUNDING_SET,
+						   CAP_DAC_READ_SEARCH) &&
+			      capng_have_capability(CAPNG_AMBIENT,
+						   CAP_DAC_READ_SEARCH),
+			      "Recovery did not install fresh metadata");
+			check(!bounds_calls && !ambient_calls,
+			      "Valid remote metadata queried the caller's sets");
+		}
+	}
+	status_text = NULL;
+	status_error = ENOENT;
+	capng_setpid(0);
+}
+
 #ifdef HAVE_SYSCALL_H
 static void *test_thread_target(void *unused)
 {
@@ -269,6 +351,7 @@ int main(void)
 	test_target(getpid() + 1, "CapBnd:\t0000000000000001\n", ENODATA);
 	test_target(getpid() + 1, "CapBnd:\t0000000000000001\n"
 		    "CapAmb:\t0000000000000001\n", 0);
+	test_metadata_recovery();
 #ifdef HAVE_SYSCALL_H
 	pthread_t thread;
 
