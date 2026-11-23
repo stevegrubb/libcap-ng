@@ -14,8 +14,49 @@ def get_last_cap():
     return last
 
 
+def test_updatev_boundary():
+    # Fill every optional slot so safety cannot depend on SWIG's defaults.
+    for capabilities in ([capng.CAP_CHOWN],
+                         [capng.CAP_CHOWN, -1],
+                         [capng.CAP_CHOWN] * 65,
+                         [capng.CAP_CHOWN] * 64 + [-1]):
+        capng.capng_clear(capng.CAPNG_SELECT_BOTH)
+        if capng.capng_updatev(capng.CAPNG_ADD, capng.CAPNG_EFFECTIVE,
+                              *capabilities) != 0:
+            raise AssertionError("Valid updatev list was rejected")
+        if not capng.capng_have_capability(capng.CAPNG_EFFECTIVE,
+                                          capng.CAP_CHOWN):
+            raise AssertionError("updatev did not stage the capability")
+
+    # A terminator still stops the native reader before later arguments.
+    capng.capng_clear(capng.CAPNG_SELECT_BOTH)
+    if capng.capng_updatev(capng.CAPNG_ADD, capng.CAPNG_EFFECTIVE,
+                          capng.CAP_CHOWN, -1, capng.CAP_KILL) != 0:
+        raise AssertionError("Explicit updatev terminator was rejected")
+    if capng.capng_have_capability(capng.CAPNG_EFFECTIVE, capng.CAP_KILL):
+        raise AssertionError("updatev read past its explicit terminator")
+
+    for capabilities in ([capng.CAP_CHOWN] * 66,
+                         [capng.CAP_KILL, object()],
+                         [capng.CAP_KILL, 1 << 64]):
+        before = capng.capng_print_caps_numeric(capng.CAPNG_PRINT_BUFFER,
+                                                capng.CAPNG_SELECT_BOTH)
+        try:
+            capng.capng_updatev(capng.CAPNG_ADD, capng.CAPNG_EFFECTIVE,
+                               *capabilities)
+        except (TypeError, OverflowError):
+            pass
+        else:
+            raise AssertionError("Invalid updatev arguments were accepted")
+        after = capng.capng_print_caps_numeric(capng.CAPNG_PRINT_BUFFER,
+                                               capng.CAPNG_SELECT_BOTH)
+        if before != after:
+            raise AssertionError("Rejected updatev arguments changed state")
+
+
 def main():
     last = get_last_cap()
+    test_updatev_boundary()
 
     if capng.CAPNG_UNSET_ROOTID != 0xffffffff:
         print("CAPNG_UNSET_ROOTID has the wrong value")

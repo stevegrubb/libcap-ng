@@ -28,18 +28,18 @@
 
 #if defined(SWIGPYTHON)
 
-/*
- * SWIG expands varargs into a fixed argument list. Any omitted optional
- * arguments are passed to capng_updatev() using this default value.
- *
- * capng_updatev() requires (unsigned)-1 as the varargs terminator, so the
- * default must also be -1 or the function keeps consuming arguments past the
- * generated wrapper list.
- *
- * The old cap of 16 optional entries predates current capability counts and
- * is easy to hit. Allow up to 64 varargs entries in the wrapper.
- */
 %varargs(64, signed capability = -1) capng_updatev;
+
+/*
+ * SWIG supplies defaults only for omitted arguments. All 64 slots can be
+ * supplied, so append a separate terminator to the generated C call.
+ * Keep the macro scoped to that call.
+ */
+%exception capng_updatev %{
+#define capng_updatev(...) capng_updatev(__VA_ARGS__, (unsigned int)-1)
+	$action
+#undef capng_updatev
+%}
 
 #endif
 
