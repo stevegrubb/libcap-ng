@@ -335,6 +335,13 @@ int main(int argc, char **argv)
 			goto err_target_path;
 		}
 
+		/*
+		 * Check ExecStart expansions only after choosing what will run.
+		 * Words replaced by an explicit override are never executed, and
+		 * an override is the documented way to audit a unit whose command
+		 * needs expansions cap-audit cannot reproduce. The unit's user,
+		 * group, capability and prefix settings still apply either way.
+		 */
 		if (separator_seen && arg_idx < argc) {
 			if (argv[arg_idx][0] == '-') {
 				if (!state.service_cfg->exec_argv) {
@@ -342,6 +349,10 @@ int main(int argc, char **argv)
 						"Error: service has no ExecStart executable for argument override\n");
 					goto err_target_path;
 				}
+				/* Only the unit's executable is kept. */
+				if (resolve_service_command(state.service_cfg,
+							    1) != 0)
+					goto err_target_path;
 				service_target_argv =
 				    prepend_execstart_argv(state.service_cfg,
 							   &argv[arg_idx],
@@ -358,6 +369,9 @@ int main(int argc, char **argv)
 					"Error: service has no ExecStart command\n");
 				goto err_target_path;
 			}
+			if (resolve_service_command(state.service_cfg,
+				    state.service_cfg->exec_argc) != 0)
+				goto err_target_path;
 			state.target_argv = state.service_cfg->exec_argv;
 		}
 	} else if (arg_idx >= argc) {

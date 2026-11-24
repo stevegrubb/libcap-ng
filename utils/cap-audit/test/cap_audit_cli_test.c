@@ -172,6 +172,92 @@ static void run_case(char **args, int expected, const char *field)
 	fclose(capture);
 }
 
+/* Expect a setup failure before tracing and a specific stderr message. */
+static void run_rejected(char **args, const char *message)
+{
+	FILE *errors = tmpfile();
+	pid_t child;
+	int status, argc = 0;
+	char output[4096];
+	size_t size;
+
+	while (args[argc])
+		argc++;
+	if (!errors || fflush(NULL))
+		fail("Cannot prepare CLI error capture");
+	child = fork();
+	if (child < 0)
+		fail("Cannot fork CLI test");
+	if (!child) {
+		alarm(10);
+		if (dup2(fileno(errors), STDERR_FILENO) < 0)
+			_exit(3);
+		exit(cap_audit_main(argc, args));
+	}
+	if (waitpid(child, &status, 0) != child || !WIFEXITED(status) ||
+	    WEXITSTATUS(status) != 1)
+		fail("CLI did not reject the selected service command");
+	rewind(errors);
+	size = fread(output, 1, sizeof(output) - 1, errors);
+	output[size] = 0;
+	if (!strstr(output, message)) {
+		fprintf(stderr, "%s\n", output);
+		fail(message);
+	}
+	fclose(errors);
+}
+
+static void write_unit(char *path, const char *contents)
+{
+	size_t len = strlen(contents);
+	int fd = mkstemp(path);
+
+	if (fd < 0 || write(fd, contents, len) != (ssize_t)len || close(fd))
+		fail("Cannot prepare service fixture");
+}
+
+/*
+ * test_service_overrides - check ExecStart expansions only where they run.
+ *
+ * Unit words replaced by an explicit command or argument override are never
+ * executed, so their unsupported expansions must not block the audit. The
+ * distinct exit statuses prove which arguments the traced workload received.
+ */
+static void test_service_overrides(void)
+{
+	char args_unit[] = "/tmp/cap-audit-args-XXXXXX";
+	char env_unit[] = "/tmp/cap-audit-env-XXXXXX";
+	char path_unit[] = "/tmp/cap-audit-path-XXXXXX";
+	char *full[] = { "cap-audit", "-j", "--service", args_unit, "--",
+			 "/bin/sh", "-c", "exit 5", NULL };
+	char *replace[] = { "cap-audit", "-j", "--service", args_unit, "--",
+			    "-c", "exit 7", NULL };
+	char *strict[] = { "cap-audit", "-j", "--service", args_unit, NULL };
+	char *env_replace[] = { "cap-audit", "-j", "--service", env_unit,
+				"--", "-c", "exit 9", NULL };
+	char *env_strict[] = { "cap-audit", "-j", "--service", env_unit, NULL };
+	char *path_replace[] = { "cap-audit", "-j", "--service", path_unit,
+				 "--", "-c", "exit 0", NULL };
+
+	write_unit(args_unit, "[Service]\nExecStart=/bin/sh %i -c true\n");
+	write_unit(env_unit, "[Service]\nExecStart=/bin/sh ${FOO}\n");
+	write_unit(path_unit, "[Service]\nExecStart=/bin/%n -c true\n");
+
+	mode = NORMAL;
+	run_case(full, 0, "\"target_exit_status\": 5");
+	run_case(replace, 0, "\"target_exit_status\": 7");
+	run_case(env_replace, 0, "\"target_exit_status\": 9");
+	/* Without an override, every unit word executes and is checked. */
+	run_rejected(strict, "ExecStart specifiers such as %i are unsupported");
+	run_rejected(env_strict, "ExecStart ${NAME} expansion is unsupported");
+	/* Replacement arguments still execute the unit's own executable. */
+	run_rejected(path_replace,
+		     "ExecStart specifiers such as %i are unsupported");
+
+	if (unlink(args_unit) || unlink(env_unit) || unlink(path_unit))
+		fail("Cannot remove service fixtures");
+}
+
 int main(void)
 {
 	char *json[] = { "cap-audit", "-j", "--", "/bin/sh", "-c",
@@ -199,6 +285,7 @@ int main(void)
 		run_case(json, 2, "\"collection_complete\": false");
 		run_case(text, 2, "Observation is incomplete");
 	}
+	test_service_overrides();
 	fd = mkstemp(unit);
 	if (fd < 0 || write(fd, service, sizeof(service) - 1) != sizeof(service) - 1 ||
 	    close(fd))

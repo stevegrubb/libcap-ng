@@ -605,13 +605,21 @@ static int resolve_exec_word(char *word, int expand_env)
 	return 0;
 }
 
-static int resolve_exec_words(service_config_t *cfg, int expand_env)
+/*
+ * resolve_service_command - check the unit command words that will execute.
+ * @cfg: parsed service whose ExecStart words are rewritten in place.
+ * @words: number of leading words used; 1 when only the executable is kept.
+ *
+ * Returns 0 on success, or -1 if a used word needs an unsupported expansion.
+ */
+int resolve_service_command(service_config_t *cfg, size_t words)
 {
 	size_t i;
 
 	/* systemd does not substitute variables in the executable path. */
-	for (i = 0; i < cfg->exec_argc; i++) {
-		if (resolve_exec_word(cfg->exec_argv[i], expand_env && i > 0))
+	for (i = 0; i < words && i < cfg->exec_argc; i++) {
+		if (resolve_exec_word(cfg->exec_argv[i],
+				      !cfg->exec_no_env_expand && i > 0))
 			return -1;
 	}
 	return 0;
@@ -633,6 +641,7 @@ static int set_exec_start(service_config_t *cfg, const char *value)
 	}
 	free_exec_argv(cfg);
 	cfg->exec_start_no_setuid = false;
+	cfg->exec_no_env_expand = false;
 	if (replace_string(&cfg->exec_start, value) != 0)
 		return -1;
 	if (value[0] == '\0')
@@ -645,13 +654,16 @@ static int set_exec_start(service_config_t *cfg, const char *value)
 	cfg->exec_argc = argc;
 	if (strip_exec_prefixes(cfg, &no_env_expand) != 0)
 		return -1;
+	cfg->exec_no_env_expand = no_env_expand;
 	/*
-	 * Omit standalone $NAME words first: an unset variable removes the
-	 * whole word, so its text must not be checked as a literal.
+	 * Omit standalone $NAME words now: an unset variable removes the whole
+	 * word, so its text must not be checked as a literal later. Other
+	 * expansions are checked by resolve_service_command() once the command
+	 * to trace is known.
 	 */
 	if (!no_env_expand)
 		omit_exec_environment_words(cfg);
-	return resolve_exec_words(cfg, !no_env_expand);
+	return 0;
 }
 
 static int cap_from_name(const char *name)

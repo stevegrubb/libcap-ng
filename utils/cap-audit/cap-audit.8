@@ -182,9 +182,11 @@ or
 .B %h
 are rejected because the unit name and manager context are not available;
 .B %%
-is passed as a literal percent sign. Supply an explicit command after
+is passed as a literal percent sign. These checks apply only to the words
+that will execute. Supply an explicit command after
 .B --
-when an expansion is needed for the audit.
+when an expansion is needed for the audit; with replacement arguments, only
+the unit's executable path is checked.
 .PP
 A single
 .B !

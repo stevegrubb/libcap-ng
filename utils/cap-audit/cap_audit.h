@@ -187,6 +187,8 @@ typedef struct {
 	size_t exec_argc;
 	/* ExecStart=! leaves configured credential changes to the command. */
 	bool exec_start_no_setuid;
+	/* ExecStart=: disables variable substitution in the unit command. */
+	bool exec_no_env_expand;
 } service_config_t;
 
 enum trace_stop_reason {
@@ -313,6 +315,9 @@ type_t classify_app(const char *exe)
 int parse_service_file(const char *path, service_config_t *cfg)
 	__attr_access ((__read_only__, 1))
 	__attr_access ((__read_write__, 2))
+	__wur;
+int resolve_service_command(service_config_t *cfg, size_t words)
+	__attr_access ((__read_write__, 1))
 	__wur;
 int apply_service_config(const service_config_t *cfg)
 	__attr_access ((__read_only__, 1))
