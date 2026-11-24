@@ -73,8 +73,7 @@ checks prerequisites.
 
 ## Portability and Compatibility
 
-Preserve glibc and musl support, optional kernel-header features, and builds
-without Python or cap-audit. Avoid assuming that build-host kernel headers
+Preserve glibc and musl support and optional kernel-header features. Avoid assuming that build-host kernel headers
 guarantee runtime kernel support. Match validation to the configurations and
 architectures affected by a change.
 
