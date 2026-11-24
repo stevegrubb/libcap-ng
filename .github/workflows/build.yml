@@ -7,14 +7,33 @@ on:
 permissions:
   contents: read
 
+# Optional components are spread across the existing jobs instead of adding
+# jobs: one Fedora build stays minimal (no cap-audit or Python), the other
+# builds cap-audit under ASan and UBSan, and Alpine builds cap-audit and the
+# Python bindings against musl. An ASan-instrumented Python module cannot
+# load into an uninstrumented interpreter, and musl lacks ASan, so Python is
+# covered on Alpine. cap-audit tracing needs privileges CI lacks; building it
+# runs its unprivileged unit tests, including the simulated BPF test.
+# vmlinux.h is generated from the runner kernel's BTF via the read-only /sys.
+
 jobs:
   fedora-rawhide:
-    name: Fedora Rawhide (${{ matrix.cflags }})
+    name: Fedora Rawhide (${{ matrix.name }})
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
       matrix:
-        cflags: ["-O2 -g", "-O2 -g -flto"]
+        include:
+          - name: "-O2 -g, cap-audit, ASan+UBSan"
+            cflags: "-O2 -g -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize-recover=undefined"
+            ldflags: "-fsanitize=address,undefined"
+            configure: "--enable-cap-audit --without-python"
+            packages: "clang llvm bpftool libbpf-devel elfutils-libelf-devel audit-libs-devel libasan libubsan"
+          - name: "-O2 -g -flto"
+            cflags: "-O2 -g -flto"
+            ldflags: ""
+            configure: "--without-python"
+            packages: ""
 
     steps:
       - name: Check out source
@@ -27,22 +46,28 @@ jobs:
           docker run --rm --pull=always --platform linux/amd64 \
             --security-opt no-new-privileges=true \
             --env CFLAGS="${{ matrix.cflags }}" \
+            --env LDFLAGS="${{ matrix.ldflags }}" \
+            --env CONFIGURE_FLAGS="${{ matrix.configure }}" \
+            --env EXTRA_PACKAGES="${{ matrix.packages }}" \
+            --env ASAN_OPTIONS="detect_leaks=1" \
+            --env UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=1" \
             --volume "$GITHUB_WORKSPACE:/work" \
             --workdir /work \
             fedora:rawhide \
             sh -euxc '
               dnf -y --setopt=install_weak_deps=False install \
                 gcc make autoconf automake libtool \
-                pkgconf-pkg-config kernel-headers libattr-devel
+                pkgconf-pkg-config kernel-headers libattr-devel \
+                $EXTRA_PACKAGES
 
               ./autogen.sh
-              ./configure --without-python
+              ./configure $CONFIGURE_FLAGS
               make -j20
               make -j20 check
             '
 
   alpine-musl:
-    name: Alpine edge (musl, x86_64)
+    name: Alpine edge (musl, x86_64, cap-audit, Python)
     runs-on: ubuntu-24.04
     timeout-minutes: 20
 
@@ -62,10 +87,12 @@ jobs:
             sh -euxc '
               apk add --no-cache \
                 build-base autoconf automake libtool \
-                linux-headers pkgconf coreutils
+                linux-headers pkgconf coreutils \
+                clang llvm bpftool libbpf-dev elfutils-dev audit-dev \
+                zlib-dev python3-dev py3-setuptools swig
 
               ./autogen.sh
-              ./configure --without-python
+              ./configure --enable-cap-audit --with-python3
               make -j32
               make -j32 check
             '
