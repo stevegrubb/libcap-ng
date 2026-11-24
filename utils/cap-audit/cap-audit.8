@@ -156,9 +156,20 @@ A standalone
 .B $NAME
 argument in
 .B ExecStart=
-is therefore treated as unset and omitted. Supply an explicit command after
+is therefore treated as unset and omitted, and
+.B $$
+is passed as a literal dollar sign. A
+.B ${NAME}
+reference is rejected because it always produces an argument whose value is
+unknown. Unit specifiers such as
+.B %i
+or
+.B %h
+are rejected because the unit name and manager context are not available;
+.B %%
+is passed as a literal percent sign. Supply an explicit command after
 .B --
-when a non-empty expansion is needed for the audit.
+when an expansion is needed for the audit.
 .PP
 A single
 .B !

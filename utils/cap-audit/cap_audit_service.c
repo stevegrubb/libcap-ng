@@ -545,6 +545,65 @@ static void omit_exec_environment_words(service_config_t *cfg)
 	cfg->exec_argc = dst;
 }
 
+/*
+ * resolve_exec_word - apply systemd's literal escapes to one ExecStart word.
+ * @word: unquoted word, rewritten in place.
+ * @expand_env: nonzero when systemd would substitute variables in @word.
+ *
+ * systemd expands unit specifiers in every word, and ${NAME} anywhere in an
+ * argument. Neither the unit name nor the service environment is known
+ * here, so passing the text through would trace a different command. %%
+ * and $$ are the documented literal forms. An unbraced $NAME inside a
+ * longer word is not substituted by systemd and stays literal.
+ *
+ * Returns 0 on success, or -1 if the word needs an unsupported expansion.
+ */
+static int resolve_exec_word(char *word, int expand_env)
+{
+	const char *src = word;
+	char *dst = word;
+
+	while (*src) {
+		if (src[0] == '%') {
+			if (src[1] != '%') {
+				fprintf(stderr,
+					"Error: ExecStart specifiers such as %%i are unsupported\n");
+				return -1;
+			}
+			*dst++ = '%';
+			src += 2;
+			continue;
+		}
+		if (expand_env && src[0] == '$') {
+			if (src[1] == '$') {
+				*dst++ = '$';
+				src += 2;
+				continue;
+			}
+			if (src[1] == '{') {
+				fprintf(stderr,
+					"Error: ExecStart ${NAME} expansion is unsupported\n");
+				return -1;
+			}
+		}
+		*dst++ = *src++;
+	}
+	*dst = '\0';
+	return 0;
+}
+
+static int resolve_exec_words(service_config_t *cfg, int expand_env)
+{
+	size_t i;
+
+	/* systemd does not substitute variables in the executable path. */
+	for (i = 0; i < cfg->exec_argc; i++) {
+		if (resolve_exec_word(cfg->exec_argv[i], expand_env && i > 0))
+			return -1;
+	}
+	return 0;
+}
+
 static int set_exec_start(service_config_t *cfg, const char *value)
 {
 	char **argv = NULL;
@@ -573,9 +632,13 @@ static int set_exec_start(service_config_t *cfg, const char *value)
 	cfg->exec_argc = argc;
 	if (strip_exec_prefixes(cfg, &no_env_expand) != 0)
 		return -1;
+	/*
+	 * Omit standalone $NAME words first: an unset variable removes the
+	 * whole word, so its text must not be checked as a literal.
+	 */
 	if (!no_env_expand)
 		omit_exec_environment_words(cfg);
-	return 0;
+	return resolve_exec_words(cfg, !no_env_expand);
 }
 
 static int cap_from_name(const char *name)

@@ -325,6 +325,65 @@ static void test_exec_start_environment_words(const char *dir)
 }
 
 /*
+ * test_exec_start_expansions - reject expansions cap-audit cannot reproduce.
+ * @dir: temporary directory for unit fixtures.
+ *
+ * Returns no value; fails if a specifier or ${NAME} reaches the traced
+ * command unchanged, or if a literal %% or $$ escape is mistranslated.
+ */
+static void test_exec_start_expansions(const char *dir)
+{
+	static const char *bad_units[] = {
+		"[Service]\nExecStart=/usr/bin/echo %i\n",
+		"[Service]\nExecStart=/usr/bin/echo --home=%h\n",
+		"[Service]\nExecStart=/usr/bin/echo 100%\n",
+		"[Service]\nExecStart=/usr/lib/%n/daemon\n",
+		"[Service]\nExecStart=:/usr/bin/echo %i\n",
+		"[Service]\nExecStart=/usr/bin/echo ${FOO}\n",
+		"[Service]\nExecStart=/usr/bin/echo --conf=${FOO}\n",
+		"[Service]\nExecStart=/usr/bin/echo \"${FOO}\"\n",
+	};
+	const char unit[] =
+		"[Service]\nExecStart=/usr/bin/a$$b 100%% cost=$$5 $$ "
+		"--label=$KEEP\n";
+	static const char *expected[] = {
+		"/usr/bin/a$$b", "100%", "cost=$5", "$", "--label=$KEEP",
+	};
+	const char literal_unit[] =
+		"[Service]\nExecStart=:/usr/bin/echo ${FOO} $$ 50%%\n";
+	static const char *literal_expected[] = {
+		"/usr/bin/echo", "${FOO}", "$$", "50%",
+	};
+	service_config_t cfg;
+	size_t i;
+
+	for (i = 0; i < sizeof(bad_units) / sizeof(bad_units[0]); i++)
+		expect_parse_failure(dir, "expansion.service", bad_units[i]);
+
+	if (parse_unit(dir, "literal-percent.service", unit, &cfg) != 0)
+		fail("Literal %% and $$ escapes should parse");
+	if (cfg.exec_argc != sizeof(expected) / sizeof(expected[0]))
+		fail("Literal escapes changed the argument count");
+	for (i = 0; i < cfg.exec_argc; i++) {
+		if (strcmp(cfg.exec_argv[i], expected[i]))
+			fail("Literal %% or $$ escape was mistranslated");
+	}
+	free_config(&cfg);
+
+	/* ExecStart=: disables variable substitution but not specifiers. */
+	if (parse_unit(dir, "literal-prefix.service", literal_unit, &cfg) != 0)
+		fail("ExecStart=: should keep variables literal");
+	if (cfg.exec_argc != sizeof(literal_expected) /
+			     sizeof(literal_expected[0]))
+		fail("ExecStart=: changed the argument count");
+	for (i = 0; i < cfg.exec_argc; i++) {
+		if (strcmp(cfg.exec_argv[i], literal_expected[i]))
+			fail("ExecStart=: escape handling was wrong");
+	}
+	free_config(&cfg);
+}
+
+/*
  * test_service_ambient - apply ambient settings for root, non-root and !.
  * @dir: temporary directory for unit fixtures.
  *
@@ -534,6 +593,7 @@ int main(void)
 	test_sink_validation();
 	test_exec_start_privilege_prefixes(dir);
 	test_exec_start_environment_words(dir);
+	test_exec_start_expansions(dir);
 	test_service_ambient(dir);
 	test_capability_lists(dir);
 	test_exec_start_reset(dir);
