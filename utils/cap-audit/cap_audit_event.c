@@ -176,6 +176,36 @@ void finish_cap_events(void)
 		finish_keepcaps_window(&state.keepcaps_windows, false);
 }
 
+/*
+ * free_cap_check - release the evidence event handling attached to @check.
+ * @check: capability check whose reasons and syscall lists are freed.
+ *
+ * The check is cleared afterward so it can be reused without stale
+ * pointers or counts that describe freed storage.
+ */
+void free_cap_check(struct cap_check *check)
+{
+	free(check->reason);
+	free(check->op_reason);
+	free(check->denied_syscalls);
+	free(check->outcomes);
+	memset(check, 0, sizeof(*check));
+}
+
+/*
+ * free_cap_checks - release the evidence attached to every capability check.
+ *
+ * Only the per-check fields are touched: callers own the other state
+ * fields, and unit tests point some of them at static storage.
+ */
+void free_cap_checks(void)
+{
+	int i;
+
+	for (i = 0; i <= CAP_LAST_CAP; i++)
+		free_cap_check(&state.app.checks[i]);
+}
+
 static int is_always_noise(const struct cap_event *e)
 {
 	/* Exec credential transitions are independent of application work. */

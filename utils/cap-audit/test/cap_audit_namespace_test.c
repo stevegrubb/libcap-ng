@@ -126,6 +126,8 @@ static char *analyze_event(__u32 target_ns, int result)
 		.targ_ns_inum = target_ns,
 	};
 
+	/* Release the previous case's evidence before clearing state. */
+	free_cap_checks();
 	memset(&state, 0, sizeof(state));
 	state.observation.exec_confirmed = true;
 	state.observation.target_exited = true;

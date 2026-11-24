@@ -220,6 +220,7 @@ static void setup_events(void)
 {
 	int i;
 
+	free_cap_checks();
 	memset(&state, 0, sizeof(state));
 	state.baseline_user_ns_inum = 100;
 	state.observation.exec_confirmed = true;
@@ -532,6 +533,7 @@ static void test_optional_setpcap(void)
 	struct cap_check *check;
 	char *output;
 
+	free_cap_checks();
 	memset(&state, 0, sizeof(state));
 	state.baseline_user_ns_inum = 100;
 	state.app.exe = "/usr/bin/capset-target";
@@ -567,9 +569,7 @@ static void test_optional_setpcap(void)
 		fail("Non-optional SETPCAP use was suppressed");
 
 	/* Optional use must not erase an explicit successful capset request. */
-	free(check->reason);
-	free(check->op_reason);
-	memset(check, 0, sizeof(*check));
+	free_cap_check(check);
 	state.foreign_target_ns_observed = false;
 	emit_capset(0, 1ULL << CAP_SETPCAP, 1ULL << CAP_SETPCAP, 0);
 	if (!cap_is_capset_only(CAP_SETPCAP))
@@ -589,6 +589,7 @@ static void test_event_reasons(void)
 {
 	struct cap_check *check = &state.app.checks[CAP_CHOWN];
 
+	free_cap_checks();
 	memset(&state, 0, sizeof(state));
 	state.baseline_user_ns_inum = 100;
 	state.app.pid = 1234;
@@ -598,8 +599,7 @@ static void test_event_reasons(void)
 	if (!check->reason || strcmp(check->reason, "Used by openat") ||
 	    !check->op_reason || strcmp(check->op_reason, "Used by ioctl"))
 		fail("Startup and operational reasons were not kept separate");
-	free(check->reason);
-	free(check->op_reason);
+	free_cap_check(check);
 }
 
 /* Emit the completion of a keepcaps prctl on a selected target thread. */
@@ -619,16 +619,9 @@ static void emit_keepcaps(__u32 tid, int enabled, __s64 ret)
 /* Free diagnostic storage so repeated synthetic runs also test ownership. */
 static void reset_keepcaps_test(void)
 {
-	int cap;
-
 	if (state.keepcaps_windows)
 		fail("Test leaked a keepcaps window");
-	for (cap = 0; cap <= CAP_LAST_CAP; cap++) {
-		free(state.app.checks[cap].reason);
-		free(state.app.checks[cap].op_reason);
-		free(state.app.checks[cap].denied_syscalls);
-		free(state.app.checks[cap].outcomes);
-	}
+	free_cap_checks();
 	memset(&state, 0, sizeof(state));
 	state.baseline_user_ns_inum = 100;
 	state.app.pid = 1234;
@@ -857,6 +850,7 @@ static void test_report_scope(void)
 
 	for (kind = 0; kind < 2; kind++) {
 		for (scope = 0; scope < 3; scope++) {
+			free_cap_checks();
 			memset(&state, 0, sizeof(state));
 			state.app.exe = "/tmp/scope-target";
 			state.baseline_user_ns_inum = 100;

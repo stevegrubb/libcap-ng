@@ -667,17 +667,7 @@ child_launch_failed:
 		free(state.service_cfg);
 	}
 	free(state.service_file);
-
-	for (int i = 0; i <= CAP_LAST_CAP; i++) {
-		if (state.app.checks[i].reason)
-			free(state.app.checks[i].reason);
-		if (state.app.checks[i].op_reason)
-			free(state.app.checks[i].op_reason);
-		if (state.app.checks[i].denied_syscalls)
-			free(state.app.checks[i].denied_syscalls);
-		if (state.app.checks[i].outcomes)
-			free(state.app.checks[i].outcomes);
-	}
+	free_cap_checks();
 
 	/* A workload's nonzero exit remains diagnostic. Collection and launch
 	 * failures make this observation incomplete regardless of that exit.

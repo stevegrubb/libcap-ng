@@ -235,6 +235,8 @@ extern int audit_machine;
 int handle_cap_event(void *ctx, void *data, size_t data_sz)
 	__attr_access ((__read_only__, 2));
 void finish_cap_events(void);
+void free_cap_check(struct cap_check *check);
+void free_cap_checks(void);
 void analyze_capabilities(void);
 void output_json(void);
 void output_yaml(void);
