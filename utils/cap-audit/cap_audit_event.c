@@ -314,13 +314,50 @@ static void observe_initial_capset(const struct cap_event *e)
 }
 
 /*
+ * Per-capability state is sized by the CAP_LAST_CAP of the build headers,
+ * but the running kernel may define newer capabilities. Silently dropping
+ * one would let a report claim complete collection while omitting a
+ * capability the target used, so count it as a lost observation instead.
+ */
+static void note_unknown_capability(int cap)
+{
+	static bool warned;
+
+	state.observation.userspace_failures++;
+	if (warned)
+		return;
+	warned = true;
+	fprintf(stderr, "Warning: observed capability %d, which is newer than "
+		"this cap-audit build supports (last known %d); the report is "
+		"incomplete. Rebuild against newer kernel headers.\n",
+		cap, CAP_LAST_CAP);
+}
+
+/* Return the capset mask bits that this build cannot account for. */
+static __u64 unknown_capability_bits(__u64 mask)
+{
+#if CAP_LAST_CAP < 63
+	return mask & ~((1ULL << (CAP_LAST_CAP + 1)) - 1);
+#else
+	return 0;
+#endif
+}
+
+/*
  * Child requests also constrain the inherited deployment boundary, but only
  * the initial process's capset separates its initialization and operation.
  */
 static void handle_capset_result(const struct cap_event *e)
 {
+	__u64 unknown;
+
 	if (e->syscall_ret != 0)
 		return;
+	unknown = unknown_capability_bits(e->capset_effective |
+					  e->capset_permitted |
+					  e->capset_inheritable);
+	if (unknown)
+		note_unknown_capability(__builtin_ctzll(unknown));
 	/* A child can install sets inside a different user namespace. Those
 	 * bits cannot justify grants in the auditor's namespace.
 	 */
@@ -427,7 +464,12 @@ int handle_cap_event(void *ctx __attribute__((unused)), void *data,
 		return 0;
 	}
 
-	if (e->capability >= 0 && e->capability <= CAP_LAST_CAP) {
+	if (e->capability < 0 || e->capability > CAP_LAST_CAP) {
+		note_unknown_capability(e->capability);
+		return 0;
+	}
+
+	{
 		struct cap_check *check;
 		struct keepcaps_window *window = NULL;
 

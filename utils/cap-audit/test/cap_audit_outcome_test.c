@@ -602,6 +602,47 @@ static void test_event_reasons(void)
 	free_cap_check(check);
 }
 
+/* Start a complete observation so only the event under test can taint it. */
+static void reset_complete_observation(void)
+{
+	free_cap_checks();
+	memset(&state, 0, sizeof(state));
+	state.baseline_user_ns_inum = 100;
+	state.app.pid = 1234;
+	state.observation.exec_confirmed = true;
+	state.observation.target_exited = true;
+	state.observation.stop_reason = TRACE_STOP_TARGET_EXIT;
+}
+
+/*
+ * test_unknown_capability - capabilities newer than the build are not lost.
+ *
+ * Returns no value; fails if a check or capset bit above CAP_LAST_CAP
+ * leaves the collection reported as complete.
+ */
+static void test_unknown_capability(void)
+{
+#if CAP_LAST_CAP < 63
+	reset_complete_observation();
+	emit_check(CAP_LAST_CAP, TEST_OPENAT_NR, 1);
+	if (audit_collection_reason() ||
+	    state.app.checks[CAP_LAST_CAP].granted != 1)
+		fail("Highest known capability was not recorded normally");
+	emit_check(CAP_LAST_CAP + 1, TEST_OPENAT_NR, 1);
+	if (!audit_collection_reason() ||
+	    strcmp(audit_collection_reason(), "observations_lost"))
+		fail("Unknown capability check left collection complete");
+
+	reset_complete_observation();
+	emit_capset(0, 0, 1ULL << (CAP_LAST_CAP + 1), 0);
+	if (!audit_collection_reason() ||
+	    strcmp(audit_collection_reason(), "observations_lost"))
+		fail("Unknown capset bit left collection complete");
+	if (state.app.capset.successful_calls != 1)
+		fail("capset with an unknown bit was not otherwise recorded");
+#endif
+}
+
 /* Emit the completion of a keepcaps prctl on a selected target thread. */
 static void emit_keepcaps(__u32 tid, int enabled, __s64 ret)
 {
@@ -898,6 +939,7 @@ int main(void)
 	test_capset_without_setpcap();
 	test_event_reasons();
 	test_optional_setpcap();
+	test_unknown_capability();
 	if (classify_syscall_outcome(0) != SYSCALL_OUTCOME_SUCCESS ||
 	    classify_syscall_outcome(-EPERM) != SYSCALL_OUTCOME_PERMISSION ||
 	    classify_syscall_outcome(-EACCES) != SYSCALL_OUTCOME_PERMISSION ||

@@ -204,7 +204,8 @@ The program returns 0 on success. Non-zero values indicate an error occurred
 while setting up tracing or executing the target command.
 Status 1 indicates a tracing setup error. Status 2 indicates incomplete
 observation, including target launch failure, lost events, a polling error,
-a requested stop, or descendants still running when the initial target exits.
+a requested stop, descendants still running when the initial target exits,
+or a capability newer than this build of cap-audit supports.
 The target's exit code and terminating signal are reported separately.
 Collected observations remain available, but incomplete runs produce no
 automatic deployment recommendations.
@@ -220,6 +221,11 @@ status, target execution and exit status, stop reason, and loss counters.
 Both structured formats include namespace scope and recommendation eligibility.
 Foreign or unknown user-namespace scope suppresses automatic advice in text
 and is explicitly ineligible in the structured report.
+
+A capability check or capset request for a capability newer than the kernel
+headers cap-audit was built against cannot be attributed to a named
+capability. It is counted as a userspace failure and makes the observation
+incomplete; rebuild cap-audit against headers for the running kernel.
 
 3. When auditing a daemon, pass options to keep it in the foreground. If it forks and exits, that will end the session and you will only get the capabilities traced up to the exit. Here's an example keeping the daemon in the foreground:
 
