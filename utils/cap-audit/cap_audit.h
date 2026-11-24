@@ -176,6 +176,10 @@ typedef struct {
 	cap_set_t bounding;
 	cap_set_t ambient;
 	bool dynamic_user;
+	/* User= as written in the unit; set only for DynamicUser=yes. */
+	char *configured_user;
+	/* The trace ran as a static stand-in for the dynamic user. */
+	bool dynamic_stand_in;
 	bool no_new_privs;
 	char *service_type;
 	char *exec_start;

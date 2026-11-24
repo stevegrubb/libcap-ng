@@ -264,6 +264,68 @@ static void test_setpcap_recommendations(void)
 	}
 }
 
+/*
+ * test_dynamic_user_recommendations - keep DynamicUser in generated advice.
+ *
+ * Returns no value; fails if the static stand-in used for the trace is
+ * recommended as the service identity, or if unit-supplied names are lost.
+ */
+static void test_dynamic_user_recommendations(void)
+{
+	service_config_t service;
+	char *output;
+	int variant;
+
+	for (variant = 0; variant < 3; variant++) {
+		setup_analysis(&service);
+		service.dynamic_user = true;
+		if (variant < 2) {
+			/* parse_service_file() substituted nobody. */
+			service.user_raw = "nobody";
+			service.user_uid = 65534;
+			service.user_primary_gid = 65534;
+			service.dynamic_stand_in = true;
+			service.configured_user =
+				variant ? "dyn-service" : NULL;
+		} else {
+			/* An existing static user named by the unit. */
+			service.configured_user = "validation-user";
+			service.group_is_set = true;
+			service.group_gid = 0;
+		}
+		output = capture_analysis();
+		expect_line(output, "    DynamicUser=yes");
+		if (strstr(output, "    User=nobody\n") ||
+		    strstr(output, "    Group=nobody\n"))
+			fail("DynamicUser advice named the static stand-in");
+		if (variant == 0 && (strstr(output, "    User=") ||
+				     strstr(output, "    Group=")))
+			fail("DynamicUser advice invented an identity");
+		if (variant == 1) {
+			expect_line(output, "    User=dyn-service");
+			if (strstr(output, "    Group="))
+				fail("DynamicUser advice invented a group");
+		}
+		if (variant == 2) {
+			expect_line(output, "    User=validation-user");
+			expect_line(output, "    Group=root");
+		}
+		if (variant < 2 &&
+		    (!strstr(output, "User: dynamic, traced as nobody") ||
+		     !strstr(output, "Group: dynamic, traced as ")))
+			fail("Service context hid the DynamicUser stand-in");
+		free(output);
+	}
+
+	/* A static service keeps its explicit identity. */
+	setup_analysis(&service);
+	output = capture_analysis();
+	expect_line(output, "    User=validation-user");
+	if (strstr(output, "DynamicUser="))
+		fail("Static service advice gained DynamicUser");
+	free(output);
+}
+
 static void test_incomplete_observation(void)
 {
 	service_config_t service;
@@ -316,6 +378,7 @@ int main(void)
 	char *output;
 
 	test_setpcap_recommendations();
+	test_dynamic_user_recommendations();
 	test_incomplete_observation();
 	setup_analysis(&service);
 	output = capture_analysis();

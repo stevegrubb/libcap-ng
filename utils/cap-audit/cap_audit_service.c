@@ -111,6 +111,9 @@ void free_config(service_config_t *cfg)
 
 	free(cfg->user_raw);
 	cfg->user_raw = NULL;
+	free(cfg->configured_user);
+	cfg->configured_user = NULL;
+	cfg->dynamic_stand_in = false;
 	free(cfg->sup_groups.gids);
 	cfg->sup_groups.gids = NULL;
 	cfg->sup_groups.count = 0;
@@ -250,12 +253,22 @@ static int fallback_to_nobody(service_config_t *cfg)
 	/* Downstream code treats this as the effective simulated User=. */
 	cfg->user_is_set = true;
 	cfg->user_resolved = true;
+	cfg->dynamic_stand_in = true;
 	return 0;
 }
 
 static int finalize_user(service_config_t *cfg)
 {
 	int rc;
+
+	/*
+	 * Remember the unit's own User= before a stand-in replaces it, so
+	 * recommendations keep DynamicUser instead of naming a static account.
+	 */
+	if (cfg->dynamic_user &&
+	    replace_string(&cfg->configured_user,
+			   cfg->user_is_set ? cfg->user_raw : NULL) != 0)
+		return -1;
 
 	if (!cfg->user_is_set) {
 		if (cfg->dynamic_user)
@@ -983,10 +996,13 @@ void print_service_config(const service_config_t *cfg)
 		       "available.\n");
 	fprintf(stderr, "    ExecStart: %s\n", cfg->exec_start ?
 	       cfg->exec_start : "(not configured)");
-	fprintf(stderr, "    User: %s (uid=%u)\n", cfg->user_is_set ?
-	       cfg->user_raw : "root", cfg->user_is_set ?
+	fprintf(stderr, "    User: %s%s (uid=%u)\n",
+	       cfg->dynamic_stand_in ? "dynamic, traced as " : "",
+	       cfg->user_is_set ? cfg->user_raw : "root", cfg->user_is_set ?
 	       (unsigned int)cfg->user_uid : 0);
-	fprintf(stderr, "    Group: %s (gid=%u)\n", group_name, (unsigned int)gid);
+	fprintf(stderr, "    Group: %s%s (gid=%u)\n",
+		cfg->dynamic_stand_in && !cfg->group_is_set ?
+		"dynamic, traced as " : "", group_name, (unsigned int)gid);
 	fprintf(stderr, "    NoNewPrivileges: %s\n",
 	       cfg->no_new_privs ? "yes" : "no");
 	print_cap_set_line("AmbientCapabilities: ", &cfg->ambient);

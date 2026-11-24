@@ -126,6 +126,8 @@ static void test_dynamic_user(const char *dir)
 	if (!cfg.user_resolved || !cfg.user_raw ||
 	    strcmp(cfg.user_raw, "nobody") != 0)
 		fail("DynamicUser should resolve to nobody for simulation");
+	if (!cfg.dynamic_stand_in || cfg.configured_user)
+		fail("DynamicUser stand-in replaced the unit's identity");
 	if (cfg.user_uid == 0 || cfg.user_uid > INT_MAX ||
 	    cfg.user_primary_gid == 0 || cfg.user_primary_gid > INT_MAX)
 		fail("DynamicUser simulation must use representable non-root IDs");
@@ -156,6 +158,20 @@ static void test_unresolved_dynamic_user(const char *dir)
 	if (!cfg.user_resolved || !cfg.user_raw ||
 	    strcmp(cfg.user_raw, "nobody") != 0)
 		fail("Unresolved DynamicUser name should map to nobody");
+	if (!cfg.dynamic_stand_in || !cfg.configured_user ||
+	    strcmp(cfg.configured_user, "cap-audit-no-such-user"))
+		fail("Unresolved DynamicUser name was not preserved");
+	free_config(&cfg);
+
+	/* An existing static user is used as is, without a stand-in. */
+	if (parse_unit(dir, "dynamic-static.service",
+		       "[Service]\nDynamicUser=yes\nUser=root\n"
+		       "ExecStart=/usr/bin/true\n", &cfg) != 0)
+		fail("DynamicUser with an existing user should parse");
+	if (cfg.dynamic_stand_in || !cfg.configured_user ||
+	    strcmp(cfg.configured_user, "root") ||
+	    strcmp(cfg.user_raw, "root"))
+		fail("Existing DynamicUser name was replaced");
 	free_config(&cfg);
 }
 

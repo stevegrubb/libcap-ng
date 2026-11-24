@@ -135,6 +135,21 @@ not have been exercised. Cap-audit does not generate a configuration that
 removes them; targeted testing or manual review must first confirm that each
 configured capability is unnecessary.
 .PP
+For a unit with
+.BR DynamicUser=yes ,
+cap-audit cannot allocate a dynamic user. Unless
+.B User=
+names an existing account, the trace runs as the static
+.B nobody
+account as a stand-in, and the service context reports that substitution.
+Generated configuration keeps
+.B DynamicUser=yes
+and only the
+.B User=
+and
+.B Group=
+values written in the unit, so it never names the stand-in account.
+.PP
 Service recommendations preserve the ambient capabilities configured in the
 audited unit. Granted checks and successful capset requests constrain the
 bounding set, but do not by themselves establish that additional ambient

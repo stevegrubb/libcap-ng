@@ -859,8 +859,21 @@ static void svc_print_generated_config(const service_config_t *cfg,
 				       const struct svc_deployment_caps *caps)
 {
 	printf("    [Service]\n");
-	printf("    User=%s\n", svc_user_name(cfg));
-	printf("    Group=%s\n", group);
+	if (cfg->dynamic_user) {
+		/*
+		 * The trace may have used a static stand-in such as nobody.
+		 * Naming it would make systemd run the service as that shared
+		 * static account, so keep the unit's own identity settings.
+		 */
+		printf("    DynamicUser=yes\n");
+		if (cfg->configured_user)
+			printf("    User=%s\n", cfg->configured_user);
+		if (cfg->group_is_set)
+			printf("    Group=%s\n", group);
+	} else {
+		printf("    User=%s\n", svc_user_name(cfg));
+		printf("    Group=%s\n", group);
+	}
 	if (is_root)
 		printf("    # AmbientCapabilities omitted for root service\n");
 	else {
@@ -927,9 +940,13 @@ static void print_service_recommendations(void)
 	printf("    Unit file: %s\n", state.service_file);
 	printf("    ExecStart: %s\n", cfg->exec_start ?
 	       cfg->exec_start : "(not configured)");
-	printf("    User: %s (uid=%u)\n", svc_user_name(cfg),
+	printf("    User: %s%s (uid=%u)\n",
+	       cfg->dynamic_stand_in ? "dynamic, traced as " : "",
+	       svc_user_name(cfg),
 	       cfg->user_is_set ? (unsigned int)cfg->user_uid : 0);
-	printf("    Group: %s (gid=%u)\n", group, (unsigned int)gid);
+	printf("    Group: %s%s (gid=%u)\n",
+	       cfg->dynamic_stand_in && !cfg->group_is_set ?
+	       "dynamic, traced as " : "", group, (unsigned int)gid);
 	printf("    NoNewPrivileges: %s\n",
 	       cfg->no_new_privs ? "yes" : "no");
 	printf("    AmbientCapabilities: ");
