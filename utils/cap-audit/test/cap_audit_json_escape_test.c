@@ -40,5 +40,18 @@ int main(void)
 	check_escape("\xf4\x90\x80\x80",
 		     "\\u00f4\\u0090\\u0080\\u0080");
 	check_escape("\xe2\"\n\xc3\xa9", "\\u00e2\\\"\\n\xc3\xa9");
+	/*
+	 * YAML reuses these strings and forbids raw DEL, C1 controls, and
+	 * U+FFFE/U+FFFF even when they are valid UTF-8. Neighbouring
+	 * printable characters must still be preserved unchanged.
+	 */
+	check_escape("a\x7f" "b", "a\\u007fb");
+	check_escape("csi-\xc2\x9b" "2J", "csi-\\u009b2J");
+	check_escape("\xc2\x80\xc2\x85\xc2\x9f",
+		     "\\u0080\\u0085\\u009f");
+	check_escape("\xc2\xa0", "\xc2\xa0");
+	check_escape("\xef\xbf\xbe\xef\xbf\xbf", "\\ufffe\\uffff");
+	check_escape("\xef\xbf\xbd", "\xef\xbf\xbd");
+	check_escape("\xf0\x9f\xbf\xbe", "\xf0\x9f\xbf\xbe");
 	return EXIT_SUCCESS;
 }

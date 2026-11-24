@@ -134,8 +134,35 @@ const char *syscall_name_from_nr(int nr)
 	return audit_syscall_to_name(nr, audit_machine);
 }
 
+/*
+ * escaped_utf8_char - find valid UTF-8 that must still be escaped.
+ * @s: start of a valid multibyte sequence.
+ * @len: its length from proc_utf8_char_len().
+ *
+ * YAML reuses this escaping, and YAML 1.2 forbids raw C1 controls and the
+ * U+FFFE/U+FFFF noncharacters that JSON accepts. Escaping them as \uXXXX
+ * keeps both documents valid and keeps C1 bytes away from terminals.
+ * Returns the code point to escape, or 0 to copy the sequence unchanged.
+ */
+static unsigned int escaped_utf8_char(const unsigned char *s, size_t len)
+{
+	unsigned int cp;
+
+	if (len == 2) {
+		cp = ((s[0] & 0x1fU) << 6) | (s[1] & 0x3fU);
+		return cp <= 0x9f ? cp : 0;
+	}
+	if (len == 3) {
+		cp = ((s[0] & 0x0fU) << 12) | ((s[1] & 0x3fU) << 6) |
+		     (s[2] & 0x3fU);
+		return cp >= 0xfffe ? cp : 0;
+	}
+	return 0;
+}
+
 /* Preserve valid UTF-8; map each malformed pathname byte to U+00XX so
- * arbitrary Linux executable names cannot make the JSON document invalid.
+ * arbitrary Linux executable names cannot make the JSON or YAML document
+ * invalid.
  */
 char *json_escape(const char *input)
 {
@@ -152,7 +179,9 @@ char *json_escape(const char *input)
 		size_t len = proc_utf8_char_len((const unsigned char *)input + i);
 
 		if (len > 1) {
-			needed += len;
+			needed += escaped_utf8_char(
+				(const unsigned char *)input + i, len) ?
+				6 : len;
 			i += len - 1;
 			continue;
 		}
@@ -168,7 +197,7 @@ char *json_escape(const char *input)
 			needed += 2;
 			break;
 		default:
-			if (c < 0x20 || c >= 0x80)
+			if (c < 0x20 || c >= 0x7f)
 				needed += 6;
 			else
 				needed++;
@@ -186,8 +215,16 @@ char *json_escape(const char *input)
 		size_t len = proc_utf8_char_len((const unsigned char *)input + i);
 
 		if (len > 1) {
-			memcpy(pos, input + i, len);
-			pos += len;
+			unsigned int cp = escaped_utf8_char(
+				(const unsigned char *)input + i, len);
+
+			if (cp) {
+				snprintf(pos, 7, "\\u%04x", cp);
+				pos += 6;
+			} else {
+				memcpy(pos, input + i, len);
+				pos += len;
+			}
 			i += len - 1;
 			continue;
 		}
@@ -222,7 +259,7 @@ char *json_escape(const char *input)
 			*pos++ = 't';
 			break;
 		default:
-			if (c < 0x20 || c >= 0x80) {
+			if (c < 0x20 || c >= 0x7f) {
 				snprintf(pos, 7, "\\u%04x", c);
 				pos += 6;
 			} else {
