@@ -27,6 +27,11 @@
 - Add namespace scope and recommendation eligibility to cap-audit JSON/YAML
 - Report unknown privilege state and incomplete inspections in netcap advanced
 - Use effective UID for netcap's non-root status and report both UIDs
+- Fix cap-audit YAML output for executable names with control characters
+- Mark cap-audit traces incomplete for capabilities newer than its build
+- Reject systemd specifiers and ${NAME} in cap-audit --service ExecStart
+- Keep DynamicUser in cap-audit service advice instead of naming nobody
+- Report the actual error when cap-audit aborts a target launch
 
 0.9.6
 - Fix supplementary group changes in capng_change_id
