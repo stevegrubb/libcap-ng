@@ -258,6 +258,21 @@ static void test_service_overrides(void)
 		fail("Cannot remove service fixtures");
 }
 
+/* A dynamic user's implied NoNewPrivileges must reach every report line. */
+static void test_dynamic_user_report(void)
+{
+	char dyn_unit[] = "/tmp/cap-audit-dynamic-XXXXXX";
+	char *report[] = { "cap-audit", "--service", dyn_unit, NULL };
+
+	write_unit(dyn_unit, "[Service]\nDynamicUser=yes\n"
+		   "NoNewPrivileges=no\nExecStart=/bin/true\n");
+	mode = NORMAL;
+	run_case(report, 0, "NoNewPrivileges: yes (implied by DynamicUser=yes)");
+	run_case(report, 0, "    NoNewPrivileges=yes\n");
+	if (unlink(dyn_unit))
+		fail("Cannot remove service fixture");
+}
+
 int main(void)
 {
 	char *json[] = { "cap-audit", "-j", "--", "/bin/sh", "-c",
@@ -286,6 +301,7 @@ int main(void)
 		run_case(text, 2, "Observation is incomplete");
 	}
 	test_service_overrides();
+	test_dynamic_user_report();
 	fd = mkstemp(unit);
 	if (fd < 0 || write(fd, service, sizeof(service) - 1) != sizeof(service) - 1 ||
 	    close(fd))

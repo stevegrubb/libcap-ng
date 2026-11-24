@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
 #include <sys/prctl.h>
 #include <unistd.h>
 
@@ -57,6 +58,33 @@ const char *cap_name_safe(int cap)
 {
 	(void)cap;
 	return "unknown";
+}
+
+int __real_prctl(int option, ...);
+static unsigned int no_new_privs_requests;
+
+/*
+ * __wrap_prctl - record NoNewPrivileges requests made during launch.
+ *
+ * The flag cannot be cleared once set, and may already be set by the test
+ * environment, so reading it back cannot show a missing request. Calls are
+ * still forwarded so the real setting takes effect. Every caller linked
+ * into this test passes all four optional arguments.
+ */
+int __wrap_prctl(int option, ...)
+{
+	unsigned long arg2, arg3, arg4, arg5;
+	va_list ap;
+
+	va_start(ap, option);
+	arg2 = va_arg(ap, unsigned long);
+	arg3 = va_arg(ap, unsigned long);
+	arg4 = va_arg(ap, unsigned long);
+	arg5 = va_arg(ap, unsigned long);
+	va_end(ap);
+	if (option == PR_SET_NO_NEW_PRIVS && arg2 == 1)
+		no_new_privs_requests++;
+	return __real_prctl(option, arg2, arg3, arg4, arg5);
 }
 
 int __wrap_capng_change_id(int uid, int gid, capng_flags_t flags)
@@ -142,6 +170,49 @@ static void test_dynamic_user(const char *dir)
 		fail("DynamicUser should initialize supplementary groups");
 
 	free_config(&cfg);
+}
+
+/*
+ * test_dynamic_user_no_new_privs - DynamicUser forces NoNewPrivileges.
+ * @dir: temporary directory for unit fixtures.
+ *
+ * Returns no value; fails if an omitted, explicitly disabled, or enabled
+ * setting is not enforced for a dynamic user, if a later DynamicUser=no
+ * keeps the implication, or if launch does not request what was parsed.
+ */
+static void test_dynamic_user_no_new_privs(const char *dir)
+{
+	static const struct {
+		const char *unit;
+		bool expected;
+	} cases[] = {
+		{ "[Service]\nDynamicUser=yes\nExecStart=/usr/bin/true\n", true },
+		{ "[Service]\nDynamicUser=yes\nNoNewPrivileges=no\n"
+		  "ExecStart=/usr/bin/true\n", true },
+		{ "[Service]\nNoNewPrivileges=no\nDynamicUser=yes\n"
+		  "ExecStart=/usr/bin/true\n", true },
+		{ "[Service]\nDynamicUser=yes\nNoNewPrivileges=yes\n"
+		  "ExecStart=/usr/bin/true\n", true },
+		{ "[Service]\nDynamicUser=yes\nDynamicUser=no\n"
+		  "ExecStart=/usr/bin/true\n", false },
+	};
+	service_config_t cfg;
+	size_t i;
+
+	for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+		if (parse_unit(dir, "dynamic-nnp.service", cases[i].unit,
+			       &cfg) != 0)
+			fail("DynamicUser NoNewPrivileges unit should parse");
+		if (cfg.no_new_privs != cases[i].expected)
+			fail("DynamicUser did not determine NoNewPrivileges");
+		no_new_privs_requests = 0;
+		change_id_calls = 0;
+		if (apply_service_config(&cfg) != 0 || change_id_calls != 1)
+			fail("DynamicUser NoNewPrivileges unit should apply");
+		if ((no_new_privs_requests == 1) != cases[i].expected)
+			fail("Launch did not request the parsed NoNewPrivileges");
+		free_config(&cfg);
+	}
 }
 
 static void test_unresolved_dynamic_user(const char *dir)
@@ -627,6 +698,7 @@ int main(void)
 
 	test_dynamic_user(dir);
 	test_unresolved_dynamic_user(dir);
+	test_dynamic_user_no_new_privs(dir);
 	test_valid_credentials(dir);
 	test_invalid_credentials(dir);
 	test_sink_validation();

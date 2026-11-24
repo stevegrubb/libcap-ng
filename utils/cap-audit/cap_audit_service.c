@@ -931,6 +931,17 @@ int parse_service_file(const char *path, service_config_t *cfg)
 	}
 	if (finalize_user(cfg) != 0)
 		goto out;
+	/*
+	 * systemd enables NoNewPrivileges for every DynamicUser=yes service
+	 * when it finalizes the unit, after all directives are loaded. A
+	 * dynamic UID is recycled once the service stops, so the service must
+	 * not gain privileges through setuid, setgid, or file capability
+	 * binaries. Because this happens after parsing, an explicit
+	 * NoNewPrivileges=no cannot turn it off; only the final DynamicUser=
+	 * value matters. Simulate and report the setting systemd enforces.
+	 */
+	if (cfg->dynamic_user)
+		cfg->no_new_privs = true;
 
 	rc = 0;
 
@@ -1016,7 +1027,8 @@ void print_service_config(const service_config_t *cfg)
 		cfg->dynamic_stand_in && !cfg->group_is_set ?
 		"dynamic, traced as " : "", group_name, (unsigned int)gid);
 	fprintf(stderr, "    NoNewPrivileges: %s\n",
-	       cfg->no_new_privs ? "yes" : "no");
+	       cfg->no_new_privs ? cfg->dynamic_user ?
+	       "yes (implied by DynamicUser=yes)" : "yes" : "no");
 	print_cap_set_line("AmbientCapabilities: ", &cfg->ambient);
 	print_cap_set_line("CapabilityBoundingSet: ", &cfg->bounding);
 }

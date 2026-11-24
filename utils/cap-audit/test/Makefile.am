@@ -74,5 +74,6 @@ cap_audit_service_test_SOURCES = cap_audit_service_test.c \
 cap_audit_service_test_LDADD = ${top_builddir}/src/libcap-ng.la \
 	${LIBBPF_LIBS}
 cap_audit_service_test_LDFLAGS = -Wl,--wrap=capng_change_id \
+	-Wl,--wrap=prctl \
 	-Wl,--wrap=capng_get_caps_process
 endif

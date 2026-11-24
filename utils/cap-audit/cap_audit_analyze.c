@@ -948,7 +948,8 @@ static void print_service_recommendations(void)
 	       cfg->dynamic_stand_in && !cfg->group_is_set ?
 	       "dynamic, traced as " : "", group, (unsigned int)gid);
 	printf("    NoNewPrivileges: %s\n",
-	       cfg->no_new_privs ? "yes" : "no");
+	       cfg->no_new_privs ? cfg->dynamic_user ?
+	       "yes (implied by DynamicUser=yes)" : "yes" : "no");
 	printf("    AmbientCapabilities: ");
 	svc_print_ambient_set(&cfg->ambient);
 	printf("\n");

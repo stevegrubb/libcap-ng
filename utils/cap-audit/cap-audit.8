@@ -149,6 +149,15 @@ and only the
 and
 .B Group=
 values written in the unit, so it never names the stand-in account.
+systemd always enables
+.B NoNewPrivileges=
+for a dynamic user, even when the unit sets it to
+.BR no ,
+so cap-audit applies and reports
+.B yes
+whenever the final
+.B DynamicUser=
+assignment is enabled.
 .PP
 Service recommendations preserve the ambient capabilities configured in the
 audited unit. Granted checks and successful capset requests constrain the
