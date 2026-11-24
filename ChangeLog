@@ -32,6 +32,7 @@
 - Reject systemd specifiers and ${NAME} in cap-audit --service ExecStart
 - Keep DynamicUser in cap-audit service advice instead of naming nobody
 - Report the actual error when cap-audit aborts a target launch
+- Enforce NoNewPrivileges for DynamicUser services in cap-audit --service
 
 0.9.6
 - Fix supplementary group changes in capng_change_id
