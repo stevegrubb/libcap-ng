@@ -483,12 +483,21 @@ int main(int argc, char **argv)
 			goto child_launch_failed;
 		bytes = read(state.sync_pipe[0], &sync_byte, 1);
 		if (bytes != 1) {
+			/*
+			 * EOF leaves errno untouched, so it may still hold a
+			 * value from earlier setup such as the PATH lookup.
+			 * Capture the cause before stdio or close() can
+			 * overwrite it, and report EOF as an I/O error.
+			 */
+			int error = bytes < 0 ? errno : EIO;
+
 			if (bytes < 0)
 				perror("read");
 			else
 				fprintf(stderr,
 					"Error: failed to sync with parent\n");
 			close(state.sync_pipe[0]);
+			errno = error;
 			goto child_launch_failed;
 		}
 		close(state.sync_pipe[0]);
