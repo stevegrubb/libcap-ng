@@ -8,7 +8,11 @@ const char *capng_capability_to_name(unsigned int capability);
 
 .SH "DESCRIPTION"
 
-capng_capability_to_name will take the integer being passed and look it up to see what its text string representation would be. The integer being input must be in the valid range defined in linux/capability.h. The string that is output is the same as the define text from linux/capability.h with the CAP_ prefix removed and lower case. This is useful for taking integer representation and converting it to something more user friendly for display.
+capng_capability_to_name will take the integer being passed and look it up to see what its text string representation would be. The integer being input must be no greater than the value returned by
+.BR capng_last_cap (3),
+which describes the running kernel. A capability the kernel supports but
+libcap-ng has no name for is returned as
+.B cap_\fIN\fP. The string that is output is the same as the define text from linux/capability.h with the CAP_ prefix removed and lower case. This is useful for taking integer representation and converting it to something more user friendly for display.
 
 .SH "RETURN VALUE"
 
@@ -17,6 +21,7 @@ This returns a NULL pointer on failure and the correct string otherwise.
 .SH "SEE ALSO"
 
 .BR capng_name_to_capability (3),
+.BR capng_last_cap (3),
 .BR capabilities (7)
 
 .SH AUTHOR

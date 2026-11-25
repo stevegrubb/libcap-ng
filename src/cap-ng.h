@@ -47,6 +47,9 @@
 #ifndef __attr_access
 # define __attr_access(x)
 #endif
+#ifndef __attribute_pure__
+# define __attribute_pure__
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -106,6 +109,8 @@ char *capng_print_caps_numeric(capng_print_t where, capng_select_t set)
 char *capng_print_caps_text(capng_print_t where, capng_type_t which)
 	__attribute_malloc__ __attr_dealloc_free;
 
+// This function reports the running kernel's highest capability number
+unsigned int capng_last_cap(void) __attribute_pure__;
 // These functions convert between numeric and text string
 int capng_name_to_capability(const char *name)
 	__attr_access ((__read_only__, 1));

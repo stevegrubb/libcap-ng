@@ -1780,6 +1780,18 @@ int capng_have_capability(capng_type_t which, unsigned int capability)
 	return 0;
 }
 
+/*
+ * capng_last_cap - report the running kernel's highest capability number.
+ *
+ * The library detects this once at load time, so the value describes the
+ * running kernel rather than the CAP_LAST_CAP of the build headers. It is
+ * the bound every capability loop should use.
+ */
+unsigned int capng_last_cap(void)
+{
+	return last_cap;
+}
+
 char *capng_print_caps_numeric(capng_print_t where, capng_select_t set)
 {
 	char *ptr = NULL;

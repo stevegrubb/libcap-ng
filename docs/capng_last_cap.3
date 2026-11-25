@@ -1,0 +1,38 @@
+.TH "CAPNG_LAST_CAP" "3" "November 2026" "Red Hat" "Libcap-ng API"
+.SH NAME
+capng_last_cap \- report the highest capability number of the running kernel
+.SH "SYNOPSIS"
+.B #include <cap-ng.h>
+.sp
+unsigned int capng_last_cap(void);
+
+.SH "DESCRIPTION"
+
+capng_last_cap returns the number of the highest capability supported by the
+running kernel. The library determines this value once when it is loaded, from
+.I /proc/sys/kernel/cap_last_cap
+when it is available and otherwise by probing the kernel.
+
+Use this value, not the
+.B CAP_LAST_CAP
+macro from the build headers, as the upper bound when iterating over
+capabilities. A kernel newer than the headers an application was built
+against may support capabilities the headers do not name.
+.BR capng_capability_to_name (3)
+returns a name of the form
+.B cap_\fIN\fP
+for such a capability, and every capability up to the returned value can be
+queried and updated.
+
+.SH "RETURN VALUE"
+
+This returns the highest valid capability number. It cannot fail.
+
+.SH "SEE ALSO"
+
+.BR capng_capability_to_name (3),
+.BR capng_have_capability (3),
+.BR capabilities (7)
+
+.SH AUTHOR
+Steve Grubb

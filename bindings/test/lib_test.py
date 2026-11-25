@@ -54,9 +54,16 @@ def test_updatev_boundary():
             raise AssertionError("Rejected updatev arguments changed state")
 
 
+def test_last_cap():
+    # The binding reports the running kernel, read independently here.
+    if capng.capng_last_cap() != get_last_cap():
+        raise AssertionError("capng_last_cap differs from the kernel")
+
+
 def main():
     last = get_last_cap()
     test_updatev_boundary()
+    test_last_cap()
 
     if capng.CAPNG_UNSET_ROOTID != 0xffffffff:
         print("CAPNG_UNSET_ROOTID has the wrong value")

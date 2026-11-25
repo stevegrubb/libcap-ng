@@ -123,6 +123,17 @@ int main(void)
 	const char *name;
 	void *saved;
 
+	/* Compare with an independent read of the running kernel's value. */
+	if (capng_last_cap() != last) {
+		puts("Failed capng_last_cap test");
+		abort();
+	}
+	if (!capng_capability_to_name(capng_last_cap()) ||
+	    capng_capability_to_name(capng_last_cap() + 1)) {
+		puts("capng_last_cap does not bound the valid capabilities");
+		abort();
+	}
+
 	puts("Doing process capability tests...");
 	if (read_process_caps(&caps)) {
 		puts("Failed reading process capabilities from procfs");
