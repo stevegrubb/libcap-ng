@@ -550,18 +550,29 @@ static void test_capability_lists(const char *dir)
 	static const char *keys[] = {
 		"CapabilityBoundingSet", "AmbientCapabilities",
 	};
+	/*
+	 * Expected chown, kill, and other-capability membership for each
+	 * directive, as recorded from systemd 259's system manager with
+	 * systemctl show. The directives differ only when an inverted list
+	 * follows an assignment that left the set empty.
+	 */
 	static const struct {
-		const char *first, *second;
-		int chown, kill, other;
+		const char *first, *second, *third;
+		int chown, kill, other;		/* CapabilityBoundingSet= */
+		int a_chown, a_kill, a_other;	/* AmbientCapabilities= */
 	} cases[] = {
-		{ "CAP_CHOWN", "CAP_KILL", 1, 1, 0 },
-		{ "CAP_CHOWN CAP_KILL", "~CAP_CHOWN", 0, 1, 0 },
-		{ "CAP_CHOWN", "", 0, 0, 0 },
-		{ "CAP_CHOWN", "~", 1, 1, 1 },
-		{ "~CAP_CHOWN", "~CAP_KILL", 0, 0, 1 },
-		{ "", "~CAP_CHOWN", 0, 0, 0 },
-		{ "~", "", 0, 0, 0 },
-		{ "", "CAP_KILL", 0, 1, 0 },
+		{ "CAP_CHOWN", "CAP_KILL", NULL, 1, 1, 0, 1, 1, 0 },
+		{ "CAP_CHOWN CAP_KILL", "~CAP_CHOWN", NULL, 0, 1, 0, 0, 1, 0 },
+		{ "CAP_CHOWN", "", NULL, 0, 0, 0, 0, 0, 0 },
+		{ "CAP_CHOWN", "~", NULL, 1, 1, 1, 1, 1, 1 },
+		{ "~CAP_CHOWN", "~CAP_KILL", NULL, 0, 0, 1, 0, 0, 1 },
+		{ "~CAP_CHOWN", "CAP_CHOWN", NULL, 1, 1, 1, 1, 1, 1 },
+		{ "", "~CAP_CHOWN", NULL, 0, 0, 0, 0, 1, 1 },
+		{ "", "CAP_KILL", NULL, 0, 1, 0, 0, 1, 0 },
+		{ "~", "", NULL, 0, 0, 0, 0, 0, 0 },
+		{ "~", "CAP_CHOWN", NULL, 1, 1, 1, 1, 1, 1 },
+		{ "~", "~CAP_CHOWN", NULL, 0, 1, 1, 0, 1, 1 },
+		{ "CAP_CHOWN", "~CAP_CHOWN", "~CAP_KILL", 0, 0, 0, 1, 0, 1 },
 	};
 	size_t key, i;
 
@@ -572,9 +583,13 @@ static void test_capability_lists(const char *dir)
 			char *unit;
 			int cap;
 
-			if (asprintf(&unit, "[Service]\n%s=%s\n%s=%s\n",
+			if (asprintf(&unit, "[Service]\n%s=%s\n%s=%s\n%s%s%s%s",
 				     keys[key], cases[i].first,
-				     keys[key], cases[i].second) < 0)
+				     keys[key], cases[i].second,
+				     cases[i].third ? keys[key] : "",
+				     cases[i].third ? "=" : "",
+				     cases[i].third ? cases[i].third : "",
+				     cases[i].third ? "\n" : "") < 0)
 				fail("Failed to allocate capability unit");
 			if (parse_unit(dir, "caps.service", unit, &cfg) != 0)
 				fail("Capability list should parse");
@@ -583,11 +598,23 @@ static void test_capability_lists(const char *dir)
 			if (!set->seen)
 				fail("Capability assignment was not recorded");
 			for (cap = 0; cap <= CAP_LAST_CAP; cap++) {
-				int expected = cap == CAP_CHOWN ? cases[i].chown :
-					cap == CAP_KILL ? cases[i].kill : cases[i].other;
+				int expected;
 
-				if (set->caps[cap] != expected)
+				if (key == 0)
+					expected = cap == CAP_CHOWN ? cases[i].chown :
+						   cap == CAP_KILL ? cases[i].kill :
+						   cases[i].other;
+				else
+					expected = cap == CAP_CHOWN ? cases[i].a_chown :
+						   cap == CAP_KILL ? cases[i].a_kill :
+						   cases[i].a_other;
+				if (set->caps[cap] != expected) {
+					fprintf(stderr, "%s=%s / %s / %s\n",
+						keys[key], cases[i].first,
+						cases[i].second, cases[i].third ?
+						cases[i].third : "");
 					fail("Incorrect capability list merge or reset");
+				}
 			}
 			free_config(&cfg);
 		}

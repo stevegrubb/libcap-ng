@@ -696,7 +696,23 @@ static int parse_cap_tokens(cap_set_t *set, char *value, int invert)
 	return 0;
 }
 
-static int parse_cap_list(cap_set_t *set, const char *value)
+/*
+ * parse_cap_list - merge one capability directive assignment into @set.
+ * @set: accumulated set for the directive.
+ * @value: assignment value from the unit.
+ * @empty_is_unset: nonzero for AmbientCapabilities=.
+ *
+ * Repeated assignments merge as systemd 259's unit-file parser does,
+ * confirmed with the system manager: a list adds to the set, "~list"
+ * removes from it, "" empties it, and a bare "~" fills it. A "~list" also
+ * starts from the full set when the directive was never assigned. For
+ * AmbientCapabilities=, systemd cannot tell an empty set from an unset
+ * one, so "~list" starts from the full set whenever the set is empty; for
+ * CapabilityBoundingSet= an emptied set stays empty.
+ * Returns 0 on success, -1 on an unknown capability or allocation failure.
+ */
+static int parse_cap_list(cap_set_t *set, const char *value,
+			  int empty_is_unset)
 {
 	char *copy;
 	char *tokens;
@@ -714,12 +730,12 @@ static int parse_cap_list(cap_set_t *set, const char *value)
 		return 0;
 	}
 
-	/* Both directives use union, inverted subtraction, and full resets. */
 	if (tokens[0] == '~') {
 		invert = 1;
 		tokens = trim(tokens + 1);
 		/* A bare ~ resets even an explicitly empty or restricted set. */
-		if (!set->seen || tokens[0] == '\0')
+		if (!set->seen || tokens[0] == '\0' ||
+		    (empty_is_unset && !cap_set_any(set)))
 			fill_cap_set(set);
 	}
 	set->seen = true;
@@ -830,10 +846,10 @@ static int handle_service_directive(service_config_t *cfg,
 	if (!strcmp(key, "SupplementaryGroups"))
 		return parse_supplementary_groups(&cfg->sup_groups, value);
 	if (!strcmp(key, "AmbientCapabilities"))
-		return parse_cap_list(&cfg->ambient, value);
+		return parse_cap_list(&cfg->ambient, value, 1);
 	if (!strcmp(key, "CapabilityBoundingSet") ||
 	    !strcmp(key, "BoundingSet"))
-		return parse_cap_list(&cfg->bounding, value);
+		return parse_cap_list(&cfg->bounding, value, 0);
 	if (!strcmp(key, "NoNewPrivileges")) {
 		if (parse_bool_value(value, &cfg->no_new_privs) != 0) {
 			fprintf(stderr,
