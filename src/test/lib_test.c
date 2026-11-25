@@ -138,6 +138,12 @@ int main(void)
 	{
 		const unsigned int list[] = { CAP_CHOWN, CAP_KILL };
 		const unsigned int bad[] = { CAP_SETUID, last + 1 };
+		/*
+		 * A NULL list with a nonzero count must be rejected at run time.
+		 * The header's access attribute makes GCC flag a literal NULL,
+		 * so pass it through a volatile pointer the compiler cannot see.
+		 */
+		const unsigned int *volatile no_list = NULL;
 
 		capng_clear(CAPNG_SELECT_BOTH);
 		if (capng_update_list(CAPNG_ADD, CAPNG_EFFECTIVE, list, 2) ||
@@ -152,7 +158,7 @@ int main(void)
 			abort();
 		}
 		if (capng_update_list(CAPNG_DROP, CAPNG_EFFECTIVE, NULL, 0) ||
-		    capng_update_list(CAPNG_DROP, CAPNG_EFFECTIVE, NULL, 1) != -1 ||
+		    capng_update_list(CAPNG_DROP, CAPNG_EFFECTIVE, no_list, 1) != -1 ||
 		    !capng_have_capability(CAPNG_EFFECTIVE, CAP_KILL)) {
 			puts("Failed capng_update_list empty list test");
 			abort();
