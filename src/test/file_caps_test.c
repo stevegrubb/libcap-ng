@@ -204,8 +204,17 @@ static void check_written_caps(int fd, uid_t rootid, uint32_t revision,
 	if (capng_update(CAPNG_ADD, CAPNG_EFFECTIVE | CAPNG_PERMITTED,
 							CAP_CHOWN) != 0)
 		abort();
+#ifdef VFS_CAP_REVISION_3
 	if (capng_set_rootid(rootid) != 0)
 		abort();
+#else
+	/*
+	 * Without V3 support in the build headers, capng_set_rootid is
+	 * documented to fail, and every write uses the V2 format.
+	 */
+	if (rootid != CAPNG_UNSET_ROOTID || capng_set_rootid(rootid) != -1)
+		abort();
+#endif
 	if (capng_get_rootid() != rootid)
 		abort();
 
