@@ -1185,24 +1185,26 @@ static char *extract_unit_from_cgroup(int pid)
 	return NULL;
 }
 
-/* Append whole capability names in numeric order, dropping the cap_ prefix. */
+/*
+ * Append whole capability names in numeric order. Stop at the running
+ * kernel's last capability, where the library stops naming them, not at the
+ * build headers' CAP_LAST_CAP: a newer kernel capability must still appear.
+ * The library names those cap_<number>, which is kept intact.
+ */
 static void format_cap_list(capng_type_t type, char *buf, size_t size)
 {
 	size_t used = 0;
-	int i;
+	unsigned int i;
 
 	buf[0] = '\0';
-	for (i = 0; i <= CAP_LAST_CAP; i++) {
-		const char *name;
+	for (i = 0; i < 64; i++) {
+		const char *name = capng_capability_to_name(i);
 		size_t len, sep = used ? 2 : 0;
 
+		if (!name)
+			break;
 		if (!capng_have_capability(type, i))
 			continue;
-		name = capng_capability_to_name(i);
-		if (!name)
-			continue;
-		if (strncmp(name, "cap_", 4) == 0)
-			name += 4;
 		len = strlen(name);
 		if (sep + len >= size - used)
 			break;

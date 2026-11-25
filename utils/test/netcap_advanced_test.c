@@ -41,6 +41,49 @@ int __wrap_capng_get_caps_process(void)
 	return 0;
 }
 
+/* When set, simulate a kernel one capability newer than the build headers. */
+static int newer_kernel_cap;
+
+int __real_capng_have_capability(capng_type_t which, unsigned int capability);
+int __wrap_capng_have_capability(capng_type_t which, unsigned int capability)
+{
+	if (newer_kernel_cap && capability == CAP_LAST_CAP + 1)
+		return which == CAPNG_PERMITTED;
+	return __real_capng_have_capability(which, capability);
+}
+
+const char *__real_capng_capability_to_name(unsigned int capability);
+const char *__wrap_capng_capability_to_name(unsigned int capability)
+{
+	static char name[32];
+
+	if (newer_kernel_cap && capability > CAP_LAST_CAP) {
+		if (capability > CAP_LAST_CAP + 1)
+			return NULL;
+		snprintf(name, sizeof(name), "cap_%u", capability);
+		return name;
+	}
+	return __real_capng_capability_to_name(capability);
+}
+
+/* A capability newer than the build must not disappear from the summary. */
+static void test_newer_kernel_capability(void)
+{
+	struct process_info p = { .pid = getpid() };
+	char expected[64];
+
+	snprintf(expected, sizeof(expected), "net_raw, cap_%u",
+		 CAP_LAST_CAP + 1);
+	capability_case = 1;
+	newer_kernel_cap = 1;
+	collect_process_caps(&p);
+	newer_kernel_cap = 0;
+	if (!p.caps || strcmp(p.caps, expected))
+		fail("Capability newer than the build was omitted");
+	free(p.caps);
+	free(p.ambient_caps);
+}
+
 static void test_permitted_summary(void)
 {
 	static const char *const expected[] = {
@@ -787,6 +830,7 @@ int main(int argc, char **argv)
 		fail("Unexpected netcap test argument");
 
 	test_permitted_summary();
+	test_newer_kernel_capability();
 	test_json_string_encoding();
 	test_process_rendering();
 	test_unknown_posture();
