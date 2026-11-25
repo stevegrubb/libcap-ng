@@ -24,6 +24,7 @@
 %module capng
 %{
         #include <limits.h>
+        #include <stdint.h>
         #include <stdlib.h>
         #include "./capng.h"
 %}
@@ -60,6 +61,16 @@
 	n = PySequence_Size($input);
 	if (n < 0)
 		SWIG_fail;
+	/*
+	 * A custom sequence can report any length. Reject one whose array
+	 * size would overflow before allocating, or the size would wrap to a
+	 * small buffer that the loop below then overruns.
+	 */
+	if ((size_t)n > SIZE_MAX / sizeof(*list)) {
+		PyErr_SetString(PyExc_OverflowError,
+				"too many capabilities in sequence");
+		SWIG_fail;
+	}
 	list = malloc(n ? (size_t)n * sizeof(*list) : 1);
 	if (!list) {
 		PyErr_NoMemory();

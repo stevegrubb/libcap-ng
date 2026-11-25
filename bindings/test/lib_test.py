@@ -84,6 +84,36 @@ def test_update_list():
         raise AssertionError("Malformed update list was accepted: %r" % (bad,))
 
 
+class HugeSequence:
+    """A sequence whose reported length overflows the C array size."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def __len__(self):
+        # 2**62 on 64-bit and 2**30 on 32-bit: times sizeof(unsigned int),
+        # either wraps size_t to zero.
+        return (sys.maxsize + 1) // 2
+
+    def __getitem__(self, index):
+        # Raise at once, so an unchecked wrapper fails here before it can
+        # write past a wrapped allocation.
+        self.calls += 1
+        raise IndexError(index)
+
+
+def test_update_list_overflow():
+    huge = HugeSequence()
+    try:
+        capng.capng_update_list(capng.CAPNG_ADD, capng.CAPNG_EFFECTIVE, huge)
+    except OverflowError:
+        pass
+    else:
+        raise AssertionError("Overflowing sequence length was accepted")
+    if huge.calls:
+        raise AssertionError("Elements were read before the length was checked")
+
+
 def test_change_id_flags():
     if capng.CAPNG_SET_NO_NEW_PRIVS != 64:
         raise AssertionError("CAPNG_SET_NO_NEW_PRIVS is not exposed")
@@ -94,6 +124,7 @@ def main():
     test_updatev_boundary()
     test_last_cap()
     test_update_list()
+    test_update_list_overflow()
     test_change_id_flags()
 
     if capng.CAPNG_UNSET_ROOTID != 0xffffffff:
