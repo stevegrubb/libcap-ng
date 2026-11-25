@@ -45,8 +45,11 @@ cap_audit_json_escape_test_SOURCES = cap_audit_json_escape_test.c \
 	${top_srcdir}/utils/proc-sanitize.c
 cap_audit_json_escape_test_CPPFLAGS = $(AM_CPPFLAGS) ${LIBAUDIT_CFLAGS} \
 	-D_GNU_SOURCE
+# cap_audit.h pulls in the generated BPF skeleton, whose inline helpers call
+# libbpf. Optimized builds discard them when unused, but -O0 builds emit them,
+# so every test that includes cap_audit.h must link libbpf.
 cap_audit_json_escape_test_LDADD = ${top_builddir}/src/libcap-ng.la \
-	${LIBAUDIT_LIBS}
+	${LIBAUDIT_LIBS} ${LIBBPF_LIBS}
 cap_audit_namespace_test_SOURCES = cap_audit_namespace_test.c \
 	${top_srcdir}/utils/proc-sanitize.c \
 	${top_srcdir}/utils/cap-audit/cap_audit_report.c \
@@ -54,6 +57,7 @@ cap_audit_namespace_test_SOURCES = cap_audit_namespace_test.c \
 	${top_srcdir}/utils/cap-audit/cap_audit_analyze.c \
 	${top_srcdir}/utils/cap-audit/cap_audit_capset.c \
 	${top_srcdir}/utils/cap-audit/cap_audit_outcome.c
+cap_audit_namespace_test_LDADD = ${LIBBPF_LIBS}
 cap_audit_outcome_test_SOURCES = cap_audit_outcome_test.c \
 	${top_srcdir}/utils/proc-sanitize.c \
 	${top_srcdir}/utils/cap-audit/cap_audit_report.c \
@@ -63,12 +67,13 @@ cap_audit_outcome_test_SOURCES = cap_audit_outcome_test.c \
 	${top_srcdir}/utils/cap-audit/cap_audit_json.c \
 	${top_srcdir}/utils/cap-audit/cap_audit_outcome.c \
 	${top_srcdir}/utils/cap-audit/cap_audit_yaml.c
-cap_audit_outcome_test_LDADD = ${top_builddir}/src/libcap-ng.la
+cap_audit_outcome_test_LDADD = ${top_builddir}/src/libcap-ng.la ${LIBBPF_LIBS}
 cap_audit_recommendation_test_SOURCES = cap_audit_recommendation_test.c \
 	${top_srcdir}/utils/cap-audit/cap_audit_report.c \
 	${top_srcdir}/utils/cap-audit/cap_audit_analyze.c \
 	${top_srcdir}/utils/cap-audit/cap_audit_capset.c \
 	${top_srcdir}/utils/cap-audit/cap_audit_outcome.c
+cap_audit_recommendation_test_LDADD = ${LIBBPF_LIBS}
 cap_audit_service_test_SOURCES = cap_audit_service_test.c \
 	${top_srcdir}/utils/cap-audit/cap_audit_service.c
 cap_audit_service_test_LDADD = ${top_builddir}/src/libcap-ng.la \
