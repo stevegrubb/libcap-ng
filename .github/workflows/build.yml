@@ -15,6 +15,8 @@ permissions:
 # covered on Alpine. cap-audit tracing needs privileges CI lacks; building it
 # runs its unprivileged unit tests, including the simulated BPF test.
 # vmlinux.h is generated from the runner kernel's BTF via the read-only /sys.
+# Every job installs the BlueZ headers and requires netcap's Bluetooth support,
+# so a package change cannot silently stop that code from being compiled.
 
 jobs:
   fedora-rawhide:
@@ -58,10 +60,11 @@ jobs:
               dnf -y --setopt=install_weak_deps=False install \
                 gcc make autoconf automake libtool \
                 pkgconf-pkg-config kernel-headers libattr-devel \
-                $EXTRA_PACKAGES
+                bluez-libs-devel $EXTRA_PACKAGES
 
               ./autogen.sh
               ./configure $CONFIGURE_FLAGS
+              grep -q "define HAVE_NETCAP_BLUETOOTH 1" config.h
               make -j20
               make -j20 check
             '
@@ -89,10 +92,11 @@ jobs:
                 build-base autoconf automake libtool \
                 linux-headers pkgconf coreutils \
                 clang llvm bpftool libbpf-dev elfutils-dev audit-dev \
-                zlib-dev python3-dev py3-setuptools swig
+                zlib-dev python3-dev py3-setuptools swig bluez-dev
 
               ./autogen.sh
               ./configure --enable-cap-audit --with-python3
+              grep -q "define HAVE_NETCAP_BLUETOOTH 1" config.h
               make -j32
               make -j32 check
             '
