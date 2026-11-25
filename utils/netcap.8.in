@@ -138,9 +138,10 @@ HCI: all bound raw management sockets; semantics differ from port listeners
 and are analogous to packet sockets.
 .IP \[bu] 2
 SCTP/DCCP: listener sockets only; established flows are not shown.
-These protocols are discovered via \fBNETLINK_SOCK_DIAG\fP, which requires
-\fBCAP_NET_ADMIN\fP; without that capability, SCTP and DCCP listeners are
-silently absent from the report.
+These protocols are discovered via \fBNETLINK_SOCK_DIAG\fP. A protocol that
+the running kernel does not provide is simply absent; any other failure to
+complete the dump, including a truncated or interrupted reply, is counted as a
+socket table inspection failure.
 .IP \[bu] 2
 VSOCK: when built with \fBlinux/vm_sockets.h\fP, stream LISTEN sockets,
 plus bound datagram/seqpacket sockets.
@@ -231,8 +232,10 @@ assessing privilege or hardening.
 
 The top-level \fBinspection_failures\fP object counts failed process,
 file-descriptor, capability, and socket-table inspections. Text reports show
-these counts when any inspection failed. Process exits and unavailable kernel
+these counts when any inspection failed. Process exits and unreadable kernel
 interfaces can make an inventory incomplete, including when a plane is empty.
+A socket table for a protocol that the running kernel does not provide, such
+as UDP-Lite or an unloaded Bluetooth protocol, is not counted as a failure.
 
 If a plane has no discovered binds, it appears with an empty list. If a
 consumer does not receive a given plane, treat it as none found or omitted by

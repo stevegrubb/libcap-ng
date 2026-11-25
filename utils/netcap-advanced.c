@@ -1786,6 +1786,29 @@ static void endpoint_to_ifaces(struct model *m, const char *proto, int af,
  * Side effects/assumptions: Operates on in-memory data and may read
  * procfs/netns state; it does not change kernel configuration.
  */
+/*
+ * open_socket_table - open a procfs socket table for parsing.
+ * @m: model whose socket_read_failures counts inspection failures.
+ * @path: table to open.
+ *
+ * A missing table means the kernel does not provide that protocol, such as
+ * UDP-Lite on newer kernels or an unloaded Bluetooth module, so it has no
+ * sockets to report. Only other errors make the inventory incomplete.
+ * Returns the open stream, or NULL.
+ */
+static FILE *open_socket_table(struct model *m, const char *path)
+{
+	FILE *f = fopen(path, "rte");
+
+	if (!f) {
+		if (errno != ENOENT)
+			m->socket_read_failures++;
+		return NULL;
+	}
+	__fsetlocking(f, FSETLOCKING_BYCALLER);
+	return f;
+}
+
 static void parse_inet_file(struct model *m, const char *path,
 	const char *proto, int af)
 {
@@ -1793,12 +1816,9 @@ static void parse_inet_file(struct model *m, const char *path,
 	char line[512];
 	int row = 0;
 
-	f = fopen(path, "rte");
-	if (!f) {
-		m->socket_read_failures++;
+	f = open_socket_table(m, path);
+	if (!f)
 		return;
-	}
-	__fsetlocking(f, FSETLOCKING_BYCALLER);
 	while (fgets(line, sizeof(line), f)) {
 		unsigned int lport, rport, state;
 		unsigned long txq, rxq, tmr, when, retr, inode;
@@ -1886,12 +1906,9 @@ static void parse_packet_file(struct model *m, const char *path)
 	char line[512], ifn[IF_NAMESIZE];
 	int row = 0;
 
-	f = fopen(path, "rte");
-	if (!f) {
-		m->socket_read_failures++;
+	f = open_socket_table(m, path);
+	if (!f)
 		return;
-	}
-	__fsetlocking(f, FSETLOCKING_BYCALLER);
 	while (fgets(line, sizeof(line), f)) {
 		unsigned long sk, inode;
 		unsigned int ref, type, proto, iface, r, rmem, uid;
@@ -2171,12 +2188,9 @@ static void parse_bluetooth_file(struct model *m, const char *path,
 	char line[512];
 	struct endpoint_attrs attrs = { 0, 0 };
 
-	f = fopen(path, "rte");
-	if (!f) {
-		m->socket_read_failures++;
+	f = open_socket_table(m, path);
+	if (!f)
 		return;
-	}
-	__fsetlocking(f, FSETLOCKING_BYCALLER);
 	while (fgets(line, sizeof(line), f)) {
 		unsigned long sk, inode, parent;
 		unsigned int refcnt, rmem, wmem, uid;
@@ -2216,12 +2230,9 @@ static void parse_vsock_file(struct model *m, const char *path)
 	FILE *f;
 	char line[512];
 
-	f = fopen(path, "rte");
-	if (!f) {
-		m->socket_read_failures++;
+	f = open_socket_table(m, path);
+	if (!f)
 		return;
-	}
-	__fsetlocking(f, FSETLOCKING_BYCALLER);
 	while (fgets(line, sizeof(line), f)) {
 		char work[512];
 		char *tok[24];
@@ -2328,9 +2339,11 @@ static int parse_vsock_diag_messages(struct model *m, int fd)
 {
 	char buf[8192];
 	ssize_t len;
+	int interrupted = 0;
 
 	while (1) {
-		len = recv(fd, buf, sizeof(buf), 0);
+		/* MSG_TRUNC reports the full length of an oversized reply. */
+		len = recv(fd, buf, sizeof(buf), MSG_TRUNC);
 		if (len < 0) {
 			if (errno == EINTR)
 				continue;
@@ -2338,6 +2351,11 @@ static int parse_vsock_diag_messages(struct model *m, int fd)
 		}
 		if (len == 0)
 			return -1;
+		if ((size_t)len > sizeof(buf)) {
+			/* The kernel's dump batch was cut short. */
+			errno = EMSGSIZE;
+			return -1;
+		}
 
 		struct nlmsghdr *nlh;
 		unsigned int rem;
@@ -2353,8 +2371,19 @@ static int parse_vsock_diag_messages(struct model *m, int fd)
 			struct inode_proc *ip;
 			const char *kind;
 
-			if (nlh->nlmsg_type == NLMSG_DONE)
+			/*
+			 * Sockets changed during the dump, so its contents may
+			 * be inconsistent. Keep what was read, but report it.
+			 */
+			if (nlh->nlmsg_flags & NLM_F_DUMP_INTR)
+				interrupted = 1;
+			if (nlh->nlmsg_type == NLMSG_DONE) {
+				if (interrupted) {
+					errno = EINTR;
+					return -1;
+				}
 				return 0;
+			}
 			if (nlh->nlmsg_type == NLMSG_ERROR) {
 				struct nlmsgerr *e;
 
@@ -2437,7 +2466,12 @@ static int parse_vsock_diag(struct model *m)
 		goto out;
 	rc = parse_vsock_diag_messages(m, fd);
 out:
-	close(fd);
+	{
+		int saved_errno = errno;
+
+		close(fd);
+		errno = saved_errno;
+	}
 	return rc;
 }
 #else
@@ -2473,9 +2507,11 @@ static int parse_diag_messages(struct model *m, int fd, int proto, int af)
 {
 	char buf[8192];
 	ssize_t len;
+	int interrupted = 0;
 
 	while (1) {
-		len = recv(fd, buf, sizeof(buf), 0);
+		/* MSG_TRUNC reports the full length of an oversized reply. */
+		len = recv(fd, buf, sizeof(buf), MSG_TRUNC);
 		if (len < 0) {
 			if (errno == EINTR)
 				continue;
@@ -2483,6 +2519,11 @@ static int parse_diag_messages(struct model *m, int fd, int proto, int af)
 		}
 		if (len == 0)
 			return -1;
+		if ((size_t)len > sizeof(buf)) {
+			/* The kernel's dump batch was cut short. */
+			errno = EMSGSIZE;
+			return -1;
+		}
 
 		diag_dbg("recv proto=%d af=%d len=%zd", proto, af, len);
 
@@ -2501,8 +2542,19 @@ static int parse_diag_messages(struct model *m, int fd, int proto, int af)
 			unsigned int port;
 			struct inode_proc *ip;
 
-			if (nlh->nlmsg_type == NLMSG_DONE)
+			/*
+			 * Sockets changed during the dump, so its contents may
+			 * be inconsistent. Keep what was read, but report it.
+			 */
+			if (nlh->nlmsg_flags & NLM_F_DUMP_INTR)
+				interrupted = 1;
+			if (nlh->nlmsg_type == NLMSG_DONE) {
+				if (interrupted) {
+					errno = EINTR;
+					return -1;
+				}
 				return 0;
+			}
 			if (nlh->nlmsg_type == NLMSG_ERROR) {
 				struct nlmsgerr *e;
 
@@ -2564,8 +2616,10 @@ static void parse_diag_for_proto_af(struct model *m, int proto, int af)
 	int fd;
 
 	fd = socket(AF_NETLINK, SOCK_RAW, NETLINK_SOCK_DIAG);
-	if (fd < 0)
+	if (fd < 0) {
+		m->socket_read_failures++;
 		return;
+	}
 
 	memset(&req, 0, sizeof(req));
 	req.nlh.nlmsg_len = NLMSG_LENGTH(sizeof(req.req));
@@ -2579,14 +2633,19 @@ static void parse_diag_for_proto_af(struct model *m, int proto, int af)
 	sa.nl_family = AF_NETLINK;
 	sa.nl_pid = 0;
 	if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) < 0)
-		goto out;
+		goto fail;
 
 	diag_dbg("send proto=%d af=%d len=%u", proto, af,
 		req.nlh.nlmsg_len);
 	if (send(fd, &req, req.nlh.nlmsg_len, 0) < 0)
-		goto out;
-	parse_diag_messages(m, fd, proto, af);
-out:
+		goto fail;
+	/* ENOENT means the kernel lacks this protocol; there is nothing lost. */
+	if (parse_diag_messages(m, fd, proto, af) < 0 && errno != ENOENT)
+		goto fail;
+	close(fd);
+	return;
+fail:
+	m->socket_read_failures++;
 	close(fd);
 }
 
@@ -2629,6 +2688,12 @@ static void collect_endpoints(struct model *m)
 	parse_packet_file(m, "/proc/net/packet");
 #ifdef HAVE_NETCAP_VSOCK
 	if (parse_vsock_diag(m) < 0) {
+		/*
+		 * ENOENT means VSOCK or its diag support is not loaded. Any
+		 * other error lost observations, even if the fallback works.
+		 */
+		if (errno != ENOENT)
+			m->socket_read_failures++;
 		diag_dbg("vsock diag unavailable (%s), falling back to /proc",
 			strerror(errno));
 		parse_vsock_file(m, "/proc/net/vsock");

@@ -293,7 +293,8 @@ static void test_unknown_posture(void)
 			fail("Missing or unfamiliar defense metadata was misclassified");
 		free(d.lsm_label);
 	}
-	parse_inet_file(&m, "/missing-netcap-test-table", "tcp", AF_INET);
+	/* ENOTDIR is a real read failure; an absent table is not. */
+	parse_inet_file(&m, "/dev/null/netcap-test-table", "tcp", AF_INET);
 	capture = capture_output(&saved);
 	render_tree(&m);
 	text = finish_output(capture, saved);
@@ -584,7 +585,12 @@ static void test_packet_table(void)
 	free_model(&m);
 	memset(&m, 0, sizeof(m));
 
+	/* A missing table means the protocol is absent, not a lost read. */
 	parse_packet_file(&m, "/nonexistent/netcap-packet");
+	if (m.socket_read_failures != 0)
+		fail("Absent packet table was counted as a failure");
+	/* ENOTDIR fails for every user, unlike a permission fixture. */
+	parse_packet_file(&m, "/dev/null/netcap-packet");
 	if (m.socket_read_failures != 1)
 		fail("Unreadable packet table was not counted");
 	free_model(&m);
@@ -711,6 +717,44 @@ static void test_vsock_diag_messages(void)
 }
 #endif
 #endif
+
+/* A truncated or interrupted dump must be reported, not silently used. */
+static void test_diag_dump_integrity(void)
+{
+	struct process_info owner = { .pid = 1234 };
+	struct inet_diag_msg r = { 0 };
+	struct model m = { 0 };
+	static char big[9000];
+	int fds[2];
+
+	open_nl_pair(fds);
+	memset(big, 0, sizeof(big));
+	((struct nlmsghdr *)big)->nlmsg_len = sizeof(big);
+	((struct nlmsghdr *)big)->nlmsg_type = SOCK_DIAG_BY_FAMILY;
+	if (send(fds[1], big, sizeof(big), 0) < 0)
+		fail("Cannot send oversized netlink fixture");
+	errno = 0;
+	if (parse_diag_messages(&m, fds[0], IPPROTO_SCTP, AF_INET) != -1 ||
+	    errno != EMSGSIZE)
+		fail("Truncated diag reply was not reported");
+
+	r.idiag_family = AF_INET;
+	r.id.idiag_sport = htons(5000);
+	r.id.idiag_src[0] = htonl(INADDR_LOOPBACK);
+	r.idiag_inode = 8001;
+	send_nlmsg(fds[1], SOCK_DIAG_BY_FAMILY, NLM_F_MULTI | NLM_F_DUMP_INTR,
+		   &r, sizeof(r));
+	send_nlmsg(fds[1], NLMSG_DONE, NLM_F_MULTI | NLM_F_DUMP_INTR, NULL, 0);
+	if (add_inode_proc(&m, 8001, &owner))
+		fail("Cannot create interrupted diag ownership fixture");
+	errno = 0;
+	if (parse_diag_messages(&m, fds[0], IPPROTO_SCTP, AF_INET) != -1 ||
+	    errno != EINTR || m.eps_n != 1)
+		fail("Interrupted diag dump was not reported with its results");
+	free_model(&m);
+	close(fds[0]);
+	close(fds[1]);
+}
 
 static void test_inet_diag_messages(void)
 {
@@ -852,6 +896,7 @@ int main(int argc, char **argv)
 #endif
 #endif
 	test_inet_diag_messages();
+	test_diag_dump_integrity();
 	puts("Advanced netcap tests passed");
 	return 0;
 }
