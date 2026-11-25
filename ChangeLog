@@ -33,6 +33,19 @@
 - Keep DynamicUser in cap-audit service advice instead of naming nobody
 - Report the actual error when cap-audit aborts a target launch
 - Enforce NoNewPrivileges for DynamicUser services in cap-audit --service
+- Add capng_last_cap to report the running kernel's highest capability
+- Add capng_update_list for counted updates in C and Python
+- Add CAPNG_SET_NO_NEW_PRIVS to capng_change_id
+- Remove temporary staged capabilities when capng_change_id fails
+- Keep staged settings and apply other sets if capng_apply probing fails
+- Add cap-audit --follow-descendants to trace children after parent exit
+- Honor repeated AmbientCapabilities= directives in cap-audit --service
+- Add L2CAP and SCO socket inventory to netcap --advanced
+- Show packet sockets receiving on all interfaces as wildcards in netcap
+- List capabilities newer than the build headers in netcap --advanced
+- Distinguish absent protocols from failed socket reads in netcap --advanced
+- Fix netcap --advanced builds with Linux 3.8 kernel headers
+- Report unsupported ambient sets as empty with older kernel headers
 
 0.9.6
 - Fix supplementary group changes in capng_change_id
