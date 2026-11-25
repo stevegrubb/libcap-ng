@@ -599,14 +599,17 @@ static void test_packet_table(void)
 		 "malformed\n"
 		 "0000000000000000 3 3 0003 %u 1 0 0 5001\n"
 		 "0000000000000000 3 3 0003 %u 1 0 0 5999\n"
-		 "0000000000000000 3 3 0003 0 1 0 0 5001\n", lo, lo);
+		 "0000000000000000 3 3 0003 0 1 0 0 5001\n"
+		 /* Protocol 0 receives nothing, on any interface. */
+		 "0000000000000000 3 3 0000 0 1 0 0 5001\n"
+		 "0000000000000000 3 3 0000 %u 1 0 0 5001\n", lo, lo, lo);
 	write_fixture(path, contents);
 	if (add_inode_proc(&m, 5001, &owner))
 		fail("Cannot create packet ownership fixture");
 	parse_packet_file(&m, path);
 	unlink(path);
 	if (m.eps_n != 2 || m.socket_read_failures)
-		fail("Packet table rows were not filtered by ownership");
+		fail("Packet table rows were not filtered by ownership or protocol");
 	if (m.eps[0].plane != PLANE_PACKET || strcmp(m.eps[0].proto, "packet") ||
 	    m.eps[0].port != 3 || strcmp(m.eps[0].ifname, "lo") ||
 	    m.eps[0].wildcard_bind ||

@@ -1948,6 +1948,13 @@ static void parse_packet_file(struct model *m, const char *path)
 			&sk, &ref, &type, &proto, &iface, &r, &rmem, &uid,
 			&inode) < 9)
 			continue;
+		/*
+		 * A packet socket with protocol 0 receives no packets
+		 * (packet(7)); it can only send, so it has no inbound
+		 * exposure on any interface.
+		 */
+		if (proto == 0)
+			continue;
 		ip = lookup_inode(m, inode);
 		if (!ip)
 			continue;
