@@ -1790,18 +1790,22 @@ static void endpoint_to_ifaces(struct model *m, const char *proto, int af,
  * open_socket_table - open a procfs socket table for parsing.
  * @m: model whose socket_read_failures counts inspection failures.
  * @path: table to open.
+ * @required: nonzero for a table the kernel always provides.
  *
- * A missing table means the kernel does not provide that protocol, such as
- * UDP-Lite on newer kernels or an unloaded Bluetooth module, so it has no
- * sockets to report. Only other errors make the inventory incomplete.
+ * A missing optional table means the kernel does not provide that protocol,
+ * such as UDP-Lite on newer kernels or an unloaded Bluetooth module, so it
+ * has no sockets to report. A missing required table instead means procfs
+ * network data is unavailable, for example masked in a container, and the
+ * inventory is incomplete. Every other error is also a failure.
  * Returns the open stream, or NULL.
  */
-static FILE *open_socket_table(struct model *m, const char *path)
+static FILE *open_socket_table(struct model *m, const char *path,
+				int required)
 {
 	FILE *f = fopen(path, "rte");
 
 	if (!f) {
-		if (errno != ENOENT)
+		if (required || errno != ENOENT)
 			m->socket_read_failures++;
 		return NULL;
 	}
@@ -1809,14 +1813,36 @@ static FILE *open_socket_table(struct model *m, const char *path)
 	return f;
 }
 
+/*
+ * Internet socket tables to inventory. The kernel always provides the IPv4
+ * TCP and UDP tables, so their absence means procfs network data is hidden,
+ * not that the protocols are missing. IPv6 may be disabled, and UDP-Lite is
+ * absent from newer kernels.
+ */
+static const struct {
+	const char *path;
+	const char *proto;
+	int af;
+	int required;
+} inet_tables[] = {
+	{ "/proc/net/tcp", "tcp", AF_INET, 1 },
+	{ "/proc/net/tcp6", "tcp6", AF_INET6, 0 },
+	{ "/proc/net/udp", "udp", AF_INET, 1 },
+	{ "/proc/net/udp6", "udp6", AF_INET6, 0 },
+	{ "/proc/net/udplite", "udplite", AF_INET, 0 },
+	{ "/proc/net/udplite6", "udplite6", AF_INET6, 0 },
+	{ "/proc/net/raw", "raw", AF_INET, 0 },
+	{ "/proc/net/raw6", "raw6", AF_INET6, 0 },
+};
+
 static void parse_inet_file(struct model *m, const char *path,
-	const char *proto, int af)
+	const char *proto, int af, int required)
 {
 	FILE *f;
 	char line[512];
 	int row = 0;
 
-	f = open_socket_table(m, path);
+	f = open_socket_table(m, path, required);
 	if (!f)
 		return;
 	while (fgets(line, sizeof(line), f)) {
@@ -1906,7 +1932,7 @@ static void parse_packet_file(struct model *m, const char *path)
 	char line[512], ifn[IF_NAMESIZE];
 	int row = 0;
 
-	f = open_socket_table(m, path);
+	f = open_socket_table(m, path, 0);
 	if (!f)
 		return;
 	while (fgets(line, sizeof(line), f)) {
@@ -2188,7 +2214,7 @@ static void parse_bluetooth_file(struct model *m, const char *path,
 	char line[512];
 	struct endpoint_attrs attrs = { 0, 0 };
 
-	f = open_socket_table(m, path);
+	f = open_socket_table(m, path, 0);
 	if (!f)
 		return;
 	while (fgets(line, sizeof(line), f)) {
@@ -2230,7 +2256,7 @@ static void parse_vsock_file(struct model *m, const char *path)
 	FILE *f;
 	char line[512];
 
-	f = open_socket_table(m, path);
+	f = open_socket_table(m, path, 0);
 	if (!f)
 		return;
 	while (fgets(line, sizeof(line), f)) {
@@ -2676,14 +2702,9 @@ static void parse_diag_listeners(struct model *m)
  */
 static void collect_endpoints(struct model *m)
 {
-	parse_inet_file(m, "/proc/net/tcp", "tcp", AF_INET);
-	parse_inet_file(m, "/proc/net/tcp6", "tcp6", AF_INET6);
-	parse_inet_file(m, "/proc/net/udp", "udp", AF_INET);
-	parse_inet_file(m, "/proc/net/udp6", "udp6", AF_INET6);
-	parse_inet_file(m, "/proc/net/udplite", "udplite", AF_INET);
-	parse_inet_file(m, "/proc/net/udplite6", "udplite6", AF_INET6);
-	parse_inet_file(m, "/proc/net/raw", "raw", AF_INET);
-	parse_inet_file(m, "/proc/net/raw6", "raw6", AF_INET6);
+	for (size_t i = 0; i < sizeof(inet_tables) / sizeof(inet_tables[0]); i++)
+		parse_inet_file(m, inet_tables[i].path, inet_tables[i].proto,
+				inet_tables[i].af, inet_tables[i].required);
 	parse_diag_listeners(m);
 	parse_packet_file(m, "/proc/net/packet");
 #ifdef HAVE_NETCAP_VSOCK

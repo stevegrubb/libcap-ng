@@ -294,7 +294,7 @@ static void test_unknown_posture(void)
 		free(d.lsm_label);
 	}
 	/* ENOTDIR is a real read failure; an absent table is not. */
-	parse_inet_file(&m, "/dev/null/netcap-test-table", "tcp", AF_INET);
+	parse_inet_file(&m, "/dev/null/netcap-test-table", "tcp", AF_INET, 0);
 	capture = capture_output(&saved);
 	render_tree(&m);
 	text = finish_output(capture, saved);
@@ -398,7 +398,7 @@ static void test_inet6_proc_reports(void)
 		fail("Cannot write inet6 table fixture");
 	if (add_inode_proc(&m, 4242, &owner))
 		fail("Cannot create inet6 socket ownership fixture");
-	parse_inet_file(&m, path, "tcp6", AF_INET6);
+	parse_inet_file(&m, path, "tcp6", AF_INET6, 0);
 	unlink(path);
 
 	if (m.eps_n != 1)
@@ -547,6 +547,40 @@ static void open_nl_pair(int fds[2])
 {
 	if (socketpair(AF_UNIX, SOCK_DGRAM, 0, fds))
 		fail("Cannot create netlink fixture socket pair");
+}
+
+/*
+ * A missing required table means procfs network data is hidden, so the
+ * inventory is incomplete. A missing optional table is just an absent
+ * protocol. Returns no value.
+ */
+static void test_required_tables(void)
+{
+	struct model m = { 0 };
+	size_t i;
+	int tcp = 0, udp = 0;
+
+	parse_inet_file(&m, "/nonexistent/netcap-tcp", "tcp", AF_INET, 1);
+	if (m.socket_read_failures != 1)
+		fail("Missing required socket table was not counted");
+	parse_inet_file(&m, "/nonexistent/netcap-tcp6", "tcp6", AF_INET6, 0);
+	if (m.socket_read_failures != 1)
+		fail("Missing optional socket table was counted");
+	free_model(&m);
+
+	/* Collection must treat the always-present tables as required. */
+	for (i = 0; i < sizeof(inet_tables) / sizeof(inet_tables[0]); i++) {
+		int base = inet_tables[i].af == AF_INET;
+
+		if (!strcmp(inet_tables[i].proto, "tcp"))
+			tcp = base && inet_tables[i].required;
+		else if (!strcmp(inet_tables[i].proto, "udp"))
+			udp = base && inet_tables[i].required;
+		else if (inet_tables[i].required)
+			fail("An optional socket table is required");
+	}
+	if (!tcp || !udp)
+		fail("IPv4 TCP and UDP tables are not required");
 }
 
 /* Packet sockets report the ethertype as the port, on a named interface. */
@@ -889,6 +923,7 @@ int main(int argc, char **argv)
 	test_bluetooth_sources();
 #endif
 	test_packet_table();
+	test_required_tables();
 #ifdef HAVE_NETCAP_VSOCK
 	test_vsock_table();
 #ifdef HAVE_LINUX_VM_SOCKETS_DIAG_H

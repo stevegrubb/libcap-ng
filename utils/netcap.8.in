@@ -235,7 +235,10 @@ file-descriptor, capability, and socket-table inspections. Text reports show
 these counts when any inspection failed. Process exits and unreadable kernel
 interfaces can make an inventory incomplete, including when a plane is empty.
 A socket table for a protocol that the running kernel does not provide, such
-as UDP-Lite or an unloaded Bluetooth protocol, is not counted as a failure.
+as UDP-Lite or an unloaded Bluetooth protocol, is not counted as a failure. The
+kernel always provides the IPv4 TCP and UDP tables, so if either is missing,
+for example because procfs network data is masked, the inventory is counted
+as incomplete.
 
 If a plane has no discovered binds, it appears with an empty list. If a
 consumer does not receive a given plane, treat it as none found or omitted by
