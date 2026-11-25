@@ -145,7 +145,9 @@ silently absent from the report.
 VSOCK: when built with \fBlinux/vm_sockets.h\fP, stream LISTEN sockets,
 plus bound datagram/seqpacket sockets.
 .IP \[bu] 2
-RAW/PACKET: shown as binds; semantics differ from port listeners.
+RAW/PACKET: shown as binds; semantics differ from port listeners. A packet
+socket that is not bound to an interface receives frames from every interface;
+it is shown on interface \fB*\fP and flagged \fBwildcard-bind\fP.
 
 The defenses section is best-effort: \fBno_new_privs\fP and
 \fBseccomp\fP mode are read from \fB/proc/<pid>/status\fP when

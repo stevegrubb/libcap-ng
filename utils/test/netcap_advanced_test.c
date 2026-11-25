@@ -520,18 +520,24 @@ static void test_packet_table(void)
 		 "sk       RefCnt Type Proto  Iface R Rmem   User   Inode\n"
 		 "malformed\n"
 		 "0000000000000000 3 3 0003 %u 1 0 0 5001\n"
-		 "0000000000000000 3 3 0003 %u 1 0 0 5999\n", lo, lo);
+		 "0000000000000000 3 3 0003 %u 1 0 0 5999\n"
+		 "0000000000000000 3 3 0003 0 1 0 0 5001\n", lo, lo);
 	write_fixture(path, contents);
 	if (add_inode_proc(&m, 5001, &owner))
 		fail("Cannot create packet ownership fixture");
 	parse_packet_file(&m, path);
 	unlink(path);
-	if (m.eps_n != 1 || m.socket_read_failures)
+	if (m.eps_n != 2 || m.socket_read_failures)
 		fail("Packet table rows were not filtered by ownership");
 	if (m.eps[0].plane != PLANE_PACKET || strcmp(m.eps[0].proto, "packet") ||
 	    m.eps[0].port != 3 || strcmp(m.eps[0].ifname, "lo") ||
+	    m.eps[0].wildcard_bind ||
 	    m.eps[0].procs_n != 1 || m.eps[0].procs[0] != &owner)
 		fail("Packet endpoint identity changed");
+	/* Index 0 is bound to no interface, so it sees every interface. */
+	if (strcmp(m.eps[1].ifname, "*") || strcmp(m.eps[1].bind, "*") ||
+	    !m.eps[1].wildcard_bind)
+		fail("All-interface packet socket was not reported as wildcard");
 	free_model(&m);
 	memset(&m, 0, sizeof(m));
 

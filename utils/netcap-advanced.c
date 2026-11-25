@@ -1906,13 +1906,25 @@ static void parse_packet_file(struct model *m, const char *path)
 		ip = lookup_inode(m, inode);
 		if (!ip)
 			continue;
-		if (!if_indextoname(iface, ifn))
-			strcpy(ifn, "unknown");
-		snprintf(bind, sizeof(bind), "::");
-		snprintf(addr, sizeof(addr), "ifindex:%u", iface);
-		snprintf(name, sizeof(name), "packet");
-		attrs.wildcard = 0;
 		attrs.reuseport = 0;
+		if (iface == 0) {
+			/*
+			 * Interface index 0 means the socket is not bound to
+			 * an interface, so it receives frames from all of them.
+			 * That is the widest exposure, not an unknown one.
+			 */
+			strcpy(ifn, "*");
+			snprintf(bind, sizeof(bind), "*");
+			snprintf(addr, sizeof(addr), "*");
+			attrs.wildcard = 1;
+		} else {
+			if (!if_indextoname(iface, ifn))
+				strcpy(ifn, "unknown");
+			snprintf(bind, sizeof(bind), "::");
+			snprintf(addr, sizeof(addr), "ifindex:%u", iface);
+			attrs.wildcard = 0;
+		}
+		snprintf(name, sizeof(name), "packet");
 		add_endpoint(m, name, bind, proto, PLANE_PACKET, ifn, addr,
 			&attrs, ip);
 	}
