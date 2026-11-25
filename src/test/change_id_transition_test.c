@@ -10,6 +10,7 @@
 #include <grp.h>
 #include <pwd.h>
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -20,6 +21,8 @@ static unsigned int group_calls;
 static size_t group_count;
 static unsigned int uid_calls;
 static int keepcaps;
+/* Simulated kernel bounding set; drops require effective CAP_SETPCAP. */
+static uint64_t kernel_bounds = ~0ULL;
 static unsigned int nnp_calls;
 static int nnp_error;
 static __u32 final_effective;
@@ -123,6 +126,37 @@ int prctl(int option, ...)
 			return -1;
 		}
 		return 0;
+	}
+	if (option == PR_CAPBSET_READ || option == PR_CAPBSET_DROP) {
+		va_list ap;
+		unsigned long capability;
+
+		va_start(ap, option);
+		capability = va_arg(ap, unsigned long);
+		va_end(ap);
+		if (capability >= 64) {
+			errno = EINVAL;
+			return -1;
+		}
+		if (option == PR_CAPBSET_READ)
+			return (kernel_bounds >> capability) & 1;
+		if (!(current_caps[0].effective & (1U << CAP_SETPCAP))) {
+			errno = EPERM;
+			return -1;
+		}
+		kernel_bounds &= ~(1ULL << capability);
+		return 0;
+	}
+	if (option == PR_CAP_AMBIENT) {
+		va_list ap;
+		int op;
+
+		va_start(ap, option);
+		op = va_arg(ap, int);
+		va_end(ap);
+		/* Report an empty ambient set and accept clearing it. */
+		if (op == PR_CAP_AMBIENT_IS_SET || op == PR_CAP_AMBIENT_CLEAR_ALL)
+			return 0;
 	}
 	errno = EINVAL;
 	return -1;
@@ -428,6 +462,54 @@ static void test_failure_restores_staged_caps(void)
 }
 
 /*
+ * test_bounding_transition - change the bounding set during a transition.
+ *
+ * Returns no value; checks that CAPNG_CLEAR_BOUNDING drops every bit using
+ * a temporary CAP_SETPCAP that does not survive, that a missing SETPCAP
+ * fails before credentials change, and that CAPNG_APPLY_BOUNDING installs
+ * exactly the staged set.
+ */
+static void test_bounding_transition(void)
+{
+	prepare_transition();
+	expected_gid = 9;
+	kernel_bounds = ~0ULL;
+	current_caps[0].effective |= 1U << CAP_SETPCAP;
+	current_caps[0].permitted |= 1U << CAP_SETPCAP;
+	check(capng_change_id(42, 9, CAPNG_CLEAR_BOUNDING) == 0,
+	      "Transition clearing the bounding set failed");
+	check(!(kernel_bounds & ((1ULL << (capng_last_cap() + 1)) - 1)),
+	      "Bounding set was not cleared");
+	check(current_caps[0].effective == 0 && current_caps[0].permitted == 0,
+	      "Temporary SETPCAP survived the bounding transition");
+
+	/* Without SETPCAP to borrow, fail before changing credentials. */
+	prepare_transition();
+	expected_gid = 9;
+	kernel_bounds = ~0ULL;
+	check(capng_change_id(42, 9, CAPNG_CLEAR_BOUNDING) == -3 &&
+	      uid_calls == 0 && kernel_bounds == ~0ULL,
+	      "Bounding transition without SETPCAP was not refused");
+	check(!capng_have_capability(CAPNG_EFFECTIVE, CAP_SETPCAP),
+	      "Refused bounding transition left SETPCAP staged");
+
+	prepare_transition();
+	expected_gid = 9;
+	kernel_bounds = ~0ULL;
+	current_caps[0].effective |= 1U << CAP_SETPCAP;
+	current_caps[0].permitted |= 1U << CAP_SETPCAP;
+	capng_clear(CAPNG_SELECT_BOUNDS);
+	check(capng_update(CAPNG_ADD, CAPNG_BOUNDING_SET, CAP_NET_BIND_SERVICE)
+	      == 0, "Cannot stage the bounding set");
+	check(capng_change_id(42, 9, CAPNG_APPLY_BOUNDING) == 0,
+	      "Transition applying the bounding set failed");
+	check((kernel_bounds & ((1ULL << (capng_last_cap() + 1)) - 1)) ==
+	      1ULL << CAP_NET_BIND_SERVICE,
+	      "Staged bounding set was not applied exactly");
+	kernel_bounds = ~0ULL;
+}
+
+/*
  * test_no_new_privs - CAPNG_SET_NO_NEW_PRIVS is the final transition step.
  *
  * Returns no value; checks that the flag requests no_new_privs once after
@@ -511,5 +593,6 @@ int main(void)
 	test_drop_precedence();
 	test_failure_restores_staged_caps();
 	test_no_new_privs();
+	test_bounding_transition();
 	return EXIT_SUCCESS;
 }

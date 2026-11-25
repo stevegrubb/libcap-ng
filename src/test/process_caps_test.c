@@ -8,6 +8,7 @@
 #include "../cap-ng.h"
 #include <errno.h>
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,6 +29,8 @@ static int ambient_error;
 static unsigned int bounds_calls;
 static unsigned int ambient_calls;
 static unsigned int capget_calls;
+/* Extra bits the mocked capget reports, such as CAP_SETPCAP. */
+static __u32 capget_extra;
 static unsigned int capset_calls;
 static __u32 capset_effective;
 static pid_t capget_pid;
@@ -55,8 +58,8 @@ int capget(cap_user_header_t header, const cap_user_data_t data)
 		errno = capget_error;
 		return -1;
 	}
-	caps[0].effective = 1U << CAP_CHOWN;
-	caps[0].permitted = 1U << CAP_CHOWN;
+	caps[0].effective = (1U << CAP_CHOWN) | capget_extra;
+	caps[0].permitted = (1U << CAP_CHOWN) | capget_extra;
 	memcpy(data, caps, sizeof(caps));
 	return 0;
 }
@@ -81,23 +84,65 @@ FILE *fopen(const char *path, const char *mode)
 	return NULL;
 }
 
+/* Simulated kernel bounding and ambient sets, and injected failures. */
+static uint64_t kernel_bounds = 1ULL << CAP_CHOWN;
+static uint64_t kernel_ambient = 1ULL << CAP_CHOWN;
+static int drop_error, clear_error, raise_error;
+static unsigned int raise_calls;
+
 int prctl(int option, ...)
 {
 	va_list args;
 	unsigned int capability;
-	int error;
+	int error, op;
 
 	va_start(args, option);
 	if (option == PR_CAPBSET_READ) {
 		capability = va_arg(args, unsigned int);
 		error = bounds_error;
 		bounds_calls++;
-	} else if (option == PR_CAP_AMBIENT) {
-		check(va_arg(args, int) == PR_CAP_AMBIENT_IS_SET,
-		      "Unexpected ambient operation");
+	} else if (option == PR_CAPBSET_DROP) {
 		capability = va_arg(args, unsigned int);
-		error = ambient_error;
+		va_end(args);
+		if (drop_error) {
+			errno = drop_error;
+			return -1;
+		}
+		kernel_bounds &= ~(1ULL << capability);
+		return 0;
+	} else if (option == PR_CAP_AMBIENT) {
+		op = va_arg(args, int);
+		capability = va_arg(args, unsigned int);
+		va_end(args);
+		if (op == PR_CAP_AMBIENT_CLEAR_ALL) {
+			if (clear_error) {
+				errno = clear_error;
+				return -1;
+			}
+			kernel_ambient = 0;
+			return 0;
+		}
+		if (op == PR_CAP_AMBIENT_RAISE) {
+			raise_calls++;
+			if (raise_error) {
+				errno = raise_error;
+				return -1;
+			}
+			kernel_ambient |= 1ULL << capability;
+			return 0;
+		}
+		check(op == PR_CAP_AMBIENT_IS_SET, "Unexpected ambient operation");
 		ambient_calls++;
+		if (ambient_error) {
+			errno = ambient_error;
+			return -1;
+		}
+		/* Match the library's two-word storage during discovery. */
+		if (capability >= 64) {
+			errno = EINVAL;
+			return -1;
+		}
+		return (kernel_ambient >> capability) & 1;
 	} else {
 		va_end(args);
 		errno = EINVAL;
@@ -113,7 +158,7 @@ int prctl(int option, ...)
 		errno = EINVAL;
 		return -1;
 	}
-	return capability == CAP_CHOWN;
+	return (kernel_bounds >> capability) & 1;
 }
 
 static void test_read(int bounds_errno, int ambient_errno, int expected_errno)
@@ -216,6 +261,105 @@ static void test_apply_probe_failure(void)
 		      !capng_have_capability(CAPNG_EFFECTIVE, CAP_CHOWN),
 		      "Failed bounding probe discarded the staged policy");
 	}
+}
+
+/* Return a mask with every capability the simulated kernel supports. */
+static uint64_t all_caps(void)
+{
+	unsigned int last = capng_last_cap();
+
+	return last >= 63 ? ~0ULL : (1ULL << (last + 1)) - 1;
+}
+
+/* Read the process and stage the bounding set {CHOWN} for capng_apply. */
+static void stage_chown_bounds(void)
+{
+	check(capng_get_caps_process() == 0, "Cannot read apply fixture");
+	capng_clear(CAPNG_SELECT_BOUNDS);
+	check(capng_update(CAPNG_ADD, CAPNG_BOUNDING_SET, CAP_CHOWN) == 0,
+	      "Cannot stage the bounding set");
+}
+
+/*
+ * test_apply_bounding - drop bounding bits and report each failure.
+ *
+ * Returns no value; checks that capng_apply drops exactly the unstaged
+ * bounding bits with CAP_SETPCAP, refuses without it, and still applies
+ * the capability sets when a drop fails.
+ */
+static void test_apply_bounding(void)
+{
+	bounds_error = ambient_error = 0;
+
+	/* Success: only the staged bit survives, as re-read afterwards. */
+	kernel_bounds = all_caps();
+	capget_extra = 1U << CAP_SETPCAP;
+	stage_chown_bounds();
+	check(capng_apply(CAPNG_SELECT_BOUNDS) == 0 &&
+	      kernel_bounds == 1ULL << CAP_CHOWN,
+	      "Bounding set was not dropped to the staged set");
+	check(capng_have_capability(CAPNG_BOUNDING_SET, CAP_CHOWN) &&
+	      !capng_have_capability(CAPNG_BOUNDING_SET, CAP_KILL),
+	      "Bounding set was not re-read after dropping");
+
+	/* Without CAP_SETPCAP nothing is dropped. */
+	kernel_bounds = all_caps();
+	capget_extra = 0;
+	stage_chown_bounds();
+	check(capng_apply(CAPNG_SELECT_BOUNDS) == -4 &&
+	      kernel_bounds == all_caps(),
+	      "Bounding drop without CAP_SETPCAP was not refused");
+
+	/* A failed drop is reported, and the capability sets still apply. */
+	kernel_bounds = all_caps();
+	capget_extra = 1U << CAP_SETPCAP;
+	stage_chown_bounds();
+	drop_error = EPERM;
+	capset_calls = 0;
+	check(capng_apply(CAPNG_SELECT_BOTH) == -2 && capset_calls == 1,
+	      "Failed bounding drop stopped the capability sets");
+	drop_error = 0;
+	capget_extra = 0;
+	kernel_bounds = 1ULL << CAP_CHOWN;
+}
+
+/*
+ * test_apply_ambient - install the staged ambient set and report failures.
+ *
+ * Returns no value; checks clearing, raising, and each ambient error code.
+ */
+static void test_apply_ambient(void)
+{
+	bounds_error = ambient_error = 0;
+	kernel_ambient = 1ULL << CAP_CHOWN;
+	check(capng_get_caps_process() == 0, "Cannot read ambient fixture");
+
+	/* The staged set replaces the kernel's: clear, then raise. */
+	capng_clear(CAPNG_SELECT_AMBIENT);
+	check(capng_update(CAPNG_ADD, CAPNG_AMBIENT, CAP_KILL) == 0,
+	      "Cannot stage the ambient set");
+	raise_calls = 0;
+	check(capng_apply(CAPNG_SELECT_AMBIENT) == 0 &&
+	      kernel_ambient == 1ULL << CAP_KILL && raise_calls == 1,
+	      "Ambient set was not replaced by the staged set");
+	raise_error = EPERM;
+	check(capng_apply(CAPNG_SELECT_AMBIENT) == -8,
+	      "Failed ambient raise was not reported");
+	raise_error = 0;
+	clear_error = EPERM;
+	check(capng_apply(CAPNG_SELECT_AMBIENT) == -7,
+	      "Failed ambient clear was not reported");
+
+	/* An empty staged set only clears. */
+	capng_clear(CAPNG_SELECT_AMBIENT);
+	check(capng_apply(CAPNG_SELECT_AMBIENT) == -6,
+	      "Failed ambient clear-all was not reported");
+	clear_error = 0;
+	raise_calls = 0;
+	check(capng_apply(CAPNG_SELECT_AMBIENT) == 0 && kernel_ambient == 0 &&
+	      raise_calls == 0,
+	      "Empty ambient set was not cleared");
+	kernel_ambient = 1ULL << CAP_CHOWN;
 }
 
 static void test_capget_recovery(int error)
@@ -394,6 +538,8 @@ int main(void)
 	test_capget_recovery(ESRCH);
 	test_capget_recovery(EPERM);
 	test_apply_probe_failure();
+	test_apply_bounding();
+	test_apply_ambient();
 	test_target(0, NULL, 0);
 	/* A nonzero target distinct from the caller, with mocked capget. */
 	test_target(getpid() + 1, NULL, ENOENT);
