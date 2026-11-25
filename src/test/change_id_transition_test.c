@@ -20,6 +20,9 @@ static unsigned int group_calls;
 static size_t group_count;
 static unsigned int uid_calls;
 static int keepcaps;
+static unsigned int nnp_calls;
+static int nnp_error;
+static __u32 final_effective;
 static gid_t expected_gid = 7;
 /* Credential step forced to fail; FAIL_NONE lets every step succeed. */
 static enum {
@@ -105,6 +108,20 @@ int prctl(int option, ...)
 		va_start(ap, option);
 		keepcaps = va_arg(ap, int);
 		va_end(ap);
+		return 0;
+	}
+	if (option == PR_SET_NO_NEW_PRIVS) {
+		/* It must follow every credential and capability change. */
+		check(uid_calls == 1 && !keepcaps &&
+		      current_caps[0].effective == final_effective &&
+		      !(current_caps[0].permitted &
+			((1U << CAP_SETUID) | (1U << CAP_SETGID))),
+		      "NoNewPrivileges was set before the transition settled");
+		nnp_calls++;
+		if (nnp_error) {
+			errno = nnp_error;
+			return -1;
+		}
 		return 0;
 	}
 	errno = EINVAL;
@@ -411,6 +428,48 @@ static void test_failure_restores_staged_caps(void)
 }
 
 /*
+ * test_no_new_privs - CAPNG_SET_NO_NEW_PRIVS is the final transition step.
+ *
+ * Returns no value; checks that the flag requests no_new_privs once after
+ * the final sets are installed, that it is not requested without the flag
+ * or after an earlier failure, and that its own failure returns -18.
+ */
+static void test_no_new_privs(void)
+{
+	int with_flag;
+
+	for (with_flag = 0; with_flag <= 1; with_flag++) {
+		prepare_transition();
+		expected_gid = 9;
+		nnp_calls = 0;
+		final_effective = 0;
+		check(capng_change_id(42, 9, CAPNG_DROP_SUPP_GRP |
+				     (with_flag ? CAPNG_SET_NO_NEW_PRIVS : 0)) == 0,
+		      "Transition with no_new_privs failed");
+		check(nnp_calls == (unsigned int)with_flag,
+		      "no_new_privs request did not follow the flag");
+	}
+
+	prepare_transition();
+	expected_gid = 9;
+	nnp_calls = 0;
+	fail_at = FAIL_SETRESUID;
+	check(capng_change_id(42, 9, CAPNG_SET_NO_NEW_PRIVS) == -6,
+	      "Unexpected result for a failed transition");
+	fail_at = FAIL_NONE;
+	check(nnp_calls == 0, "no_new_privs was set after a failed transition");
+
+	prepare_transition();
+	expected_gid = 9;
+	nnp_calls = 0;
+	nnp_error = EPERM;
+	check(capng_change_id(42, 9, CAPNG_SET_NO_NEW_PRIVS) == -18 &&
+	      nnp_calls == 1,
+	      "A failed no_new_privs request was not reported");
+	nnp_error = 0;
+}
+
+/*
  * main - verify group-only transitions and exact final SETGID preservation.
  *
  * Returns success only when each mode works without real process privileges.
@@ -451,5 +510,6 @@ int main(void)
 	test_account_lookup();
 	test_drop_precedence();
 	test_failure_restores_staged_caps();
+	test_no_new_privs();
 	return EXIT_SUCCESS;
 }

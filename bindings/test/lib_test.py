@@ -84,11 +84,17 @@ def test_update_list():
         raise AssertionError("Malformed update list was accepted: %r" % (bad,))
 
 
+def test_change_id_flags():
+    if capng.CAPNG_SET_NO_NEW_PRIVS != 64:
+        raise AssertionError("CAPNG_SET_NO_NEW_PRIVS is not exposed")
+
+
 def main():
     last = get_last_cap()
     test_updatev_boundary()
     test_last_cap()
     test_update_list()
+    test_change_id_flags()
 
     if capng.CAPNG_UNSET_ROOTID != 0xffffffff:
         print("CAPNG_UNSET_ROOTID has the wrong value")

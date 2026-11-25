@@ -1543,6 +1543,25 @@ if (HAVE_PR_CAPBSET_DROP) {
 		goto out;
 	}
 
+	/*
+	 * Set NoNewPrivileges last, once every credential and capability
+	 * change has settled. It can never be cleared, so a failure earlier
+	 * in the transition must not leave it set, and nothing above relies
+	 * on gaining privileges through exec.
+	 */
+	if (flag & CAPNG_SET_NO_NEW_PRIVS) {
+#ifdef PR_SET_NO_NEW_PRIVS
+		if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0)) {
+			ret = -18;
+			goto out;
+		}
+#else
+		errno = EINVAL;
+		ret = -18;
+		goto out;
+#endif
+	}
+
 	ret = 0;
 	goto out;
 
