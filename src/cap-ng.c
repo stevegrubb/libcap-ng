@@ -1627,6 +1627,14 @@ int capng_lock(void)
 capng_results_t capng_have_capabilities(capng_select_t set)
 {
 	int empty = 0, full = 0;
+	int bounds_supported = 0, ambient_supported = 0;
+
+#ifdef PR_CAPBSET_DROP
+	bounds_supported = HAVE_PR_CAPBSET_DROP;
+#endif
+#ifdef PR_CAP_AMBIENT
+	ambient_supported = HAVE_PR_CAP_AMBIENT;
+#endif
 
 	// First, try to init with current set
 	if (m.state < CAPNG_INIT) {
@@ -1666,55 +1674,51 @@ capng_results_t capng_have_capabilities(capng_select_t set)
 				return CAPNG_PARTIAL;
 		}
 	}
-#ifdef PR_CAPBSET_DROP
-if (HAVE_PR_CAPBSET_DROP) {
 	if (set & CAPNG_SELECT_BOUNDS) {
-		if (m.bounds[0] == 0)
+		/*
+		 * Without bounding set support, at run time or in the build
+		 * headers, report the requested set as empty.
+		 */
+		if (!bounds_supported)
 			empty = 1;
-		else if (m.bounds[0] == 0xFFFFFFFFU)
-			full = 1;
-		else
-			return CAPNG_PARTIAL;
-		if ((m.bounds[1] & UPPER_MASK) == 0)
-			empty = 1;
-		else if ((m.bounds[1] & UPPER_MASK) == UPPER_MASK)
-			full = 1;
-		else
-			return CAPNG_PARTIAL;
+		else {
+			if (m.bounds[0] == 0)
+				empty = 1;
+			else if (m.bounds[0] == 0xFFFFFFFFU)
+				full = 1;
+			else
+				return CAPNG_PARTIAL;
+			if ((m.bounds[1] & UPPER_MASK) == 0)
+				empty = 1;
+			else if ((m.bounds[1] & UPPER_MASK) == UPPER_MASK)
+				full = 1;
+			else
+				return CAPNG_PARTIAL;
+		}
 	}
-} else
-#endif
-	/*
-	 * Without bounding set support, at run time or in the build
-	 * headers, report an empty set, but only if it was asked about.
-	 */
-	if (set & CAPNG_SELECT_BOUNDS)
-		empty = 1;
-#ifdef PR_CAP_AMBIENT
-if (HAVE_PR_CAP_AMBIENT) {
 	if (set & CAPNG_SELECT_AMBIENT) {
-		if (m.ambient[0] == 0)
+		/*
+		 * Likewise for ambient capabilities, which headers before
+		 * Linux 4.3 do not define. Otherwise a query for only the
+		 * ambient set would fall through as CAPNG_PARTIAL.
+		 */
+		if (!ambient_supported)
 			empty = 1;
-		else if (m.ambient[0] == 0xFFFFFFFFU)
-			full = 1;
-		else
-			return CAPNG_PARTIAL;
-		if ((m.ambient[1] & UPPER_MASK) == 0)
-			empty = 1;
-		else if ((m.ambient[1] & UPPER_MASK) == UPPER_MASK)
-			full = 1;
-		else
-			return CAPNG_PARTIAL;
+		else {
+			if (m.ambient[0] == 0)
+				empty = 1;
+			else if (m.ambient[0] == 0xFFFFFFFFU)
+				full = 1;
+			else
+				return CAPNG_PARTIAL;
+			if ((m.ambient[1] & UPPER_MASK) == 0)
+				empty = 1;
+			else if ((m.ambient[1] & UPPER_MASK) == UPPER_MASK)
+				full = 1;
+			else
+				return CAPNG_PARTIAL;
+		}
 	}
-} else
-#endif
-	/*
-	 * Likewise for ambient capabilities, which headers before Linux
-	 * 4.3 do not define. Otherwise a query for only the ambient set
-	 * would fall through as CAPNG_PARTIAL.
-	 */
-	if (set & CAPNG_SELECT_AMBIENT)
-		empty = 1;
 	if (empty == 1 && full == 0)
 		return CAPNG_NONE;
 	else if (empty == 0 && full == 1)
