@@ -9,7 +9,8 @@ import sys
 import tempfile
 import unittest
 
-from run import compare_cli, compare_events, compare_namespace_cli, copy_program, execute
+from run import (compare_cli, compare_events, compare_follow_cli,
+                 compare_namespace_cli, copy_program, execute)
 
 
 def record(tag, masks, tid=10, pid=10):
@@ -193,6 +194,43 @@ class EventCheckerTest(unittest.TestCase):
             with self.subTest(bad=bad), self.assertRaises(AssertionError):
                 compare_namespace_cli(bad)
         self.assertIsNotNone(compare_namespace_cli("Application exited with status 77"))
+
+    def test_follow(self):
+        check = "[CAP] pid=11 cap=setpcap result=DENIED syscall=prctl\n"
+        text = (record("EXP", (0, 0, 0)) + "LIFE orphan-parent 10 10\n" +
+                "Application exited with status 0\n" +
+                "[*] Following descendants until they exit\n" +
+                "LIFE orphan 11 11\n" + record("EXP", (0, 0, 0), tid=11, pid=11) +
+                "ECHK 11 11 157 8 0 4026531837\n" +
+                "[CAPSET] pid=10 effective=0x0 permitted=0x0 inheritable=0x0\n" +
+                "[CAPSET] pid=11 effective=0x0 permitted=0x0 inheritable=0x0\n" +
+                check)
+        report = json.dumps({"successful_capset_calls": 2,
+                             "capability_drop_observed": True,
+                             "observation": {"collection_complete": True,
+                                             "descendants_followed": True,
+                                             "descendants_remaining": False}},
+                            indent=2)
+        self.assertIsNone(compare_follow_cli(text, report))
+        # Each corruption models evidence a non-following trace would lack.
+        for bad in (text.replace("[*] Following descendants until they exit\n", ""),
+                    text.replace(check, ""),
+                    text.replace("[CAPSET] pid=11", "[CAPSET] pid=12"),
+                    text.replace("LIFE orphan 11 11\n", ""),
+                    text.replace("status 0", "status 1")):
+            with self.subTest(bad=bad), self.assertRaises(AssertionError):
+                compare_follow_cli(bad, report)
+        for old, new in (('"descendants_followed": true',
+                          '"descendants_followed": false'),
+                         ('"descendants_remaining": false',
+                          '"descendants_remaining": true'),
+                         ('"collection_complete": true',
+                          '"collection_complete": false'),
+                         ('"successful_capset_calls": 2',
+                          '"successful_capset_calls": 1')):
+            with self.subTest(old=old), self.assertRaises(AssertionError):
+                compare_follow_cli(text, report.replace(old, new))
+        self.assertIsNotNone(compare_follow_cli("Application exited with status 77"))
 
     def test_cli(self):
         text = (record("EXP", (0, 0, 0)) +

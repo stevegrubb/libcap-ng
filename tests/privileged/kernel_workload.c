@@ -8,6 +8,7 @@
 #include <linux/capability.h>
 #include <linux/securebits.h>
 #include <pthread.h>
+#include <pwd.h>
 #include <sched.h>
 #include <signal.h>
 #include <stdint.h>
@@ -18,6 +19,7 @@
 #include <sys/prctl.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
+#include <grp.h>
 #include <unistd.h>
 
 struct masks { uint64_t e, p, i; };
@@ -107,6 +109,144 @@ static int available_bit(void)
 	errno = EPERM;
 	unavailable("no capability in both permitted and bounding sets");
 	return -1;
+}
+
+/* A permitted capability that capng_change_id does not borrow itself. */
+static int retained_bit(void)
+{
+	struct masks m = kernel_masks();
+	unsigned int bit;
+
+	for (bit = 0; bit < 64; bit++)
+		if ((m.p & (1ULL << bit)) && bit != CAP_SETPCAP &&
+		    bit != CAP_SETUID && bit != CAP_SETGID)
+			return bit;
+	errno = EPERM;
+	unavailable("no permitted capability to retain across the transition");
+	return -1;
+}
+
+static void require_transition_caps(void)
+{
+	uint64_t need = (1ULL << CAP_SETUID) | (1ULL << CAP_SETGID) |
+			(1ULL << CAP_SETPCAP);
+
+	if ((kernel_masks().e & need) != need) {
+		errno = EPERM;
+		unavailable("transition needs effective SETUID, SETGID and SETPCAP");
+	}
+}
+
+/* Read NoNewPrivs from /proc/self/status, independently of prctl. */
+static int status_no_new_privs(void)
+{
+	FILE *status = fopen("/proc/self/status", "r");
+	char line[256];
+	int value = -1;
+
+	if (!status)
+		fail("open /proc/self/status");
+	while (fgets(line, sizeof(line), status))
+		if (sscanf(line, "NoNewPrivs: %d", &value) == 1)
+			break;
+	fclose(status);
+	return value;
+}
+
+/*
+ * change_id - a real privilege drop, checked against independent reads.
+ *
+ * Drops to 65534 with one retained capability, no supplementary groups,
+ * an empty bounding and ambient set, and no_new_privs set last.
+ */
+static void change_id(void)
+{
+	int bit = retained_bit(), rc;
+	uid_t ruid, euid, suid;
+	gid_t rgid, egid, sgid;
+	struct masks m;
+	unsigned int i;
+
+	require_transition_caps();
+	if (capng_get_caps_process())
+		fail("capng_get_caps_process");
+	capng_clear(CAPNG_SELECT_CAPS);
+	if (capng_update(CAPNG_ADD, CAPNG_EFFECTIVE | CAPNG_PERMITTED, bit))
+		fail("stage retained capability");
+	rc = capng_change_id(65534, 65534, CAPNG_DROP_SUPP_GRP |
+			     CAPNG_CLEAR_BOUNDING | CAPNG_CLEAR_AMBIENT |
+			     CAPNG_SET_NO_NEW_PRIVS);
+	if (rc) {
+		fprintf(stderr, "FAIL: capng_change_id returned %d\n", rc);
+		exit(1);
+	}
+	if (getresuid(&ruid, &euid, &suid) || getresgid(&rgid, &egid, &sgid))
+		fail("getresuid/getresgid");
+	require(ruid == 65534 && euid == 65534 && suid == 65534 &&
+		rgid == 65534 && egid == 65534 && sgid == 65534,
+		"user or group IDs were not all changed");
+	require(getgroups(0, NULL) == 0, "supplementary groups were not dropped");
+	m = kernel_masks();
+	require(m.e == 1ULL << bit && m.p == 1ULL << bit && m.i == 0,
+		"capability sets differ from the request");
+	for (i = 0; i < 64; i++) {
+		require(prctl(PR_CAPBSET_READ, i, 0, 0, 0) <= 0,
+			"bounding set was not cleared");
+#ifdef PR_CAP_AMBIENT
+		require(prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_IS_SET, i, 0, 0) <= 0,
+			"ambient set was not cleared");
+#endif
+	}
+	require(prctl(PR_GET_KEEPCAPS, 0, 0, 0, 0) == 0, "keepcaps left enabled");
+	require(prctl(PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) == 1 &&
+		status_no_new_privs() == 1, "no_new_privs was not set");
+	compare_snapshot();
+	puts("PASS: capng_change_id drop agrees with independent kernel reads");
+}
+
+/*
+ * change_id_failure - a real failed transition leaves nothing staged.
+ *
+ * An account lookup for a UID without a passwd entry fails after the kernel
+ * already holds the temporary SETUID/SETGID working set. A caller that then
+ * applies its staged state must get only the capability it requested.
+ */
+static void change_id_failure(void)
+{
+	int bit = retained_bit(), rc;
+	uid_t missing = 2147480000;
+	struct masks m;
+
+	require_transition_caps();
+	while (getpwuid(missing) && missing > 2147400000)
+		missing--;
+	if (getpwuid(missing)) {
+		errno = EEXIST;
+		unavailable("no unused UID for the lookup failure");
+	}
+	if (capng_get_caps_process())
+		fail("capng_get_caps_process");
+	capng_clear(CAPNG_SELECT_CAPS);
+	if (capng_update(CAPNG_ADD, CAPNG_EFFECTIVE | CAPNG_PERMITTED, bit))
+		fail("stage retained capability");
+	rc = capng_change_id(missing, -1, CAPNG_INIT_SUPP_GRP);
+	if (rc != -10) {
+		fprintf(stderr, "FAIL: expected -10 from the lookup, got %d\n", rc);
+		exit(1);
+	}
+	require(!capng_have_capability(CAPNG_EFFECTIVE, CAP_SETUID) &&
+		!capng_have_capability(CAPNG_PERMITTED, CAP_SETUID) &&
+		!capng_have_capability(CAPNG_EFFECTIVE, CAP_SETGID) &&
+		!capng_have_capability(CAPNG_PERMITTED, CAP_SETGID),
+		"failed transition left temporary capabilities staged");
+	require(capng_have_capability(CAPNG_EFFECTIVE, bit),
+		"failed transition lost the requested capability");
+	if (capng_apply(CAPNG_SELECT_CAPS))
+		fail("apply after failed transition");
+	m = kernel_masks();
+	require(m.e == 1ULL << bit && m.p == 1ULL << bit,
+		"apply after failure installed capabilities that were not requested");
+	puts("PASS: failed capng_change_id leaves only the requested capability");
 }
 
 static void mount_namespace(void)
@@ -330,6 +470,10 @@ int main(int argc, char **argv)
 		threads();
 	else if (!strcmp(argv[1], "bounding"))
 		bounding();
+	else if (!strcmp(argv[1], "change-id"))
+		change_id();
+	else if (!strcmp(argv[1], "change-id-failure"))
+		change_id_failure();
 	else if (!strcmp(argv[1], "ambient"))
 		ambient_exec("/proc/self/exe");
 	else if (!strcmp(argv[1], "ambient-child") && argc == 3) {

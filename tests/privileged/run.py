@@ -24,7 +24,8 @@ AUDIT_CASES = {
     "stale": 2, "threads": 64, "race": 512, "preexec": 0, "exec": 1,
     "leader-exit": 1, "worker-exec": 1, "userns": 1,
 }
-KERNEL_CASES = ("exit", "threads", "bounding", "ambient", "procfs")
+KERNEL_CASES = ("exit", "threads", "bounding", "ambient", "procfs",
+                "change-id", "change-id-failure")
 
 
 def digest(path):
@@ -356,6 +357,50 @@ def compare_cli(text, case, report=None):
     return None
 
 
+def compare_follow_cli(text, report=None):
+    """Check a --follow-descendants run whose work outlives the target.
+
+    The orphan's capset and denied check happen only after the initial
+    target exits, so they reach the report only if cap-audit kept tracing.
+    """
+    if "Application exited with status 77" in text:
+        return "Workload prerequisite unavailable; see log"
+    if "Application exited with status 0" not in text:
+        raise AssertionError("Audited workload did not exit successfully")
+    if "Following descendants until they exit" not in text:
+        raise AssertionError("cap-audit did not follow descendants")
+    orphans = re.findall(r"^LIFE orphan (\d+) (\d+)$", text, re.M)
+    if len(orphans) != 1 or orphans[0][0] != orphans[0][1]:
+        raise AssertionError("Orphaned descendant did not report its work")
+    expected_checks = [(str(e[0]), "setpcap", "DENIED")
+                       for e in check_records(text, "ECHK")]
+    if [c[0] for c in expected_checks] != [orphans[0][0]]:
+        raise AssertionError("Unexpected workload capability checks")
+    observed_checks = re.findall(
+        r"\[CAP\] pid=(\d+) cap=(\S+) result=(GRANTED|DENIED) syscall=prctl\b",
+        text)
+    if observed_checks != expected_checks:
+        raise AssertionError("CLI missed the orphan's capability check")
+    obj = json.loads(report if report is not None else text[text.index("{\n"):])
+    observation = obj.get("observation", {})
+    if (not observation.get("collection_complete") or
+            not observation.get("descendants_followed") or
+            observation.get("descendants_remaining")):
+        raise AssertionError("Followed collection is not complete")
+    expected = [(pid, m) for (_, pid), v in records(text)["EXP"].items() for m in v]
+    observed = [(int(pid), tuple(int(m, 16) for m in (e, p, i)))
+                for pid, e, p, i in re.findall(
+        r"\[CAPSET\] pid=(\d+) effective=0x([0-9a-f]+) "
+        r"permitted=0x([0-9a-f]+) inheritable=0x([0-9a-f]+)", text)]
+    # One capset by the target and one by the orphan after the target exits.
+    if len(expected) != 2 or observed != expected:
+        raise AssertionError("CLI capsets differ from capget")
+    if (obj["successful_capset_calls"] != 2 or
+            not obj["capability_drop_observed"]):
+        raise AssertionError("CLI success count or operational phase is incorrect")
+    return None
+
+
 class Run:
     def __init__(self, args, receipt):
         self.args = args
@@ -488,6 +533,12 @@ def run_suites(run):
                 run.test("cli-userns", [helpers / "cap-audit", "-v", "--",
                                        helper, "--work", "userns"],
                          compare_namespace_cli)
+                run.test("cli-follow", [helpers / "cap-audit", "-v", "-j",
+                                       "--follow-descendants", "--",
+                                       helper, "--work", "follow"],
+                         lambda text: compare_follow_cli(
+                             text, (run.directory /
+                                    "cli-follow.report.json").read_text()))
     return run.finish()
 
 

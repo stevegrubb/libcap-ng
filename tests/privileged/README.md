@@ -10,7 +10,13 @@ The initial suites are:
 * `kernel`: real thread credentials versus leader reads; recovery after a target
   exits; bounding drops checked with `prctl` and procfs; ambient inheritance
   through exec; remote metadata failure and self fallback with procfs hidden
-  inside a private mount namespace.
+  inside a private mount namespace. `change-id` performs a real
+  `capng_change_id` drop to UID/GID 65534 that clears supplementary groups and
+  the bounding and ambient sets and sets no_new_privs, then checks IDs, groups,
+  capability sets, keepcaps and `NoNewPrivs:` with independent kernel reads.
+  `change-id-failure` makes a transition fail after the kernel holds the
+  temporary SETUID/SETGID working set and checks that applying the staged
+  state afterwards installs only the requested capability.
 * `cap-audit`: production BPF load/attachment and events compared with independent
   `capget` observations. Cases cover low/high bits, legacy headers, kernel
   normalization, failed calls, stale events, concurrent threads, raced buffers,
@@ -18,7 +24,10 @@ The initial suites are:
   number and genuine i386 capset. CLI cases verify masks, counts, and phase
   tracking through the actual userspace event handler. Additional cases cover
   a worker continuing after its leader exits, exec from a non-leader thread,
-  and granted/denied capability checks in a new user namespace.
+  and granted/denied capability checks in a new user namespace. `cli-follow`
+  runs `cap-audit --follow-descendants` on a workload whose child does its
+  capability work only after the initial target has exited and the child has
+  been reparented, and requires that work in a complete report.
 
 The lifecycle fixtures synchronize with thread exit or exec rather than sleeps.
 After joining the leader, the survivor also waits for its zombie state: on older
@@ -118,7 +127,13 @@ exercised without host-root access after preparation:
 unshare --user --map-root-user tests/privileged/cap_audit_live --work leader-exit
 unshare --user --map-root-user tests/privileged/cap_audit_live --work worker-exec
 unshare --user --map-root-user tests/privileged/cap_audit_live --work userns
+unshare --user --map-root-user tests/privileged/cap_audit_live --work follow
+unshare --user --map-root-user tests/privileged/kernel_workload change-id-failure
+unshare --user --map-auto --map-root-user tests/privileged/kernel_workload change-id
 ```
+
+The last command needs subordinate IDs for the invoking user so that UID and
+GID 65534 exist in the namespace.
 
 These commands validate workload behavior only. They print independent expected
 observations but do not load BPF or validate cap-audit's event handling. The

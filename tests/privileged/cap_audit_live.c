@@ -415,6 +415,51 @@ static void thread_lifecycle(int do_exec)
 		pause();
 }
 
+/*
+ * orphaned_descendant - capability work done only after the target exits.
+ *
+ * The initial target drops its capabilities, starts a child, and exits.
+ * The child waits for that exit, observed as EOF on a pipe whose write end
+ * closes when the target exits, and then for its reparenting, which the
+ * kernel completes before the target can be reaped. Only then does it make
+ * a capset and a denied capability check. cap-audit observes them only if
+ * it keeps tracing descendants after the initial target exits.
+ */
+static void orphaned_descendant(void)
+{
+	pid_t parent = getpid(), child;
+	int gate[2];
+	char byte;
+
+	install((struct masks){ 0 }, _LINUX_CAPABILITY_VERSION_3);
+	if (pipe(gate))
+		die("pipe");
+	/* Do not duplicate buffered records in the child. */
+	fflush(NULL);
+	child = fork();
+	if (child < 0)
+		die("fork");
+	if (child) {
+		close(gate[0]);
+		printf("LIFE orphan-parent %u %u\n", (unsigned)getpid(),
+		       (unsigned)syscall(SYS_gettid));
+		fflush(stdout);
+		return;
+	}
+	close(gate[1]);
+	while (read(gate[0], &byte, 1) > 0)
+		;
+	/* The workload alarm bounds this wait. */
+	while (getppid() == parent)
+		sched_yield();
+	printf("LIFE orphan %u %u\n", (unsigned)getpid(),
+	       (unsigned)syscall(SYS_gettid));
+	fflush(stdout);
+	install((struct masks){ 0 }, _LINUX_CAPABILITY_VERSION_3);
+	denied_bounding_check();
+	exit(0);
+}
+
 static void foreign_namespace(void)
 {
 	unsigned long long baseline = user_namespace();
@@ -472,6 +517,8 @@ static void workload(const char *mode)
 		denied_bounding_check();
 	} else if (!strcmp(mode, "userns")) {
 		foreign_namespace();
+	} else if (!strcmp(mode, "follow")) {
+		orphaned_descendant();
 	} else if (!strcmp(mode, "mixed")) {
 		install(mixed_masks(), _LINUX_CAPABILITY_VERSION_3);
 	} else if (!strcmp(mode, "v1")) {
