@@ -1244,21 +1244,56 @@ enum {
  *
  * Only bits the caller did not stage are removed, so requested SETUID,
  * SETGID, or SETPCAP bits survive the transition.
+ * Returns 0 on success, -1 if a bit could not be removed.
  */
-static void drop_transition_caps(unsigned int tmp_caps)
+static const struct {
+	unsigned int bit;
+	capng_type_t type;
+	unsigned int capability;
+} transition_caps[] = {
+	{ TMP_SETPCAP_E, CAPNG_EFFECTIVE, CAP_SETPCAP },
+	{ TMP_SETPCAP_P, CAPNG_PERMITTED, CAP_SETPCAP },
+	{ TMP_SETUID_E, CAPNG_EFFECTIVE, CAP_SETUID },
+	{ TMP_SETUID_P, CAPNG_PERMITTED, CAP_SETUID },
+	{ TMP_SETGID_E, CAPNG_EFFECTIVE, CAP_SETGID },
+	{ TMP_SETGID_P, CAPNG_PERMITTED, CAP_SETGID },
+};
+
+/*
+ * add_transition_cap - stage one capability the transition needs.
+ * @tmp_caps: TMP_* bits recording what this function staged.
+ * @bit: TMP_* bit for @type and @capability.
+ * @type: CAPNG_EFFECTIVE or CAPNG_PERMITTED.
+ * @capability: capability to stage if the caller did not request it.
+ *
+ * The bit is recorded only after staging succeeds, so it can be undone.
+ * Returns 0 on success, -1 if the capability could not be staged.
+ */
+static int add_transition_cap(unsigned int *tmp_caps, unsigned int bit,
+			      capng_type_t type, unsigned int capability)
 {
-	if (tmp_caps & TMP_SETGID_E)
-		capng_update(CAPNG_DROP, CAPNG_EFFECTIVE, CAP_SETGID);
-	if (tmp_caps & TMP_SETGID_P)
-		capng_update(CAPNG_DROP, CAPNG_PERMITTED, CAP_SETGID);
-	if (tmp_caps & TMP_SETUID_E)
-		capng_update(CAPNG_DROP, CAPNG_EFFECTIVE, CAP_SETUID);
-	if (tmp_caps & TMP_SETUID_P)
-		capng_update(CAPNG_DROP, CAPNG_PERMITTED, CAP_SETUID);
-	if (tmp_caps & TMP_SETPCAP_E)
-		capng_update(CAPNG_DROP, CAPNG_EFFECTIVE, CAP_SETPCAP);
-	if (tmp_caps & TMP_SETPCAP_P)
-		capng_update(CAPNG_DROP, CAPNG_PERMITTED, CAP_SETPCAP);
+	if (capng_have_capability(type, capability))
+		return 0;
+	if (capng_update(CAPNG_ADD, type, capability))
+		return -1;
+	*tmp_caps |= bit;
+	return 0;
+}
+
+static int drop_transition_caps(unsigned int tmp_caps)
+{
+	size_t i;
+	int rc = 0;
+
+	for (i = 0; i < sizeof(transition_caps) / sizeof(transition_caps[0]);
+	     i++) {
+		if (!(tmp_caps & transition_caps[i].bit))
+			continue;
+		if (capng_update(CAPNG_DROP, transition_caps[i].type,
+				 transition_caps[i].capability))
+			rc = -1;
+	}
+	return rc;
 }
 
 int capng_change_id(int uid, int gid, capng_flags_t flag)
@@ -1307,17 +1342,12 @@ if (HAVE_PR_CAPBSET_DROP) {
 	if ((flag & CAPNG_CLEAR_BOUNDING) ||
 			((flag & CAPNG_APPLY_BOUNDING) &&
 			m.bounds_state_changed)) {
-		if (capng_have_capability(CAPNG_EFFECTIVE,
-					CAP_SETPCAP) == 0) {
-			tmp_caps |= TMP_SETPCAP_E;
-			capng_update(CAPNG_ADD, CAPNG_EFFECTIVE,
-					CAP_SETPCAP);
-		}
-		if (capng_have_capability(CAPNG_PERMITTED,
-					CAP_SETPCAP) == 0) {
-			tmp_caps |= TMP_SETPCAP_P;
-			capng_update(CAPNG_ADD, CAPNG_PERMITTED,
-					CAP_SETPCAP);
+		if (add_transition_cap(&tmp_caps, TMP_SETPCAP_E,
+				       CAPNG_EFFECTIVE, CAP_SETPCAP) ||
+		    add_transition_cap(&tmp_caps, TMP_SETPCAP_P,
+				       CAPNG_PERMITTED, CAP_SETPCAP)) {
+			ret = -3;
+			goto out;
 		}
 	}
 }
@@ -1329,23 +1359,21 @@ if (HAVE_PR_CAPBSET_DROP) {
 	 */
 	if (gid != -1 || (flag & CAPNG_APPLY_STAGED_GROUPS) ||
 	    ((flag & CAPNG_INIT_SUPP_GRP) && uid != -1)) {
-		if (capng_have_capability(CAPNG_EFFECTIVE, CAP_SETGID) == 0) {
-			tmp_caps |= TMP_SETGID_E;
-			capng_update(CAPNG_ADD, CAPNG_EFFECTIVE, CAP_SETGID);
-		}
-		if (capng_have_capability(CAPNG_PERMITTED, CAP_SETGID) == 0) {
-			tmp_caps |= TMP_SETGID_P;
-			capng_update(CAPNG_ADD, CAPNG_PERMITTED, CAP_SETGID);
+		if (add_transition_cap(&tmp_caps, TMP_SETGID_E,
+				       CAPNG_EFFECTIVE, CAP_SETGID) ||
+		    add_transition_cap(&tmp_caps, TMP_SETGID_P,
+				       CAPNG_PERMITTED, CAP_SETGID)) {
+			ret = -3;
+			goto out;
 		}
 	}
 	if (uid != -1) {
-		if (capng_have_capability(CAPNG_EFFECTIVE, CAP_SETUID) == 0) {
-			tmp_caps |= TMP_SETUID_E;
-			capng_update(CAPNG_ADD, CAPNG_EFFECTIVE, CAP_SETUID);
-		}
-		if (capng_have_capability(CAPNG_PERMITTED, CAP_SETUID) == 0) {
-			tmp_caps |= TMP_SETUID_P;
-			capng_update(CAPNG_ADD, CAPNG_PERMITTED, CAP_SETUID);
+		if (add_transition_cap(&tmp_caps, TMP_SETUID_E,
+				       CAPNG_EFFECTIVE, CAP_SETUID) ||
+		    add_transition_cap(&tmp_caps, TMP_SETUID_P,
+				       CAPNG_PERMITTED, CAP_SETUID)) {
+			ret = -3;
+			goto out;
 		}
 	}
 
@@ -1469,7 +1497,10 @@ if (HAVE_PR_CAPBSET_DROP) {
 	}
 
 	// Drop the temporary transition caps and install the final sets.
-	drop_transition_caps(tmp_caps);
+	if (drop_transition_caps(tmp_caps)) {
+		ret = -9;
+		goto out;
+	}
 	tmp_caps = 0;
 	rc = capng_apply(CAPNG_SELECT_CAPS|CAPNG_SELECT_AMBIENT);
 	if (rc < 0) {
@@ -1490,8 +1521,12 @@ out:
 	 * that it never requested. The kernel credentials are not rolled
 	 * back; callers should still treat a failure as fatal.
 	 */
-	if (ret)
-		drop_transition_caps(tmp_caps);
+	if (ret) {
+		// Report the original failure even if cleanup also fails.
+		int cleanup = drop_transition_caps(tmp_caps);
+
+		(void)cleanup;
+	}
 	// Staged gids are one-shot state, so always clear them before return.
 	free(pw_buf);
 	free(gids);

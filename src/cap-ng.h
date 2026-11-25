@@ -30,10 +30,22 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-// The next macro originates in sys/cdefs.h
-// Warn unused result
+/*
+ * The attribute macros below come from glibc's sys/cdefs.h, which knows
+ * which compiler releases support each attribute. Without them (older
+ * glibc, other libcs, or SWIG), they expand to nothing.
+ */
 #ifndef __wur
 # define __wur
+#endif
+#ifndef __attribute_malloc__
+# define __attribute_malloc__
+#endif
+#ifndef __attr_dealloc_free
+# define __attr_dealloc_free
+#endif
+#ifndef __attr_access
+# define __attr_access(x)
 #endif
 
 #ifdef __cplusplus
@@ -64,15 +76,17 @@ void capng_clear(capng_select_t set);
 void capng_fill(capng_select_t set);
 void capng_setpid(int pid);
 int capng_get_caps_process(void) __wur;
-int capng_update(capng_act_t action, capng_type_t type,unsigned int capability);
+int capng_update(capng_act_t action, capng_type_t type,unsigned int capability)
+	__wur;
 int capng_updatev(capng_act_t action, capng_type_t type,
-		unsigned int capability, ...);
+		unsigned int capability, ...) __wur;
 
 // These functions apply the capabilities previously setup to a process
 int capng_apply(capng_select_t set) __wur;
 int capng_lock(void) __wur;
 int capng_change_id(int uid, int gid, capng_flags_t flag) __wur;
-int capng_stage_additional_groups(const gid_t *gids, size_t count) __wur;
+int capng_stage_additional_groups(const gid_t *gids, size_t count)
+	__attr_access ((__read_only__, 1, 2)) __wur;
 
 // These functions are used for file based capabilities
 uid_t capng_get_rootid(void);
@@ -86,18 +100,22 @@ capng_results_t capng_have_permitted_capabilities(void);
 int capng_have_capability(capng_type_t which, unsigned int capability);
 
 // These functions printout capabilities
-char *capng_print_caps_numeric(capng_print_t where, capng_select_t set);
-char *capng_print_caps_text(capng_print_t where, capng_type_t which);
+// With CAPNG_PRINT_BUFFER, the returned string must be freed with free()
+char *capng_print_caps_numeric(capng_print_t where, capng_select_t set)
+	__attribute_malloc__ __attr_dealloc_free;
+char *capng_print_caps_text(capng_print_t where, capng_type_t which)
+	__attribute_malloc__ __attr_dealloc_free;
 
 // These functions convert between numeric and text string
-int capng_name_to_capability(const char *name);
+int capng_name_to_capability(const char *name)
+	__attr_access ((__read_only__, 1));
 const char *capng_capability_to_name(unsigned int capability);
 
 // These function should be used when you suspect a third party library
 // may use libcap-ng also and want to make sure it doesn't alter something
 // important. Otherwise you shouldn't need to call these.
 void capng_restore_state(void **state);
-void *capng_save_state(void);
+void *capng_save_state(void) __attribute_malloc__ __wur;
 
 #ifdef __cplusplus
 }
