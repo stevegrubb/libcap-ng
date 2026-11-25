@@ -147,6 +147,8 @@ int prctl(int option, ...)
 		kernel_bounds &= ~(1ULL << capability);
 		return 0;
 	}
+#ifdef PR_CAP_AMBIENT
+	/* Headers before Linux 4.3 lack ambient support; so does the library. */
 	if (option == PR_CAP_AMBIENT) {
 		va_list ap;
 		int op;
@@ -158,6 +160,7 @@ int prctl(int option, ...)
 		if (op == PR_CAP_AMBIENT_IS_SET || op == PR_CAP_AMBIENT_CLEAR_ALL)
 			return 0;
 	}
+#endif
 	errno = EINVAL;
 	return -1;
 }
