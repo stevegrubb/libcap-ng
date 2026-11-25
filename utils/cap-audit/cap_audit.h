@@ -267,8 +267,9 @@ char *json_escape(const char *input)
 	__attr_dealloc_free
 	__attr_access ((__read_only__, 1))
 	__wur;
-void update_reason_to(char **target, int syscall_nr)
-	__attr_access ((__read_write__, 1));
+int update_reason_to(char **target, int syscall_nr)
+	__attr_access ((__read_write__, 1))
+	__wur;
 int cap_required_union(const struct cap_check *check)
 	__attr_access ((__read_only__, 1))
 	__attribute_pure__;

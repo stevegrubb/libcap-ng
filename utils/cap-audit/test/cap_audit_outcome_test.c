@@ -117,15 +117,23 @@ char *json_escape(const char *input)
  * @target: caller-owned startup or operational reason to replace.
  * @syscall_nr: synthetic syscall number.
  *
- * Returns no value; replaces the reason with allocated text or NULL.
+ * Returns 0, or -1 with *target NULL when reason_alloc_fails is set or the
+ * allocation really fails.
  */
-void update_reason_to(char **target, int syscall_nr)
+static int reason_alloc_fails;
+
+int update_reason_to(char **target, int syscall_nr)
 {
 	const char *name = syscall_name_from_nr(syscall_nr);
 
 	free(*target);
-	if (asprintf(target, "Used by %s", name ? name : "unknown") < 0)
+	*target = NULL;
+	if (reason_alloc_fails ||
+	    asprintf(target, "Used by %s", name ? name : "unknown") < 0) {
 		*target = NULL;
+		return -1;
+	}
+	return 0;
 }
 
 int cap_required_union(const struct cap_check *check)
@@ -643,6 +651,31 @@ static void test_unknown_capability(void)
 #endif
 }
 
+/*
+ * test_lost_reason - a reason that cannot be recorded is lost evidence.
+ *
+ * Returns no value; fails if an allocation failure while recording a
+ * capability's reason leaves the collection reported as complete.
+ */
+static void test_lost_reason(void)
+{
+	reset_complete_observation();
+	emit_check(CAP_CHOWN, TEST_OPENAT_NR, 1);
+	if (audit_collection_reason())
+		fail("Recorded reason made the collection incomplete");
+
+	reset_complete_observation();
+	reason_alloc_fails = 1;
+	emit_check(CAP_CHOWN, TEST_OPENAT_NR, 1);
+	reason_alloc_fails = 0;
+	if (state.app.checks[CAP_CHOWN].granted != 1 ||
+	    state.app.checks[CAP_CHOWN].reason)
+		fail("Lost reason changed the recorded check");
+	if (!audit_collection_reason() ||
+	    strcmp(audit_collection_reason(), "observations_lost"))
+		fail("Lost reason left collection complete");
+}
+
 /* Emit the completion of a keepcaps prctl on a selected target thread. */
 static void emit_keepcaps(__u32 tid, int enabled, __s64 ret)
 {
@@ -940,6 +973,7 @@ int main(void)
 	test_event_reasons();
 	test_optional_setpcap();
 	test_unknown_capability();
+	test_lost_reason();
 	if (classify_syscall_outcome(0) != SYSCALL_OUTCOME_SUCCESS ||
 	    classify_syscall_outcome(-EPERM) != SYSCALL_OUTCOME_PERMISSION ||
 	    classify_syscall_outcome(-EACCES) != SYSCALL_OUTCOME_PERMISSION ||

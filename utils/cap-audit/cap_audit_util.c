@@ -273,24 +273,33 @@ char *json_escape(const char *input)
 	return out;
 }
 
-void update_reason_to(char **target, int syscall_nr)
+/*
+ * update_reason_to - replace a capability's reason text.
+ * @target: caller-owned reason string to replace.
+ * @syscall_nr: syscall that used the capability, or negative if unknown.
+ *
+ * Returns 0 on success, or -1 if the text could not be allocated. Then
+ * *target is NULL and the caller must account for the lost evidence.
+ */
+int update_reason_to(char **target, int syscall_nr)
 {
 	const char *syscall_name;
+	int rc;
 
-	if (*target)
-		free(*target);
-
+	free(*target);
 	if (syscall_nr < 0) {
-		if (asprintf(target,
-			     "Used during capability check (syscall unknown)") < 0)
-			*target = NULL;
-		return;
+		rc = asprintf(target,
+			      "Used during capability check (syscall unknown)");
+	} else {
+		syscall_name = syscall_name_from_nr(syscall_nr);
+		rc = asprintf(target, "Used by %s",
+			      syscall_name ? syscall_name : "unknown");
 	}
-
-	syscall_name = syscall_name_from_nr(syscall_nr);
-	if (asprintf(target, "Used by %s",
-		     syscall_name ? syscall_name : "unknown") < 0)
+	if (rc < 0) {
 		*target = NULL;
+		return -1;
+	}
+	return 0;
 }
 
 int cap_required_union(const struct cap_check *check)

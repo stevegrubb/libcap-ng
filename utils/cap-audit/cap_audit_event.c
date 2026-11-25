@@ -30,6 +30,20 @@
 #include <stdlib.h>
 #include <string.h>
 
+/*
+ * record_reason - set a capability's reason, counting a lost reason.
+ * @target: reason string to replace.
+ * @syscall_nr: syscall that used the capability.
+ *
+ * A reason that cannot be allocated is missing evidence, so the
+ * observation must not be reported as complete.
+ */
+static void record_reason(char **target, int syscall_nr)
+{
+	if (update_reason_to(target, syscall_nr))
+		state.observation.userspace_failures++;
+}
+
 /* Only SETGID/SETUID checks need deferring, not an unbounded event history. */
 struct keepcaps_checks {
 	unsigned long granted;
@@ -87,7 +101,7 @@ static void finish_keepcaps_window(struct keepcaps_window **link, bool complete)
 			check->denied += pending->denied;
 			if (pending->granted && !check->needed) {
 				check->needed = 1;
-				update_reason_to(&check->reason,
+				record_reason(&check->reason,
 						 pending->first_granted_syscall);
 			}
 		} else {
@@ -96,7 +110,7 @@ static void finish_keepcaps_window(struct keepcaps_window **link, bool complete)
 			check->op_denied += pending->denied;
 			if (pending->granted && !check->op_needed) {
 				check->op_needed = 1;
-				update_reason_to(&check->op_reason,
+				record_reason(&check->op_reason,
 						 pending->first_granted_syscall);
 			}
 		}
@@ -503,7 +517,7 @@ int handle_cap_event(void *ctx __attribute__((unused)), void *data,
 				check->op_denied++;
 			if (e->result > 0 && check->op_needed != 1) {
 				check->op_needed = 1;
-				update_reason_to(&check->op_reason, e->syscall_nr);
+				record_reason(&check->op_reason, e->syscall_nr);
 			}
 		} else {
 			check->count++;
@@ -514,7 +528,7 @@ int handle_cap_event(void *ctx __attribute__((unused)), void *data,
 
 			if (e->result > 0 && check->needed != 1) {
 				check->needed = 1;
-				update_reason_to(&check->reason, e->syscall_nr);
+				record_reason(&check->reason, e->syscall_nr);
 			}
 		}
 	}

@@ -38,12 +38,13 @@ const char *syscall_name_from_nr(int nr)
  * @target: unused diagnostic destination.
  * @syscall_nr: unused syscall number.
  *
- * Returns no value; namespace assertions do not depend on reason text.
+ * Returns 0; namespace assertions do not depend on reason text.
  */
-void update_reason_to(char **target, int syscall_nr)
+int update_reason_to(char **target, int syscall_nr)
 {
 	(void)target;
 	(void)syscall_nr;
+	return 0;
 }
 
 int cap_required_union(const struct cap_check *check)
