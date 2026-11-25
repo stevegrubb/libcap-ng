@@ -24,10 +24,10 @@
 
 #include "config.h"
 #include <arpa/inet.h>
-#if defined(HAVE_BLUETOOTH_BLUETOOTH_H) && defined(HAVE_BLUETOOTH_HCI_H)
+/* configure defines HAVE_NETCAP_BLUETOOTH, which also selects netcap(8) text. */
+#ifdef HAVE_NETCAP_BLUETOOTH
 #include <bluetooth/bluetooth.h>
 #include <bluetooth/hci.h>
-#define HAVE_NETCAP_BLUETOOTH 1
 #endif
 #include <dirent.h>
 #include <errno.h>

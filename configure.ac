@@ -271,10 +271,12 @@ AC_SUBST([NETCAP_ADVANCED_STATUS], [$netcap_advanced_status])
 AM_CONDITIONAL([BUILD_NETCAP_ADVANCED],
 	[test "x$build_netcap_advanced" = xyes])
 
+build_netcap_vsock=no
 AS_IF([test "x$build_netcap_advanced" = xyes], [
 	AS_IF([test "x$ac_cv_header_linux_vm_sockets_h" = xyes], [
 		AC_DEFINE([HAVE_NETCAP_VSOCK], [1],
 			[Define to 1 if netcap VSOCK support can be built.])
+		build_netcap_vsock=yes
 		netcap_vsock_status="enabled"
 	], [
 		netcap_vsock_status="disabled (missing header: linux/vm_sockets.h)"
@@ -282,6 +284,44 @@ AS_IF([test "x$build_netcap_advanced" = xyes], [
 	])
 ], [
 	netcap_vsock_status="disabled (advanced mode disabled)"
+])
+
+dnl Bluetooth listener discovery needs the BlueZ headers.
+build_netcap_bluetooth=no
+AS_IF([test "x$build_netcap_advanced" = xyes], [
+	AS_IF([test "x$ac_cv_header_bluetooth_bluetooth_h" = xyes &&
+	       test "x$ac_cv_header_bluetooth_hci_h" = xyes], [
+		AC_DEFINE([HAVE_NETCAP_BLUETOOTH], [1],
+			[Define to 1 if netcap Bluetooth support can be built.])
+		build_netcap_bluetooth=yes
+		netcap_bluetooth_status="enabled"
+	], [
+		netcap_bluetooth_status="disabled (missing headers: bluetooth/bluetooth.h, bluetooth/hci.h)"
+	])
+], [
+	netcap_bluetooth_status="disabled (advanced mode disabled)"
+])
+
+dnl The reuseport flag needs SO_REUSEPORT (Linux 3.9 headers) and the
+dnl pidfd syscalls (Linux 5.6) to probe another process's socket. These
+dnl mirror the guards in netcap-advanced.c and decide what netcap(8) says.
+build_netcap_reuseport=no
+AS_IF([test "x$build_netcap_advanced" = xyes], [
+	netcap_reuseport_decls=yes
+	AC_CHECK_DECL([SO_REUSEPORT], [], [netcap_reuseport_decls=no],
+		[[#include <sys/socket.h>]])
+	AC_CHECK_DECL([__NR_pidfd_open], [], [netcap_reuseport_decls=no],
+		[[#include <sys/syscall.h>]])
+	AC_CHECK_DECL([__NR_pidfd_getfd], [], [netcap_reuseport_decls=no],
+		[[#include <sys/syscall.h>]])
+	AS_IF([test "x$netcap_reuseport_decls" = xyes], [
+		build_netcap_reuseport=yes
+		netcap_reuseport_status="enabled"
+	], [
+		netcap_reuseport_status="disabled (headers lack SO_REUSEPORT or pidfd_getfd)"
+	])
+], [
+	netcap_reuseport_status="disabled (advanced mode disabled)"
 ])
 
 AC_ARG_WITH([capability_header],
@@ -453,15 +493,27 @@ bindings/python3/test/Makefile bindings/test/Makefile utils/Makefile
 utils/test/Makefile utils/cap-audit/Makefile \
 utils/cap-audit/test/Makefile m4/Makefile docs/Makefile \
 tests/privileged/Makefile])
+dnl netcap.8.in marks feature-specific text with BEGIN_<name> and
+dnl END_<name> comment lines. Keep the text of features this build has and
+dnl drop the rest, so the page does not describe missing features. Feature
+dnl blocks may nest inside ADVANCED blocks, so they are handled first.
 AC_CONFIG_COMMANDS([utils/netcap.8], [
-	if test "x$NETCAP_ADVANCED_ENABLED" = xyes; then
-		sed '/^.\\" BEGIN_ADVANCED$/d; /^.\\" END_ADVANCED$/d' \
-			"$srcdir/utils/netcap.8.in" > utils/netcap.8
-	else
-		sed '/^.\\" BEGIN_ADVANCED$/,/^.\\" END_ADVANCED$/d' \
-			"$srcdir/utils/netcap.8.in" > utils/netcap.8
-	fi
+	netcap_mark='^.\\" '
+	for netcap_name in VSOCK BLUETOOTH REUSEPORT ADVANCED; do
+		eval "netcap_on=\$NETCAP_${netcap_name}_ENABLED"
+		if test "x$netcap_on" = xyes; then
+			echo "/${netcap_mark}BEGIN_${netcap_name}\$/d"
+			echo "/${netcap_mark}END_${netcap_name}\$/d"
+		else
+			echo "/${netcap_mark}BEGIN_${netcap_name}\$/,/${netcap_mark}END_${netcap_name}\$/d"
+		fi
+	done > utils/netcap.8.sed
+	sed -f utils/netcap.8.sed "$srcdir/utils/netcap.8.in" > utils/netcap.8
+	rm -f utils/netcap.8.sed
 ], [NETCAP_ADVANCED_ENABLED="$NETCAP_ADVANCED_ENABLED"
+	NETCAP_VSOCK_ENABLED="$build_netcap_vsock"
+	NETCAP_BLUETOOTH_ENABLED="$build_netcap_bluetooth"
+	NETCAP_REUSEPORT_ENABLED="$build_netcap_reuseport"
 	srcdir="$srcdir"])
 AC_OUTPUT
 
@@ -478,5 +530,7 @@ echo "
   __attr_dealloc_free support:  $DEALLOC
   netcap advanced mode:  $netcap_advanced_status
   netcap VSOCK support:  $netcap_vsock_status
+  netcap Bluetooth:      $netcap_bluetooth_status
+  netcap reuseport flag: $netcap_reuseport_status
   cap-audit vmlinux.h:   $vmlinux_h_status
   "
