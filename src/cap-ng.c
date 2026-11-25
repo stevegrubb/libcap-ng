@@ -1682,9 +1682,14 @@ if (HAVE_PR_CAPBSET_DROP) {
 		else
 			return CAPNG_PARTIAL;
 	}
-} else if (set & CAPNG_SELECT_BOUNDS)
-	empty = 1; // Only report empty if they asked about it
+} else
 #endif
+	/*
+	 * Without bounding set support, at run time or in the build
+	 * headers, report an empty set, but only if it was asked about.
+	 */
+	if (set & CAPNG_SELECT_BOUNDS)
+		empty = 1;
 #ifdef PR_CAP_AMBIENT
 if (HAVE_PR_CAP_AMBIENT) {
 	if (set & CAPNG_SELECT_AMBIENT) {
@@ -1701,9 +1706,15 @@ if (HAVE_PR_CAP_AMBIENT) {
 		else
 			return CAPNG_PARTIAL;
 	}
-} else if (set & CAPNG_SELECT_AMBIENT)
-	empty = 1; // Only report empty if they asked about it
+} else
 #endif
+	/*
+	 * Likewise for ambient capabilities, which headers before Linux
+	 * 4.3 do not define. Otherwise a query for only the ambient set
+	 * would fall through as CAPNG_PARTIAL.
+	 */
+	if (set & CAPNG_SELECT_AMBIENT)
+		empty = 1;
 	if (empty == 1 && full == 0)
 		return CAPNG_NONE;
 	else if (empty == 0 && full == 1)
