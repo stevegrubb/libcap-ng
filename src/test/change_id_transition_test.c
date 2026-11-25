@@ -21,6 +21,10 @@ static size_t group_count;
 static unsigned int uid_calls;
 static int keepcaps;
 static gid_t expected_gid = 7;
+/* Credential step forced to fail; FAIL_NONE lets every step succeed. */
+static enum {
+	FAIL_NONE, FAIL_SETRESGID, FAIL_SETGROUPS, FAIL_SETRESUID,
+} fail_at;
 static struct {
 	unsigned int calls;
 	unsigned int retries;
@@ -119,6 +123,10 @@ int setgroups(size_t count, const gid_t *groups)
 	check((count == 0 && groups == NULL) ||
 	      (count > 0 && groups != NULL), "Invalid supplementary groups");
 	group_calls++;
+	if (fail_at == FAIL_SETGROUPS) {
+		errno = EPERM;
+		return -1;
+	}
 	if (current_caps[0].effective & (1U << CAP_SETGID)) {
 		group_count = count;
 		return 0;
@@ -223,6 +231,10 @@ int setresgid(gid_t real, gid_t effective, gid_t saved)
 {
 	check(real == expected_gid && effective == real && saved == real,
 	      "Unexpected group transition");
+	if (fail_at == FAIL_SETRESGID) {
+		errno = EPERM;
+		return -1;
+	}
 	return 0;
 }
 
@@ -241,6 +253,10 @@ int setresuid(uid_t real, uid_t effective, uid_t saved)
 	      "Unexpected user transition");
 	check(current_caps[0].effective & (1U << CAP_SETUID),
 	      "Missing temporary SETUID");
+	if (fail_at == FAIL_SETRESUID) {
+		errno = EPERM;
+		return -1;
+	}
 	return 0;
 }
 
@@ -350,6 +366,51 @@ static void test_account_lookup(void)
 }
 
 /*
+ * test_failure_restores_staged_caps - keep failed transitions out of state.
+ *
+ * Returns no value; checks that a failure at each credential step leaves
+ * no temporary SETUID or SETGID bit staged, while a SETGID bit the caller
+ * requested survives, so a later capng_apply() cannot grant extra caps.
+ */
+static void test_failure_restores_staged_caps(void)
+{
+	static const struct {
+		int point;
+		int expected;
+	} cases[] = {
+		{ FAIL_SETRESGID, -4 },
+		{ FAIL_SETGROUPS, -5 },
+		{ FAIL_SETRESUID, -6 },
+	};
+	size_t i;
+	int retain;
+
+	for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+		for (retain = 0; retain <= 1; retain++) {
+			prepare_transition();
+			expected_gid = 9;
+			if (retain)
+				check(capng_update(CAPNG_ADD, CAPNG_PERMITTED,
+						   CAP_SETGID) == 0,
+				      "Failed to stage permitted-only SETGID");
+			fail_at = cases[i].point;
+			check(capng_change_id(42, 9, CAPNG_INIT_SUPP_GRP) ==
+			      cases[i].expected,
+			      "Unexpected credential failure result");
+			fail_at = FAIL_NONE;
+			check(!keepcaps, "Failure left keepcaps enabled");
+			check(!capng_have_capability(CAPNG_EFFECTIVE, CAP_SETUID) &&
+			      !capng_have_capability(CAPNG_PERMITTED, CAP_SETUID) &&
+			      !capng_have_capability(CAPNG_EFFECTIVE, CAP_SETGID),
+			      "Failure left temporary capabilities staged");
+			check(capng_have_capability(CAPNG_PERMITTED, CAP_SETGID) ==
+			      retain,
+			      "Failure changed a requested capability");
+		}
+	}
+}
+
+/*
  * main - verify group-only transitions and exact final SETGID preservation.
  *
  * Returns success only when each mode works without real process privileges.
@@ -389,5 +450,6 @@ int main(void)
 	}
 	test_account_lookup();
 	test_drop_precedence();
+	test_failure_restores_staged_caps();
 	return EXIT_SUCCESS;
 }

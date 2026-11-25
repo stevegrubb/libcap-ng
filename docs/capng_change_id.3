@@ -118,7 +118,9 @@ so older callers continue to see the historical
 .B capng_change_id
 behavior.
 
-Note: the only safe action to do upon failure of this function is to probably exit. This is because you are likely in a situation with partial permissions and not what you intended.
+Note: the only safe action to do upon failure of this function is to probably exit. This is because you are likely in a situation with partial permissions and not what you intended. On failure, the temporary CAP_SETUID, CAP_SETGID, and CAP_SETPCAP bits this function added are removed from libcap-ng's internal state, so a later
+.BR capng_apply (3)
+does not install them. Kernel credentials that were already changed are not rolled back.
 
 .SH "SEE ALSO"
 

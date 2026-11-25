@@ -1221,16 +1221,40 @@ int capng_apply_caps_fd(int fd)
 }
 
 // Change uids keeping/removing only certain capabilities
+enum {
+	TMP_SETPCAP_E = 1 << 0,
+	TMP_SETPCAP_P = 1 << 1,
+	TMP_SETUID_E  = 1 << 2,
+	TMP_SETUID_P  = 1 << 3,
+	TMP_SETGID_E  = 1 << 4,
+	TMP_SETGID_P  = 1 << 5,
+};
+
+/*
+ * drop_transition_caps - remove the capabilities capng_change_id added.
+ * @tmp_caps: TMP_* bits recording which staged bits were not requested.
+ *
+ * Only bits the caller did not stage are removed, so requested SETUID,
+ * SETGID, or SETPCAP bits survive the transition.
+ */
+static void drop_transition_caps(unsigned int tmp_caps)
+{
+	if (tmp_caps & TMP_SETGID_E)
+		capng_update(CAPNG_DROP, CAPNG_EFFECTIVE, CAP_SETGID);
+	if (tmp_caps & TMP_SETGID_P)
+		capng_update(CAPNG_DROP, CAPNG_PERMITTED, CAP_SETGID);
+	if (tmp_caps & TMP_SETUID_E)
+		capng_update(CAPNG_DROP, CAPNG_EFFECTIVE, CAP_SETUID);
+	if (tmp_caps & TMP_SETUID_P)
+		capng_update(CAPNG_DROP, CAPNG_PERMITTED, CAP_SETUID);
+	if (tmp_caps & TMP_SETPCAP_E)
+		capng_update(CAPNG_DROP, CAPNG_EFFECTIVE, CAP_SETPCAP);
+	if (tmp_caps & TMP_SETPCAP_P)
+		capng_update(CAPNG_DROP, CAPNG_PERMITTED, CAP_SETPCAP);
+}
+
 int capng_change_id(int uid, int gid, capng_flags_t flag)
 {
-	enum {
-		TMP_SETPCAP_E = 1 << 0,
-		TMP_SETPCAP_P = 1 << 1,
-		TMP_SETUID_E  = 1 << 2,
-		TMP_SETUID_P  = 1 << 3,
-		TMP_SETGID_E  = 1 << 4,
-		TMP_SETGID_P  = 1 << 5,
-	};
 	unsigned int tmp_caps = 0;
 	int rc, ret;
 	struct passwd pw;
@@ -1436,21 +1460,9 @@ if (HAVE_PR_CAPBSET_DROP) {
 		goto out;
 	}
 
-	// Now throw away CAP_SETPCAP so no more changes
-	if (tmp_caps & TMP_SETGID_E)
-		capng_update(CAPNG_DROP, CAPNG_EFFECTIVE, CAP_SETGID);
-	if (tmp_caps & TMP_SETGID_P)
-		capng_update(CAPNG_DROP, CAPNG_PERMITTED, CAP_SETGID);
-	if (tmp_caps & TMP_SETUID_E)
-		capng_update(CAPNG_DROP, CAPNG_EFFECTIVE, CAP_SETUID);
-	if (tmp_caps & TMP_SETUID_P)
-		capng_update(CAPNG_DROP, CAPNG_PERMITTED, CAP_SETUID);
-
-	// Drop any temporary transition caps and install the final sets.
-	if (tmp_caps & TMP_SETPCAP_E)
-		capng_update(CAPNG_DROP, CAPNG_EFFECTIVE, CAP_SETPCAP);
-	if (tmp_caps & TMP_SETPCAP_P)
-		capng_update(CAPNG_DROP, CAPNG_PERMITTED, CAP_SETPCAP);
+	// Drop the temporary transition caps and install the final sets.
+	drop_transition_caps(tmp_caps);
+	tmp_caps = 0;
 	rc = capng_apply(CAPNG_SELECT_CAPS|CAPNG_SELECT_AMBIENT);
 	if (rc < 0) {
 		ret = -9;
@@ -1463,6 +1475,15 @@ if (HAVE_PR_CAPBSET_DROP) {
 err_out:
 	prctl(PR_SET_KEEPCAPS, 0, 0, 0, 0);
 out:
+	/*
+	 * On failure, remove the temporary transition caps from the staged
+	 * state as well. Otherwise a caller that continues after the error
+	 * and calls capng_apply() would install SETUID, SETGID, or SETPCAP
+	 * that it never requested. The kernel credentials are not rolled
+	 * back; callers should still treat a failure as fatal.
+	 */
+	if (ret)
+		drop_transition_caps(tmp_caps);
 	// Staged gids are one-shot state, so always clear them before return.
 	free(pw_buf);
 	free(gids);
