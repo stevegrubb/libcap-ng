@@ -28,6 +28,8 @@ static int ambient_error;
 static unsigned int bounds_calls;
 static unsigned int ambient_calls;
 static unsigned int capget_calls;
+static unsigned int capset_calls;
+static __u32 capset_effective;
 static pid_t capget_pid;
 
 static void check(int condition, const char *message)
@@ -56,6 +58,15 @@ int capget(cap_user_header_t header, const cap_user_data_t data)
 	caps[0].effective = 1U << CAP_CHOWN;
 	caps[0].permitted = 1U << CAP_CHOWN;
 	memcpy(data, caps, sizeof(caps));
+	return 0;
+}
+
+/* Record capability installs without changing the test's credentials. */
+int capset(cap_user_header_t header, const cap_user_data_t data)
+{
+	(void)header;
+	capset_calls++;
+	capset_effective = data[0].effective;
 	return 0;
 }
 
@@ -167,6 +178,44 @@ static void test_capget_failure(int error)
 	/* Restore a known-good state, as for bounding/ambient failures. */
 	capng_restore_state(&saved);
 	check(capng_get_caps_process() == 0, "Snapshot recovery failed");
+}
+
+/*
+ * test_apply_probe_failure - keep the staged policy when apply cannot probe.
+ *
+ * capng_apply reads the process to check CAP_SETPCAP before dropping
+ * bounding bits. Returns no value; fails if a failed read discards the
+ * caller's staged sets or stops the remaining sets from being applied.
+ */
+static void test_apply_probe_failure(void)
+{
+	capng_select_t sets[] = { CAPNG_SELECT_BOUNDS, CAPNG_SELECT_BOTH };
+	size_t i;
+
+	for (i = 0; i < sizeof(sets) / sizeof(sets[0]); i++) {
+		bounds_error = ambient_error = 0;
+		capng_clear(CAPNG_SELECT_ALL);
+		/* The mocked kernel reports only CHOWN, so KILL is policy. */
+		check(capng_update(CAPNG_ADD, CAPNG_EFFECTIVE | CAPNG_PERMITTED,
+				   CAP_KILL) == 0,
+		      "Failed to stage the apply policy");
+		capget_error = EPERM;
+		capset_calls = 0;
+		capset_effective = 0;
+		check(capng_apply(sets[i]) == -9,
+		      "Failed bounding probe was not reported");
+		capget_error = 0;
+		if (sets[i] & CAPNG_SELECT_CAPS)
+			check(capset_calls == 1 &&
+			      capset_effective == 1U << CAP_KILL,
+			      "Failed bounding probe skipped the capability sets");
+		else
+			check(capset_calls == 0, "Bounding-only apply ran capset");
+		check(capng_have_capability(CAPNG_EFFECTIVE, CAP_KILL) &&
+		      capng_have_capability(CAPNG_PERMITTED, CAP_KILL) &&
+		      !capng_have_capability(CAPNG_EFFECTIVE, CAP_CHOWN),
+		      "Failed bounding probe discarded the staged policy");
+	}
 }
 
 static void test_capget_recovery(int error)
@@ -344,6 +393,7 @@ int main(void)
 	test_capget_failure(EPERM);
 	test_capget_recovery(ESRCH);
 	test_capget_recovery(EPERM);
+	test_apply_probe_failure();
 	test_target(0, NULL, 0);
 	/* A nonzero target distinct from the caller, with mocked capget. */
 	test_target(getpid() + 1, NULL, ENOENT);

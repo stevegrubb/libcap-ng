@@ -1042,8 +1042,16 @@ int capng_apply(capng_select_t set)
 if (HAVE_PR_CAPBSET_DROP) {
 		struct cap_ng state;
 		memcpy(&state, &m, sizeof(state)); /* save state */
-		if (capng_get_caps_process())
-			return -9;
+		if (capng_get_caps_process()) {
+			/*
+			 * The failed probe replaced the staged sets. Restore
+			 * the caller's policy, then continue like the other
+			 * bounding failures so the remaining sets still drop.
+			 */
+			memcpy(&m, &state, sizeof(m));
+			rc = -9;
+			goto try_caps;
+		}
 		if (capng_have_capability(CAPNG_EFFECTIVE, CAP_SETPCAP)) {
 			unsigned int i;
 			memcpy(&m, &state, sizeof(m)); /* restore state */

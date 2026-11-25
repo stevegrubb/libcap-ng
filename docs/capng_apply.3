@@ -36,6 +36,13 @@ This returns 0 on success and a negative value on failure. The values are:
 
 .SH NOTES
 
+If a bounding set operation fails, the internal state is left as the caller
+prepared it and capng_apply still applies the other selected sets, so that
+capabilities are lowered even when the bounding set could not be. When more
+than one selected set fails, the value for the last failure is returned. A
+failure therefore does not mean that nothing was applied; the only safe action
+is usually to exit.
+
 If you are doing multi-threaded programming, calling this function will only set capabilities on the calling thread. All other threads are unaffected. If you want to set overall capabilities for a multi-threaded process, you will need to do that before creating any threads. See the capset syscall for more information on this topic.
 
 Also, bits in the bounding set can only be dropped. You cannot set them. After dropping bounding set capabilities, the bounding set is synchronized with the kernel to reflect the true state in the kernel.
