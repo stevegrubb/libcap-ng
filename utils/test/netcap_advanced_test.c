@@ -543,6 +543,26 @@ static void test_packet_table(void)
 }
 
 #ifdef HAVE_NETCAP_BLUETOOTH
+/* Every Bluetooth protocol the kernel publishes must be inventoried. */
+static void test_bluetooth_sources(void)
+{
+	static const char *const required[] = { "l2cap", "rfcomm", "sco", "hci" };
+	size_t i, j;
+
+	for (i = 0; i < sizeof(required) / sizeof(required[0]); i++) {
+		for (j = 0; j < sizeof(bt_tables) / sizeof(bt_tables[0]); j++) {
+			char path[64];
+
+			snprintf(path, sizeof(path), "/proc/net/%s", required[i]);
+			if (!strcmp(bt_tables[j].proto, required[i]) &&
+			    !strcmp(bt_tables[j].path, path))
+				break;
+		}
+		if (j == sizeof(bt_tables) / sizeof(bt_tables[0]))
+			fail("A Bluetooth socket table is not collected");
+	}
+}
+
 static void test_bluetooth_helpers(void)
 {
 	bdaddr_t addr = { { 0x66, 0x55, 0x44, 0x33, 0x22, 0x11 } };
@@ -772,6 +792,7 @@ int main(int argc, char **argv)
 #ifdef HAVE_NETCAP_BLUETOOTH
 	test_bluetooth_tables();
 	test_bluetooth_helpers();
+	test_bluetooth_sources();
 #endif
 	test_packet_table();
 #ifdef HAVE_NETCAP_VSOCK

@@ -130,8 +130,9 @@ TCP: LISTEN sockets only.
 .IP \[bu] 2
 UDP/UDPLITE: bound sockets.
 .IP \[bu] 2
-RFCOMM: all owned RFCOMM sockets (state and channel are not exposed by the
-kernel's proc interface).
+L2CAP, RFCOMM, and SCO: all owned sockets of each Bluetooth protocol (state,
+channel, and PSM are not exposed by the kernel's proc interface). L2CAP carries
+most Bluetooth services, including Bluetooth Low Energy; SCO carries audio.
 .IP \[bu] 2
 HCI: all bound raw management sockets; semantics differ from port listeners
 and are analogous to packet sockets.

@@ -2129,11 +2129,27 @@ static void bt_resolve_single_adapter(char *name, size_t name_sz,
 }
 
 /*
- * HCI and RFCOMM expose the same generic socket columns:
- * sk RefCnt Rmem Wmem User Inode Parent. Neither supplies adapter identity,
- * channel, or listener state. Keep reporting owned sockets at port 0 and
- * use the existing single-adapter heuristic; do not guess from socket data.
+ * Every Bluetooth socket table (HCI, L2CAP, RFCOMM, SCO) exposes the same
+ * generic columns: sk RefCnt Rmem Wmem User Inode Parent. None supplies
+ * adapter identity, channel or PSM, or listener state. Keep reporting owned
+ * sockets at port 0 and use the single-adapter heuristic; do not guess from
+ * socket data.
  */
+/*
+ * Bluetooth socket tables to inventory. L2CAP carries most Bluetooth
+ * services, including Bluetooth Low Energy, and SCO carries audio, so
+ * omitting either would hide the main Bluetooth listeners.
+ */
+static const struct {
+	const char *path;
+	const char *proto;
+} bt_tables[] = {
+	{ "/proc/net/l2cap", "l2cap" },
+	{ "/proc/net/rfcomm", "rfcomm" },
+	{ "/proc/net/sco", "sco" },
+	{ "/proc/net/hci", "hci" },
+};
+
 static void parse_bluetooth_file(struct model *m, const char *path,
 				 const char *proto)
 {
@@ -2605,8 +2621,8 @@ static void collect_endpoints(struct model *m)
 	}
 #endif
 #ifdef HAVE_NETCAP_BLUETOOTH
-	parse_bluetooth_file(m, "/proc/net/rfcomm", "rfcomm");
-	parse_bluetooth_file(m, "/proc/net/hci", "hci");
+	for (size_t i = 0; i < sizeof(bt_tables) / sizeof(bt_tables[0]); i++)
+		parse_bluetooth_file(m, bt_tables[i].path, bt_tables[i].proto);
 #endif
 }
 
