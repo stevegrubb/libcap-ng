@@ -134,6 +134,37 @@ int main(void)
 		abort();
 	}
 
+	/* A counted list applies every entry or, if rejected, none. */
+	{
+		const unsigned int list[] = { CAP_CHOWN, CAP_KILL };
+		const unsigned int bad[] = { CAP_SETUID, last + 1 };
+
+		capng_clear(CAPNG_SELECT_BOTH);
+		if (capng_update_list(CAPNG_ADD, CAPNG_EFFECTIVE, list, 2) ||
+		    !capng_have_capability(CAPNG_EFFECTIVE, CAP_CHOWN) ||
+		    !capng_have_capability(CAPNG_EFFECTIVE, CAP_KILL)) {
+			puts("Failed capng_update_list test");
+			abort();
+		}
+		if (capng_update_list(CAPNG_ADD, CAPNG_EFFECTIVE, bad, 2) != -1 ||
+		    capng_have_capability(CAPNG_EFFECTIVE, CAP_SETUID)) {
+			puts("Rejected capng_update_list changed state");
+			abort();
+		}
+		if (capng_update_list(CAPNG_DROP, CAPNG_EFFECTIVE, NULL, 0) ||
+		    capng_update_list(CAPNG_DROP, CAPNG_EFFECTIVE, NULL, 1) != -1 ||
+		    !capng_have_capability(CAPNG_EFFECTIVE, CAP_KILL)) {
+			puts("Failed capng_update_list empty list test");
+			abort();
+		}
+		if (capng_update_list(CAPNG_DROP, CAPNG_EFFECTIVE, list, 2) ||
+		    capng_have_capability(CAPNG_EFFECTIVE, CAP_CHOWN) ||
+		    capng_have_capability(CAPNG_EFFECTIVE, CAP_KILL)) {
+			puts("Failed capng_update_list drop test");
+			abort();
+		}
+	}
+
 	puts("Doing process capability tests...");
 	if (read_process_caps(&caps)) {
 		puts("Failed reading process capabilities from procfs");

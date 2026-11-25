@@ -994,6 +994,41 @@ int capng_update(capng_act_t action, capng_type_t type, unsigned int capability)
 	return 0;
 }
 
+/*
+ * capng_update_list - add or drop a counted list of capabilities.
+ * @action: CAPNG_ADD or CAPNG_DROP.
+ * @type: capability sets to update.
+ * @capabilities: capability numbers, read only up to @count.
+ * @count: number of entries in @capabilities.
+ *
+ * Unlike capng_updatev, the length is explicit and every entry is checked
+ * before any state changes, so a rejected list leaves the staged sets as
+ * they were. Returns 0 on success, -1 on failure.
+ */
+int capng_update_list(capng_act_t action, capng_type_t type,
+		      const unsigned int *capabilities, size_t count)
+{
+	size_t i;
+
+	if (m.state < CAPNG_INIT)
+		return -1;
+	if (count && capabilities == NULL) {
+		errno = EINVAL;
+		return -1;
+	}
+	for (i = 0; i < count; i++) {
+		if (!cap_valid(capabilities[i])) {
+			errno = EINVAL;
+			return -1;
+		}
+	}
+	for (i = 0; i < count; i++) {
+		if (capng_update(action, type, capabilities[i]))
+			return -1;
+	}
+	return 0;
+}
+
 int capng_updatev(capng_act_t action, capng_type_t type,
                 unsigned int capability, ...)
 {

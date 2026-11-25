@@ -60,10 +60,35 @@ def test_last_cap():
         raise AssertionError("capng_last_cap differs from the kernel")
 
 
+def test_update_list():
+    last = get_last_cap()
+    capng.capng_clear(capng.CAPNG_SELECT_BOTH)
+    if capng.capng_update_list(capng.CAPNG_ADD, capng.CAPNG_EFFECTIVE,
+                               [capng.CAP_CHOWN, capng.CAP_KILL]) != 0:
+        raise AssertionError("Valid update list was rejected")
+    if not capng.capng_have_capability(capng.CAPNG_EFFECTIVE, capng.CAP_KILL):
+        raise AssertionError("update list did not stage the capability")
+    # A rejected list must not stage any of its entries.
+    if capng.capng_update_list(capng.CAPNG_ADD, capng.CAPNG_EFFECTIVE,
+                               (capng.CAP_SETUID, last + 1)) != -1:
+        raise AssertionError("Invalid update list was accepted")
+    if capng.capng_have_capability(capng.CAPNG_EFFECTIVE, capng.CAP_SETUID):
+        raise AssertionError("Rejected update list changed state")
+    if capng.capng_update_list(capng.CAPNG_ADD, capng.CAPNG_EFFECTIVE, []) != 0:
+        raise AssertionError("Empty update list was rejected")
+    for bad in ([-1], [2 ** 40], "chown", [None]):
+        try:
+            capng.capng_update_list(capng.CAPNG_ADD, capng.CAPNG_EFFECTIVE, bad)
+        except (TypeError, OverflowError):
+            continue
+        raise AssertionError("Malformed update list was accepted: %r" % (bad,))
+
+
 def main():
     last = get_last_cap()
     test_updatev_boundary()
     test_last_cap()
+    test_update_list()
 
     if capng.CAPNG_UNSET_ROOTID != 0xffffffff:
         print("CAPNG_UNSET_ROOTID has the wrong value")

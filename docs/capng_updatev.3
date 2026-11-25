@@ -13,6 +13,12 @@ capng_updatev will update the internal POSIX capabilities settings based on the 
 
 This function differs from capng_update in that you may pass a list of capabilities. This list must be terminated with a -1 value.
 
+Capabilities are applied in order. If an invalid capability is reached, the
+function fails, but the capabilities before it have already been updated.
+.BR capng_update_list (3)
+takes a counted array instead, and leaves the state unchanged if any element
+is invalid.
+
 .SH "RETURN VALUE"
 
 This returns 0 on success and -1 on failure.
@@ -20,6 +26,7 @@ This returns 0 on success and -1 on failure.
 .SH "SEE ALSO"
 
 .BR capng_update (3),
+.BR capng_update_list (3),
 .BR capabilities (7)
 
 .SH AUTHOR

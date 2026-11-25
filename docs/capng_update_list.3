@@ -1,0 +1,60 @@
+.TH "CAPNG_UPDATE_LIST" "3" "November 2026" "Red Hat" "Libcap-ng API"
+.SH NAME
+capng_update_list \- update the stored capabilities settings from a counted list
+.SH "SYNOPSIS"
+.B #include <cap-ng.h>
+.sp
+int capng_update_list(capng_act_t action, capng_type_t type,
+.br
+                      const unsigned int *capabilities, size_t count);
+
+.SH "DESCRIPTION"
+
+capng_update_list adds or drops each of the
+.I count
+capabilities in the
+.I capabilities
+array, in the sets selected by
+.IR type .
+The
+.I action
+and
+.I type
+arguments are the same as for
+.BR capng_update (3).
+Each element must be a capability number no greater than
+.BR capng_last_cap (3).
+
+Unlike
+.BR capng_updatev (3),
+the length of the list is explicit, so no terminating value is read, and
+every element is checked before any change is made. If any element is
+invalid, no capability is updated and the internal state is left unchanged.
+A
+.I count
+of zero is a successful no-op, and
+.I capabilities
+may then be NULL.
+
+This only changes libcap-ng's internal state. Use
+.BR capng_apply (3)
+to transfer the result to the kernel.
+
+.SH "RETURN VALUE"
+
+This returns 0 on success and -1 on failure. On failure,
+.I errno
+is set to
+.B EINVAL
+when the list is invalid.
+
+.SH "SEE ALSO"
+
+.BR capng_update (3),
+.BR capng_updatev (3),
+.BR capng_last_cap (3),
+.BR capng_apply (3),
+.BR capabilities (7)
+
+.SH AUTHOR
+Steve Grubb

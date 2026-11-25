@@ -83,6 +83,9 @@ int capng_update(capng_act_t action, capng_type_t type,unsigned int capability)
 	__wur;
 int capng_updatev(capng_act_t action, capng_type_t type,
 		unsigned int capability, ...) __wur;
+int capng_update_list(capng_act_t action, capng_type_t type,
+		const unsigned int *capabilities, size_t count)
+	__attr_access ((__read_only__, 3, 4)) __wur;
 
 // These functions apply the capabilities previously setup to a process
 int capng_apply(capng_select_t set) __wur;

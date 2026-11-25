@@ -23,6 +23,8 @@
 
 %module capng
 %{
+        #include <limits.h>
+        #include <stdlib.h>
         #include "./capng.h"
 %}
 
@@ -40,6 +42,54 @@
 	$action
 #undef capng_updatev
 %}
+
+/*
+ * Accept any Python sequence of capability numbers for capng_update_list.
+ * The C call receives an exact count, so no terminator is needed. Values
+ * outside unsigned int are rejected here; the library validates the rest.
+ */
+%typemap(in) (const unsigned int *capabilities, size_t count)
+		(unsigned int *list = NULL) {
+	Py_ssize_t i, n;
+
+	if (!PySequence_Check($input)) {
+		PyErr_SetString(PyExc_TypeError,
+				"expected a sequence of capabilities");
+		SWIG_fail;
+	}
+	n = PySequence_Size($input);
+	if (n < 0)
+		SWIG_fail;
+	list = malloc(n ? (size_t)n * sizeof(*list) : 1);
+	if (!list) {
+		PyErr_NoMemory();
+		SWIG_fail;
+	}
+	for (i = 0; i < n; i++) {
+		PyObject *item = PySequence_GetItem($input, i);
+		unsigned long value;
+
+		if (!item)
+			SWIG_fail;
+		value = PyLong_AsUnsignedLong(item);
+		Py_DECREF(item);
+		if (PyErr_Occurred())
+			SWIG_fail;
+		if (value > UINT_MAX) {
+			PyErr_SetString(PyExc_OverflowError,
+					"capability number out of range");
+			SWIG_fail;
+		}
+		list[i] = (unsigned int)value;
+	}
+	$1 = list;
+	$2 = (size_t)n;
+}
+
+/* Runs on both the success and the failure path of the wrapper. */
+%typemap(freearg) (const unsigned int *capabilities, size_t count) {
+	free(list$argnum);
+}
 
 #endif
 
