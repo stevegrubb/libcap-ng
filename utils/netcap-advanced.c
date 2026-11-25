@@ -1451,6 +1451,7 @@ static int dup_target_fd(int pid, int fdnum)
  */
 static int probe_reuseport_fd(int fd)
 {
+#ifdef SO_REUSEPORT
 	int val = 0;
 	socklen_t len = sizeof(val);
 	int rc;
@@ -1460,6 +1461,16 @@ static int probe_reuseport_fd(int fd)
 		return -1;
 
 	return val ? 1 : 0;
+#else
+	/*
+	 * SO_REUSEPORT first appeared in Linux 3.9 headers, and its value
+	 * differs between architectures, so it cannot be supplied here.
+	 * Treat it like a kernel that does not support the option.
+	 */
+	(void)fd;
+	errno = ENOPROTOOPT;
+	return -1;
+#endif
 }
 
 /*
