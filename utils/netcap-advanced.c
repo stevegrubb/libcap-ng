@@ -2404,8 +2404,7 @@ static int parse_vsock_diag_messages(struct model *m, int fd)
 		struct nlmsghdr *nlh;
 		unsigned int rem;
 
-		if (len > UINT_MAX)
-			return -1;
+		/* The truncation check above bounds len by sizeof(buf). */
 		rem = (unsigned int)len;
 
 		for (nlh = (struct nlmsghdr *)buf;
@@ -2574,8 +2573,7 @@ static int parse_diag_messages(struct model *m, int fd, int proto, int af)
 		struct nlmsghdr *nlh;
 		unsigned int rem;
 
-		if (len > UINT_MAX)
-			return -1;
+		/* The truncation check above bounds len by sizeof(buf). */
 		rem = (unsigned int)len;
 
 		for (nlh = (struct nlmsghdr *)buf;
