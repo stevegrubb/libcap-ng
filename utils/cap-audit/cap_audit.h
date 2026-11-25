@@ -204,6 +204,8 @@ struct observation_status {
 	bool exec_confirmed;
 	bool target_exited;
 	bool descendants_remaining;
+	/* --follow-descendants kept tracing until the whole tree exited. */
+	bool descendants_followed;
 	int wait_status;
 	int launch_error;
 	__u64 map_failures;

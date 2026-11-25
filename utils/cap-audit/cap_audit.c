@@ -30,6 +30,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/prctl.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -253,6 +254,8 @@ static void usage(FILE *out, const char *prog)
 	fprintf(out, "  -j, --json          JSON output\n");
 	fprintf(out, "  -y, --yaml          YAML output\n");
 	fprintf(out, "  -s, --service FILE  Simulate a systemd service unit\n");
+	fprintf(out, "      --follow-descendants\n"
+		"                      Keep tracing until every descendant exits\n");
 }
 
 #ifndef CAP_AUDIT_NO_MAIN
@@ -289,6 +292,8 @@ int main(int argc, char **argv)
 		else if (!strcmp(argv[arg_idx], "-y") ||
 			 !strcmp(argv[arg_idx], "--yaml"))
 			state.yaml_output = 1;
+		else if (!strcmp(argv[arg_idx], "--follow-descendants"))
+			state.observation.descendants_followed = true;
 		else if (!strcmp(argv[arg_idx], "-s") ||
 			 !strcmp(argv[arg_idx], "--service")) {
 			char *service_file;
@@ -482,6 +487,26 @@ int main(int argc, char **argv)
 		goto err_target_path;
 	}
 
+	/*
+	 * Following descendants requires that they stay waitable after their
+	 * parents exit. As a child subreaper, cap-audit adopts orphaned
+	 * descendants of the target, such as a daemon that forks and exits,
+	 * instead of init, so it can tell when the last one has exited.
+	 */
+	if (state.observation.descendants_followed &&
+	    prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0) {
+		fprintf(stderr, "Error: cannot follow descendants: %s\n",
+			strerror(errno));
+		close(state.sync_pipe[0]);
+		close(state.sync_pipe[1]);
+		close(exec_pipe[0]);
+		close(exec_pipe[1]);
+		ring_buffer__free(state.rb);
+		cap_audit_bpf__destroy(state.skel);
+		free(state.app.exe);
+		goto err_target_path;
+	}
+
 	child = fork();
 	if (child == 0) {
 		char sync_byte;
@@ -622,11 +647,17 @@ child_launch_failed:
 			break;
 		}
 
-		ret_pid = waitpid(child, &wstatus, WNOHANG);
-		if (ret_pid == child) {
+		/*
+		 * When following descendants, reap every adopted child too and
+		 * stop only when none remain. The initial target's status is
+		 * still the one reported.
+		 */
+		while ((ret_pid = waitpid(state.observation.descendants_followed ?
+					  -1 : child, &wstatus, WNOHANG)) > 0) {
+			if (ret_pid != child)
+				continue;
 			state.observation.target_exited = true;
 			state.observation.wait_status = wstatus;
-			state.observation.stop_reason = TRACE_STOP_TARGET_EXIT;
 			if (WIFEXITED(wstatus))
 				fprintf(stderr,
 				   "\n[*] Application exited with status %d\n",
@@ -635,6 +666,15 @@ child_launch_failed:
 				fprintf(stderr,
 				  "\n[*] Application terminated by signal %d\n",
 				  WTERMSIG(wstatus));
+			if (!state.observation.descendants_followed)
+				break;
+			fprintf(stderr, "[*] Following descendants until they "
+				"exit\n");
+		}
+		if (state.observation.target_exited &&
+		    (!state.observation.descendants_followed ||
+		     (ret_pid < 0 && errno == ECHILD))) {
+			state.observation.stop_reason = TRACE_STOP_TARGET_EXIT;
 			break;
 		}
 		if (ret_pid < 0 && errno != EINTR) {

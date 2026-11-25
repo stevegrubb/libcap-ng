@@ -112,6 +112,16 @@ executed workload's standard output are directed to standard error.
 Emit the analysis as YAML.
 The output streams are separated as for JSON.
 .TP
+.B --follow-descendants
+Keep tracing after the initial target exits, until every descendant has
+exited. Cap-audit becomes a child subreaper, so processes whose parents exit,
+such as a daemon that forks into the background, are reparented to cap-audit
+instead of init and remain part of the trace. Without this option, tracing
+stops when the initial target exits and surviving descendants make the
+observation incomplete. The exit status reported is still the initial
+target's, and both structured formats include
+.BR descendants_followed .
+.TP
 .BR -s , " --service " \fIFILE\fP
 Parse a systemd service unit file, simulate the service user, group,
 supplementary group, capability, and NoNewPrivileges settings in the traced
@@ -264,7 +274,9 @@ headers cap-audit was built against cannot be attributed to a named
 capability. It is counted as a userspace failure and makes the observation
 incomplete; rebuild cap-audit against headers for the running kernel.
 
-3. When auditing a daemon, pass options to keep it in the foreground. If it forks and exits, that will end the session and you will only get the capabilities traced up to the exit. Here's an example keeping the daemon in the foreground:
+3. When auditing a daemon, pass options to keep it in the foreground, or use
+.BR --follow-descendants .
+Otherwise, if it forks and exits, that will end the session and you will only get the capabilities traced up to the exit. Here's an example keeping the daemon in the foreground:
 
 .nf
 .B cap-audit /usr/sbin/sshd -D

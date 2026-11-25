@@ -72,6 +72,8 @@ void output_observation_json(void)
 		printf("null");
 	printf(",\n    \"descendants_remaining\": %s,\n",
 	       s->descendants_remaining ? "true" : "false");
+	printf("    \"descendants_followed\": %s,\n",
+	       s->descendants_followed ? "true" : "false");
 	printf("    \"map_update_failures\": %llu,\n",
 	       (unsigned long long)s->map_failures);
 	printf("    \"ring_reservation_failures\": %llu,\n",
@@ -112,6 +114,8 @@ void output_observation_yaml(void)
 		printf("null\n");
 	printf("  descendants_remaining: %s\n",
 	       s->descendants_remaining ? "true" : "false");
+	printf("  descendants_followed: %s\n",
+	       s->descendants_followed ? "true" : "false");
 	printf("  map_update_failures: %llu\n",
 	       (unsigned long long)s->map_failures);
 	printf("  ring_reservation_failures: %llu\n",

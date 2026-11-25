@@ -273,6 +273,132 @@ static void test_dynamic_user_report(void)
 		fail("Cannot remove service fixture");
 }
 
+/* Read one decimal process ID written by the traced shell. */
+static pid_t read_pid_file(const char *path)
+{
+	FILE *file = fopen(path, "r");
+	long pid = 0;
+
+	if (!file || fscanf(file, "%ld", &pid) != 1 || pid <= 0)
+		fail("Cannot read traced process ID");
+	fclose(file);
+	return (pid_t)pid;
+}
+
+/* Return the parent PID from /proc/<pid>/stat, or -1 if unavailable. */
+static pid_t read_ppid(pid_t pid)
+{
+	char path[64], buf[512], *close_paren;
+	FILE *file;
+	long ppid;
+
+	snprintf(path, sizeof(path), "/proc/%ld/stat", (long)pid);
+	file = fopen(path, "r");
+	if (!file)
+		return -1;
+	if (!fgets(buf, sizeof(buf), file)) {
+		fclose(file);
+		return -1;
+	}
+	fclose(file);
+	/* The command name is parenthesized and may contain spaces. */
+	close_paren = strrchr(buf, ')');
+	if (!close_paren || sscanf(close_paren + 1, " %*c %ld", &ppid) != 1)
+		return -1;
+	return (pid_t)ppid;
+}
+
+/*
+ * test_follow_descendants - keep tracing a descendant that outlives its
+ * parent.
+ *
+ * The target starts a background process that blocks on a FIFO and exits.
+ * The test checks reparenting directly instead of timing: once the target
+ * is gone, the background process must be cap-audit's child, and cap-audit
+ * must still be running. Releasing the FIFO then ends the trace.
+ */
+static void test_follow_descendants(void)
+{
+	char dir[] = "/tmp/cap-audit-follow-XXXXXX";
+	char fifo[64], target_pid[64], descendant_pid[64], script[512];
+	char *args[] = { "cap-audit", "-j", "--follow-descendants", "--",
+			 "/bin/sh", "-c", script, NULL };
+	FILE *capture = tmpfile();
+	char output[32768];
+	pid_t child, target, descendant;
+	size_t size;
+	int status, fd, i;
+
+	if (!capture || !mkdtemp(dir))
+		fail("Cannot prepare follow fixture");
+	snprintf(fifo, sizeof(fifo), "%s/fifo", dir);
+	snprintf(target_pid, sizeof(target_pid), "%s/target", dir);
+	snprintf(descendant_pid, sizeof(descendant_pid), "%s/descendant", dir);
+	if (mkfifo(fifo, 0600))
+		fail("Cannot create follow FIFO");
+	snprintf(script, sizeof(script),
+		 "echo $$ > %s; cat %s > /dev/null & echo $! > %s; exit 0",
+		 target_pid, fifo, descendant_pid);
+
+	mode = NORMAL;
+	if (fflush(NULL))
+		fail("Cannot prepare follow capture");
+	child = fork();
+	if (child < 0)
+		fail("Cannot fork follow test");
+	if (!child) {
+		alarm(20);
+		if (dup2(fileno(capture), STDOUT_FILENO) < 0)
+			_exit(3);
+		exit(cap_audit_main(7, args));
+	}
+
+	/*
+	 * A non-blocking open succeeds once the descendant has opened the
+	 * FIFO for reading. Retry, but fail instead of hanging if cap-audit
+	 * exits first.
+	 */
+	for (i = 0; ; i++) {
+		fd = open(fifo, O_WRONLY | O_NONBLOCK);
+		if (fd >= 0)
+			break;
+		if (errno != ENXIO || i == 1000 ||
+		    waitpid(child, &status, WNOHANG) != 0)
+			fail("Follow descendant did not start under cap-audit");
+		usleep(10000);
+	}
+	target = read_pid_file(target_pid);
+	descendant = read_pid_file(descendant_pid);
+	/* Wait for the observable exit of the initial target. */
+	for (i = 0; i < 1000 && kill(target, 0) == 0; i++)
+		usleep(10000);
+	if (kill(target, 0) == 0)
+		fail("Initial follow target did not exit");
+	if (read_ppid(descendant) != child)
+		fail("Orphaned descendant was not adopted by cap-audit");
+	if (waitpid(child, &status, WNOHANG) != 0)
+		fail("cap-audit stopped before its descendants exited");
+
+	/* EOF on the FIFO lets the last descendant exit. */
+	close(fd);
+	if (waitpid(child, &status, 0) != child || !WIFEXITED(status) ||
+	    WEXITSTATUS(status) != 0)
+		fail("Followed trace returned an incorrect status");
+	rewind(capture);
+	size = fread(output, 1, sizeof(output) - 1, capture);
+	output[size] = 0;
+	fclose(capture);
+	if (!strstr(output, "\"descendants_followed\": true") ||
+	    !strstr(output, "\"collection_complete\": true") ||
+	    !strstr(output, "\"target_exit_status\": 0")) {
+		fprintf(stderr, "%s\n", output);
+		fail("Followed trace report is incomplete");
+	}
+	if (unlink(fifo) || unlink(target_pid) || unlink(descendant_pid) ||
+	    rmdir(dir))
+		fail("Cannot remove follow fixture");
+}
+
 int main(void)
 {
 	char *json[] = { "cap-audit", "-j", "--", "/bin/sh", "-c",
@@ -301,6 +427,7 @@ int main(void)
 		run_case(text, 2, "Observation is incomplete");
 	}
 	test_service_overrides();
+	test_follow_descendants();
 	test_dynamic_user_report();
 	fd = mkstemp(unit);
 	if (fd < 0 || write(fd, service, sizeof(service) - 1) != sizeof(service) - 1 ||
