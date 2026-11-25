@@ -458,6 +458,220 @@ static void test_bluetooth_tables(void)
 }
 #endif
 
+/* Write @contents to a new temporary file and return its path in @path. */
+static void write_fixture(char *path, const char *contents)
+{
+	int fd = mkstemp(path);
+	FILE *file;
+
+	if (fd < 0 || !(file = fdopen(fd, "w")))
+		fail("Cannot create socket table fixture");
+	fputs(contents, file);
+	if (fclose(file))
+		fail("Cannot write socket table fixture");
+}
+
+/*
+ * send_nlmsg - queue one netlink message for a parser to receive.
+ * @fd: sending end of a datagram socket pair.
+ * @type: netlink message type.
+ * @flags: netlink header flags.
+ * @payload: message body, or NULL.
+ * @len: body length in bytes.
+ *
+ * Each call is one datagram, as the kernel delivers each dump batch.
+ */
+static void send_nlmsg(int fd, int type, int flags, const void *payload,
+		       size_t len)
+{
+	char buf[NLMSG_SPACE(512)];
+	struct nlmsghdr *nlh = (struct nlmsghdr *)buf;
+
+	if (NLMSG_SPACE(len) > sizeof(buf))
+		fail("Netlink fixture is too large");
+	memset(buf, 0, sizeof(buf));
+	nlh->nlmsg_len = NLMSG_LENGTH(len);
+	nlh->nlmsg_type = type;
+	nlh->nlmsg_flags = flags;
+	if (len)
+		memcpy(NLMSG_DATA(nlh), payload, len);
+	if (send(fd, buf, NLMSG_SPACE(len), 0) < 0)
+		fail("Cannot send netlink fixture");
+}
+
+static void open_nl_pair(int fds[2])
+{
+	if (socketpair(AF_UNIX, SOCK_DGRAM, 0, fds))
+		fail("Cannot create netlink fixture socket pair");
+}
+
+/* Packet sockets report the ethertype as the port, on a named interface. */
+static void test_packet_table(void)
+{
+	char path[] = "/tmp/netcap-packet-XXXXXX";
+	char contents[512];
+	struct process_info owner = { .pid = 1234 };
+	struct model m = { 0 };
+	unsigned int lo = if_nametoindex("lo");
+
+	if (!lo)
+		fail("Loopback interface index is unavailable");
+	snprintf(contents, sizeof(contents),
+		 "sk       RefCnt Type Proto  Iface R Rmem   User   Inode\n"
+		 "malformed\n"
+		 "0000000000000000 3 3 0003 %u 1 0 0 5001\n"
+		 "0000000000000000 3 3 0003 %u 1 0 0 5999\n", lo, lo);
+	write_fixture(path, contents);
+	if (add_inode_proc(&m, 5001, &owner))
+		fail("Cannot create packet ownership fixture");
+	parse_packet_file(&m, path);
+	unlink(path);
+	if (m.eps_n != 1 || m.socket_read_failures)
+		fail("Packet table rows were not filtered by ownership");
+	if (m.eps[0].plane != PLANE_PACKET || strcmp(m.eps[0].proto, "packet") ||
+	    m.eps[0].port != 3 || strcmp(m.eps[0].ifname, "lo") ||
+	    m.eps[0].procs_n != 1 || m.eps[0].procs[0] != &owner)
+		fail("Packet endpoint identity changed");
+	free_model(&m);
+	memset(&m, 0, sizeof(m));
+
+	parse_packet_file(&m, "/nonexistent/netcap-packet");
+	if (m.socket_read_failures != 1)
+		fail("Unreadable packet table was not counted");
+	free_model(&m);
+	memset(&m, 0, sizeof(m));
+}
+
+#ifdef HAVE_NETCAP_BLUETOOTH
+static void test_bluetooth_helpers(void)
+{
+	bdaddr_t addr = { { 0x66, 0x55, 0x44, 0x33, 0x22, 0x11 } };
+	char text[32];
+	int id = -1;
+
+	if (bt_parse_adapter_dev_id("hci0", &id) || id != 0 ||
+	    bt_parse_adapter_dev_id("hci12", &id) || id != 12)
+		fail("HCI adapter names were not parsed");
+	if (!bt_parse_adapter_dev_id("hci0x", &id) ||
+	    !bt_parse_adapter_dev_id("hcix", &id) ||
+	    !bt_parse_adapter_dev_id("hci65536", &id) ||
+	    !bt_parse_adapter_dev_id("rfkill0", &id))
+		fail("Invalid HCI adapter names were accepted");
+	bt_format_addr(&addr, text, sizeof(text));
+	if (strcmp(text, "11:22:33:44:55:66"))
+		fail("Bluetooth address byte order changed");
+	if (!str_is_bdaddr("11:22:33:44:55:66") ||
+	    str_is_bdaddr("11:22:33:44:55") || str_is_bdaddr("11-22-33-44-55-66") ||
+	    str_is_bdaddr("11:22:33:44:55:6G") || str_is_bdaddr(NULL))
+		fail("Bluetooth address validation changed");
+}
+#endif
+
+#ifdef HAVE_NETCAP_VSOCK
+static void test_vsock_table(void)
+{
+	char path[] = "/tmp/netcap-vsock-XXXXXX";
+	struct process_info owner = { .pid = 1234 };
+	struct model m = { 0 };
+	unsigned int v;
+
+	if (parse_u32_hex_or_dec("1024", &v) || v != 1024 ||
+	    parse_u32_hex_or_dec("0x1F", &v) || v != 31 ||
+	    parse_u32_hex_or_dec("0A", &v) || v != 10 ||
+	    !parse_u32_hex_or_dec("", &v) || !parse_u32_hex_or_dec("12z", &v) ||
+	    !parse_u32_hex_or_dec("0x100000000", &v))
+		fail("VSOCK numeric tokens were misparsed");
+
+	write_fixture(path, "Num Local Remote Type St Inode\n"
+		      "0 3:1024 0:0 1 0A 6001\n"
+		      "0 3:1025 0:0 1 01 6001\n"
+		      "0 3:2048 0:0 2 07 6001\n"
+		      "0 3:0 0:0 2 07 6001\n"
+		      "0 3:4096 0:0 1 0A 6999\n");
+	if (add_inode_proc(&m, 6001, &owner))
+		fail("Cannot create VSOCK ownership fixture");
+	parse_vsock_file(&m, path);
+	unlink(path);
+	/* A listening stream and a bound datagram socket; others are skipped. */
+	if (m.eps_n != 2 || strcmp(m.eps[0].label, "stream:cid=3:1024") ||
+	    strcmp(m.eps[1].label, "dgram:cid=3:2048") ||
+	    m.eps[0].plane != PLANE_VSOCK)
+		fail("VSOCK procfs listeners changed");
+	free_model(&m);
+	memset(&m, 0, sizeof(m));
+}
+
+#ifdef HAVE_LINUX_VM_SOCKETS_DIAG_H
+static void test_vsock_diag_messages(void)
+{
+	struct process_info owner = { .pid = 1234 };
+	struct vsock_diag_msg r = { 0 };
+	struct nlmsgerr err = { 0 };
+	struct model m = { 0 };
+	int fds[2];
+
+	open_nl_pair(fds);
+	r.vdiag_family = AF_VSOCK;
+	r.vdiag_type = SOCK_STREAM;
+	r.vdiag_state = TCP_LISTEN;
+	r.vdiag_src_cid = 2;
+	r.vdiag_src_port = 22;
+	r.vdiag_ino = 7001;
+	send_nlmsg(fds[1], SOCK_DIAG_BY_FAMILY, NLM_F_MULTI, &r, sizeof(r));
+	r.vdiag_state = TCP_ESTABLISHED;
+	r.vdiag_src_port = 23;
+	send_nlmsg(fds[1], SOCK_DIAG_BY_FAMILY, NLM_F_MULTI, &r, sizeof(r));
+	send_nlmsg(fds[1], NLMSG_DONE, NLM_F_MULTI, NULL, 0);
+	if (add_inode_proc(&m, 7001, &owner))
+		fail("Cannot create VSOCK diag ownership fixture");
+	if (parse_vsock_diag_messages(&m, fds[0]) != 0 || m.eps_n != 1 ||
+	    strcmp(m.eps[0].label, "stream:cid=2:22"))
+		fail("VSOCK diag listener was not parsed");
+	free_model(&m);
+	memset(&m, 0, sizeof(m));
+
+	err.error = -EPERM;
+	send_nlmsg(fds[1], NLMSG_ERROR, 0, &err, sizeof(err));
+	errno = 0;
+	if (parse_vsock_diag_messages(&m, fds[0]) != -1 || errno != EPERM)
+		fail("VSOCK diag error reply was not reported");
+	free_model(&m);
+	memset(&m, 0, sizeof(m));
+	close(fds[0]);
+	close(fds[1]);
+}
+#endif
+#endif
+
+static void test_inet_diag_messages(void)
+{
+	struct process_info owner = { .pid = 1234 };
+	struct inet_diag_msg r = { 0 };
+	struct model m = { 0 };
+	int fds[2];
+
+	open_nl_pair(fds);
+	r.idiag_family = AF_INET;
+	r.idiag_state = TCP_LISTEN;
+	r.id.idiag_sport = htons(5000);
+	r.id.idiag_src[0] = htonl(INADDR_LOOPBACK);
+	r.idiag_inode = 8001;
+	send_nlmsg(fds[1], SOCK_DIAG_BY_FAMILY, NLM_F_MULTI, &r, sizeof(r));
+	r.idiag_inode = 8999;
+	send_nlmsg(fds[1], SOCK_DIAG_BY_FAMILY, NLM_F_MULTI, &r, sizeof(r));
+	send_nlmsg(fds[1], NLMSG_DONE, NLM_F_MULTI, NULL, 0);
+	if (add_inode_proc(&m, 8001, &owner))
+		fail("Cannot create inet diag ownership fixture");
+	if (parse_diag_messages(&m, fds[0], IPPROTO_SCTP, AF_INET) != 0 ||
+	    m.eps_n != 1 || strcmp(m.eps[0].proto, "sctp") ||
+	    m.eps[0].port != 5000 || strcmp(m.eps[0].bind, "127.0.0.1"))
+		fail("SCTP diag listener was not parsed");
+	free_model(&m);
+	memset(&m, 0, sizeof(m));
+	close(fds[0]);
+	close(fds[1]);
+}
+
 static void render_text_report(char *name)
 {
 	struct model m = { 0 };
@@ -557,7 +771,16 @@ int main(int argc, char **argv)
 #endif
 #ifdef HAVE_NETCAP_BLUETOOTH
 	test_bluetooth_tables();
+	test_bluetooth_helpers();
 #endif
+	test_packet_table();
+#ifdef HAVE_NETCAP_VSOCK
+	test_vsock_table();
+#ifdef HAVE_LINUX_VM_SOCKETS_DIAG_H
+	test_vsock_diag_messages();
+#endif
+#endif
+	test_inet_diag_messages();
 	puts("Advanced netcap tests passed");
 	return 0;
 }

@@ -1869,21 +1869,22 @@ static void parse_inet_file(struct model *m, const char *path,
 }
 
 /*
- * parse_packet_file - parse /proc/net/packet and add packet endpoints.
+ * parse_packet_file - parse a packet socket table and add packet endpoints.
  * @m: model receiving packet-plane endpoint/process mappings.
+ * @path: table to read, normally /proc/net/packet.
  *
  * Visibility depends on current netns and procfs access permissions.
  * Returns no value.
  * Side effects/assumptions: Operates on in-memory data and may read
  * procfs/netns state; it does not change kernel configuration.
  */
-static void parse_packet_file(struct model *m)
+static void parse_packet_file(struct model *m, const char *path)
 {
 	FILE *f;
 	char line[512], ifn[IF_NAMESIZE];
 	int row = 0;
 
-	f = fopen("/proc/net/packet", "rte");
+	f = fopen(path, "rte");
 	if (!f) {
 		m->socket_read_failures++;
 		return;
@@ -2171,20 +2172,21 @@ static void parse_bluetooth_file(struct model *m, const char *path,
 
 #ifdef HAVE_NETCAP_VSOCK
 /*
- * parse_vsock_file - fallback VSOCK parser using /proc/net/vsock.
+ * parse_vsock_file - fallback VSOCK parser for a procfs socket table.
  * @m: model receiving parsed VSOCK endpoint/process mappings.
+ * @path: table to read, normally /proc/net/vsock.
  *
  * Used when sock_diag support is unavailable or denied.
  * Returns no value.
  * Side effects/assumptions: Operates on in-memory data and may read
  * procfs/netns state; it does not change kernel configuration.
  */
-static void parse_vsock_file(struct model *m)
+static void parse_vsock_file(struct model *m, const char *path)
 {
 	FILE *f;
 	char line[512];
 
-	f = fopen("/proc/net/vsock", "rte");
+	f = fopen(path, "rte");
 	if (!f) {
 		m->socket_read_failures++;
 		return;
@@ -2594,12 +2596,12 @@ static void collect_endpoints(struct model *m)
 	parse_inet_file(m, "/proc/net/raw", "raw", AF_INET);
 	parse_inet_file(m, "/proc/net/raw6", "raw6", AF_INET6);
 	parse_diag_listeners(m);
-	parse_packet_file(m);
+	parse_packet_file(m, "/proc/net/packet");
 #ifdef HAVE_NETCAP_VSOCK
 	if (parse_vsock_diag(m) < 0) {
 		diag_dbg("vsock diag unavailable (%s), falling back to /proc",
 			strerror(errno));
-		parse_vsock_file(m);
+		parse_vsock_file(m, "/proc/net/vsock");
 	}
 #endif
 #ifdef HAVE_NETCAP_BLUETOOTH
